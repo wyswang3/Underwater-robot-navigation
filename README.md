@@ -1,2 +1,18 @@
-# Underwater-robot-navigation
-Underwater robot navigation and positioning based on multiple sensors，such as IMU,DVL,USBL,and camera
+# Underwater-robot-navigation —— 传感器通讯与导航子项目（IMU 起步）
+
+本分支用于搭建水下机器人传感器通讯与导航管线的基础框架，当前以 **IMU（RS-485/Modbus-like）** 为起点，后续将逐步纳入 **DVL 标定与采集、USBL 采集、数据记录与时间同步、导航定位算法融合** 等模块。
+
+## 目标
+- 打通传感器**串口通讯**与**数据解析**的最小闭环；
+- 形成**统一的数据接口与时间戳规范**，为后续多传感器融合（IMU + DVL + USBL + Depth）铺路；
+- 在此分支上累积标定、记录、融合代码，最终回并到主线导航框架。
+
+## 当前状态
+- ✅ 基于 `pyserial` 的串口通讯（默认 115200 8N1）
+- ✅ 读保持寄存器（0x03）/写单寄存器（0x06），CRC 校验
+- ✅ 解析 IMU 的 Acc/Gyro/Mag/Euler 等核心字段（按厂商协议缩放）
+- ⏳ 后续：四元数读取、异常与丢包处理增强、统一日志/CSV 输出
+
+## 快速安装
+```bash
+python -m pip install -U pyserial
