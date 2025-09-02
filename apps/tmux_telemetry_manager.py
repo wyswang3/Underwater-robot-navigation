@@ -27,8 +27,8 @@ import time
 SESSION = "data_session"
 SCRIPTS = [
     # (启动命令, pane 目标)
-    (f"{sys.executable} -u imu_realtime_pipeline.py", "0.0"),  # 左 pane
-    (f"{sys.executable} -u volt32_logger.py",        "0.1"),  # 右 pane
+    (f"{sys.executable} -u apps/imu_realtime_pipeline.py", "0.0"),
+    (f"{sys.executable} -u apps/volt32_logger.py", "0.1"),
 ]
 
 # ========== 基础封装 ==========
