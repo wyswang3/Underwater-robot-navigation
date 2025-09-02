@@ -9,7 +9,7 @@ import threading
 from datetime import datetime, timedelta
 
 # 复用你之前的工具线程（已提供）
-from uwnav.drivers.withigh.serial_io_tools import InputListenerThread, SerialReaderThread
+from uwnav.drivers.WitHighModbus.serial_io_tools import InputListenerThread, SerialReaderThread
 
 # ===================== 配置 =====================
 SERIAL_PORT   = '/dev/ttyUSB1'   # Windows: 'COM3'

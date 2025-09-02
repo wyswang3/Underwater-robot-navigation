@@ -29,8 +29,8 @@ from queue import Queue, Empty
 import numpy as np
 
 # 依赖你项目中的模块：DeviceModel（串口收发与协议解析）、实时滤波器
-from uwnav.drivers.withigh import device_model
-from uwnav.drivers.withigh.filters import RealTimeIMUFilter
+from uwnav.drivers.WitHighModbus import device_model
+from uwnav.drivers.WitHighModbus.filters import RealTimeIMUFilter
 
 # ========= 配置区域 =========
 PORT = "/dev/ttyUSB0"      # 串口端口（Windows 请改为 'COMx'）
