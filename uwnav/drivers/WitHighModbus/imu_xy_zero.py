@@ -4,8 +4,8 @@ import time
 import serial
 
 # ===== 基本配置（按需修改） =====
-DEVICE = '/dev/ttyUSB0'   # Windows 用 'COMx'
-BAUD   = 115200
+DEVICE = '/dev/ttyUSB1'   # Windows 用 'COMx'
+BAUD   = 230400
 PAUSE_UNLOCK = 0.1        # 步骤间等待
 PAUSE_CALIB  = 1.0        # 归零动作建议多给一点时间
 

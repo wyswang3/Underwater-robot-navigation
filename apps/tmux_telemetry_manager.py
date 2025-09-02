@@ -1,20 +1,15 @@
-# tmux_telemetry_manager.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-文件名: tmux_telemetry_manager.py
+启动两个采集脚本于同一 tmux 会话，并允许命令行灵活指定串口与波特率。
 
-功能:
-- 在一个 tmux 会话中并排启动两路采集：
-  1) imu_realtime_pipeline.py  (IMU 实时采集/滤波/落盘)
-  2) volt32_logger.py          (16通道电压采集/轮换落盘)
-- 在当前终端监听输入: 输入 's' → 先向每个 pane 发送 Ctrl+C 优雅退出，再 kill 会话
-- 可重复运行；若会话已存在会先杀掉旧会话，确保 pane 干净
+示例（在 apps 目录内执行）：
+  python3 tmux_telemetry_manager.py \
+    --imu-script imu_realtime_pipeline.py --imu-port /dev/ttyUSB1 --imu-baud 230400 \
+    --volt-script volt32_logger.py        --volt-port /dev/ttyUSB0 --volt-baud 115200
 
-用法:
-  python tmux_telemetry_manager.py
-  # 另一个终端里:
-  tmux attach -t data_session   # 查看运行中的窗格
+查看可用串口：
+  python3 tmux_telemetry_manager.py --list-ports
 """
 
 import os
@@ -23,17 +18,14 @@ import shutil
 import subprocess
 import threading
 import time
+import glob
+import argparse
+from typing import List
 
-SESSION = "data_session"
-SCRIPTS = [
-    # (启动命令, pane 目标)
-    (f"{sys.executable} -u apps/imu_realtime_pipeline.py", "0.0"),
-    (f"{sys.executable} -u apps/volt32_logger.py", "0.1"),
-]
+SESSION_DEFAULT = "data_session"
 
-# ========== 基础封装 ==========
+# ---------- tmux 基础 ----------
 def run_tmux(cmd_list, err_msg, check=True, capture=False):
-    """执行 tmux 命令; 失败时报错退出。"""
     try:
         return subprocess.run(
             cmd_list, check=check,
@@ -47,99 +39,207 @@ def run_tmux(cmd_list, err_msg, check=True, capture=False):
         if e.stderr: print(e.stderr)
         sys.exit(1)
 
-def tmux_exists():
-    """检查 tmux 是否可用。"""
+def tmux_exists() -> bool:
     return shutil.which("tmux") is not None
 
 def session_exists(name: str) -> bool:
-    """判断会话是否存在。"""
-    res = subprocess.run(["tmux", "has-session", "-t", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    res = subprocess.run(["tmux", "has-session", "-t", name],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return res.returncode == 0
-
-def send_keys(target: str, keys: str):
-    """向 pane 发送键入（不自动回车）。"""
-    run_tmux(["tmux", "send-keys", "-t", target, keys], "send-keys 失败", check=True)
 
 def send_enter(target: str):
     run_tmux(["tmux", "send-keys", "-t", target, "C-m"], "发送回车失败", check=True)
 
-def graceful_stop_all(session: str):
-    """向每个 pane 发送 Ctrl+C，等待片刻，再 kill 会话。"""
-    # 列出 pane id
-    res = run_tmux(["tmux", "list-panes", "-t", session, "-F", "#{pane_id}"], "列出 panes 失败", capture=True)
-    panes = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+def graceful_stop_all(session: str, try_soft_exit_key: str = "s"):
+    """向每个 pane 发送 Ctrl+C；再尝试 's'+回车；最后 kill 会话。"""
+    try:
+        res = run_tmux(["tmux", "list-panes", "-t", session, "-F", "#{pane_id}"],
+                       "列出 panes 失败", capture=True)
+        panes = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+    except Exception:
+        panes = []
     if not panes:
-        # 没 pane 也直接尝试杀会话
-        run_tmux(["tmux", "kill-session", "-t", session], "终止 tmux 会话失败")
+        run_tmux(["tmux", "kill-session", "-t", session], "终止 tmux 会话失败", check=False)
+        print("tmux 会话已终止（空）。")
         return
 
     print("向各 pane 发送 Ctrl+C …")
     for pid in panes:
         run_tmux(["tmux", "send-keys", "-t", pid, "C-c"], f"向 {pid} 发送 Ctrl+C 失败", check=False)
 
-    # 可选：再发一次 's' 回车（你的采集程序也支持 's' 退出）
-    for pid in panes:
-        send_keys(pid, "s")
-        send_enter(pid)
+    if try_soft_exit_key:
+        for pid in panes:
+            run_tmux(["tmux", "send-keys", "-t", pid, try_soft_exit_key], "发送退出键失败", check=False)
+            send_enter(pid)
 
-    # 等待脚本优雅退出
     time.sleep(1.5)
-
-    # 兜底杀会话
-    run_tmux(["tmux", "kill-session", "-t", session], "终止 tmux 会话失败")
+    run_tmux(["tmux", "kill-session", "-t", session], "终止 tmux 会话失败", check=False)
     print("tmux 会话已终止。")
 
-# ========== 主流程 ==========
-def input_listener():
-    """在本终端监听 's'，触发统一收尾。"""
-    while True:
-        user_input = input("输入 's' 停止所有采集并关闭 tmux 会话: ").strip().lower()
-        if user_input == 's':
-            print("收到退出指令，开始优雅停止…")
-            graceful_stop_all(SESSION)
-            break
-        else:
-            print("无效输入，请输入 's' 退出。")
+# ---------- 串口与路径工具 ----------
+def list_serial_ports() -> List[str]:
+    cands = sorted(set(
+        glob.glob("/dev/ttyUSB*") +
+        glob.glob("/dev/ttyACM*") +
+        glob.glob("/dev/ttyAMA*")
+    ))
+    by_ids = sorted(glob.glob("/dev/serial/by-id/*"))
+    if by_ids:
+        print("可用串口(by-id)：")
+        for p in by_ids: print("  ", p, "->", os.path.realpath(p))
+    print("可用串口：")
+    for p in cands: print("  ", p)
+    if not cands and not by_ids:
+        print("(未发现串口设备)")
+    return cands
 
+def port_exists(p: str) -> bool:
+    return bool(p) and os.path.exists(p)
+
+def here_dir() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+def repo_root_dir() -> str:
+    # 若当前在 apps/ 下，仓库根为父目录，否则为当前位置
+    here = here_dir()
+    return os.path.dirname(here) if os.path.basename(here) == "apps" else here
+
+def resolve_script_abs(script: str) -> str:
+    """将脚本路径解析为绝对路径，避免 apps/apps 重复。"""
+    here = here_dir()
+    if os.path.isabs(script):
+        return script
+    # 如果当前就在 apps 下，且传入以 apps/ 开头，去掉一次前缀
+    if os.path.basename(here) == "apps" and script.startswith("apps/"):
+        script = script.split("apps/", 1)[1]
+    cand = os.path.normpath(os.path.join(here, script))
+    if os.path.exists(cand):
+        return cand
+    cand2 = os.path.normpath(os.path.join(here, "..", script))
+    if os.path.exists(cand2):
+        return cand2
+    return cand  # 让报错更直观
+
+def build_tmux_command(env: dict, python_cmd: str, script: str, cli_args: List[str]) -> str:
+    """
+    在 tmux pane 中执行的完整命令：
+      注入环境变量（含 PYTHONPATH），直接运行“绝对路径脚本” + 参数（不再 cd）
+    """
+    script_abs = resolve_script_abs(script)
+    exports = env.copy()
+    # 注入 PYTHONPATH=仓库根
+    rr = repo_root_dir()
+    prev_pp = os.environ.get("PYTHONPATH", "")
+    exports["PYTHONPATH"] = f"{rr}:{prev_pp}" if prev_pp else rr
+    export_cmd = " ".join([f'{k}="{v}"' for k, v in exports.items() if v is not None])
+    cli = " ".join(cli_args)
+    prefix = f"{export_cmd} " if export_cmd else ""
+    return f'{prefix}{python_cmd} -u "{script_abs}" {cli}'.strip()
+
+# ---------- 主程序 ----------
 def main():
+    # 根据自己是否在 apps/ 下决定默认脚本路径
+    in_apps = (os.path.basename(here_dir()) == "apps")
+    default_imu  = "imu_realtime_pipeline.py" if in_apps else "apps/imu_realtime_pipeline.py"
+    default_volt = "volt32_logger.py"         if in_apps else "apps/volt32_logger.py"
+
+    ap = argparse.ArgumentParser(description="tmux telemetry manager (IMU + Volt32)")
+    ap.add_argument("--session", default=SESSION_DEFAULT, help=f"tmux 会话名（默认 {SESSION_DEFAULT}）")
+    ap.add_argument("--imu-script",  default=default_imu,  help="IMU 采集脚本路径（相对/绝对均可）")
+    ap.add_argument("--volt-script", default=default_volt, help="电压采集脚本路径（相对/绝对均可）")
+    ap.add_argument("--imu-port",  default="/dev/ttyUSB1", help="IMU 串口（默认 /dev/ttyUSB1）")
+    ap.add_argument("--imu-baud",  default="230400",       help="IMU 波特率（默认 230400）")
+    ap.add_argument("--volt-port", default="/dev/ttyUSB0", help="电压卡串口（默认 /dev/ttyUSB0）")
+    ap.add_argument("--volt-baud", default="115200",       help="电压卡波特率（默认 115200）")
+    ap.add_argument("--list-ports", action="store_true",   help="仅列出串口后退出")
+    ap.add_argument("--attach", action="store_true",       help="启动后自动 attach 到 tmux")
+    ap.add_argument("--python", default=sys.executable,    help="Python 解释器（默认当前解释器）")
+    args = ap.parse_args()
+
+    if args.list_ports:
+        list_serial_ports()
+        return
+
     if not tmux_exists():
-        print("未找到 tmux，请先安装（Linux/macOS 可用）。")
+        print("未找到 tmux，请先安装（apt install tmux）。")
         sys.exit(1)
 
     # 若已有旧会话，先清理，确保重复运行不叠加 pane
-    if session_exists(SESSION):
-        print(f"检测到已存在会话 '{SESSION}'，先清理…")
-        run_tmux(["tmux", "kill-session", "-t", SESSION], "清理旧会话失败")
+    if session_exists(args.session):
+        print(f"检测到已存在会话 '{args.session}'，先清理…")
+        run_tmux(["tmux", "kill-session", "-t", args.session], "清理旧会话失败", check=False)
 
-    # 创建新会话（后台），先起一个空 shell
-    run_tmux(["tmux", "new-session", "-d", "-s", SESSION], "创建 tmux 会话失败")
-    print(f"tmux 会话 '{SESSION}' 创建成功。")
+    # 创建会话并水平分割为两窗格
+    run_tmux(["tmux", "new-session", "-d", "-s", args.session], "创建 tmux 会话失败")
+    run_tmux(["tmux", "split-window", "-h", "-t", f"{args.session}:0"], "水平分割窗格失败")
+    run_tmux(["tmux", "select-layout", "-t", args.session, "even-horizontal"], "调整窗格布局失败")
+    run_tmux(["tmux", "set-option", "-t", args.session, "remain-on-exit", "on"],
+             "设置 remain-on-exit 失败", check=False)
+    print(f"tmux 会话 '{args.session}' 创建成功。")
 
-    # 在窗口 0 水平分割成两个 pane
-    run_tmux(["tmux", "split-window", "-h", "-t", f"{SESSION}:0"], "水平分割窗格失败")
-    run_tmux(["tmux", "select-layout", "-t", SESSION, "even-horizontal"], "调整窗格布局失败")
-    # 可选：退出后保留输出
-    run_tmux(["tmux", "set-option", "-t", SESSION, "remain-on-exit", "on"], "设置 remain-on-exit 失败", check=False)
+    # pane 0.0：电压卡；pane 0.1：IMU
+    volt_env = {"VOLT_PORT": args.volt_port, "VOLT_BAUD": args.volt_baud}
+    imu_env  = {"IMU_PORT":  args.imu_port,  "IMU_BAUD":  args.imu_baud}
 
-    # 在每个 pane 里 cd 到脚本目录并启动脚本（-u 关闭缓冲）
-    scripts_dir = os.path.dirname(os.path.abspath(__file__))
-    for cmd, target in SCRIPTS:
-        full_cmd = f"cd {scripts_dir} && {cmd}"
-        run_tmux(["tmux", "send-keys", "-t", f"{SESSION}:{target}", full_cmd], f"在窗格 {target} 发送命令失败")
-        send_enter(f"{SESSION}:{target}")
-        print(f"已在窗格 {target} 启动：{cmd}")
+    volt_cli = [f"--port {args.volt_port}", f"--baud {args.volt_baud}"]
+    imu_cli  = [f"--port {args.imu_port}",  f"--baud {args.imu_baud}"]
 
-    # 打印使用提示
+    cmd_volt = build_tmux_command(volt_env, args.python, args.volt_script, volt_cli)
+    cmd_imu  = build_tmux_command(imu_env,  args.python, args.imu_script,  imu_cli)
+
+    # 端口存在才启动；先 IMU（需要轮询），再电压卡（主动发）
+    start_imu  = port_exists(args.imu_port)
+    start_volt = port_exists(args.volt_port)
+    if not start_imu:
+        print(f"[WARN] IMU 端口不存在：{args.imu_port}，跳过 IMU 启动。")
+    if not start_volt:
+        print(f"[WARN] 电压卡端口不存在：{args.volt_port}，跳过电压卡启动。")
+
+    if start_imu:
+        run_tmux(["tmux", "send-keys", "-t", f"{args.session}:0.1", cmd_imu], "在 pane 0.1 发送命令失败")
+        send_enter(f"{args.session}:0.1")
+        print(f"[pane 0.1] 启动：{cmd_imu}")
+        time.sleep(0.5)
+
+    if start_volt:
+        run_tmux(["tmux", "send-keys", "-t", f"{args.session}:0.0", cmd_volt], "在 pane 0.0 发送命令失败")
+        send_enter(f"{args.session}:0.0")
+        print(f"[pane 0.0] 启动：{cmd_volt}")
+
+    if not (start_imu or start_volt):
+        print("[ERR] 没有可用端口可启动，结束会话。")
+        graceful_stop_all(args.session)
+        sys.exit(1)
+
     print("\n=== 已启动 ===")
-    print(f"- 在另一个终端查看: tmux attach -t {SESSION}")
-    print("- 在此终端输入 's' 可优雅停止并关闭会话。\n")
+    print(f"- 查看窗口： tmux attach -t {args.session}")
+    print("- 在此终端输入 's' 优雅停止并关闭会话；或使用 Ctrl+C。\n")
 
-    # 监听本地 's'
+    # 本终端监听 's' 触发停止
+    def input_listener():
+        try:
+            while True:
+                user_input = input("输入 's' 停止所有采集并关闭 tmux 会话: ").strip().lower()
+                if user_input == 's':
+                    print("收到退出指令，开始优雅停止…")
+                    graceful_stop_all(args.session, try_soft_exit_key="s")
+                    break
+                else:
+                    print("无效输入，请输入 's'。")
+        except (KeyboardInterrupt, EOFError):
+            print("\n收到中断，尝试优雅停止…")
+            graceful_stop_all(args.session, try_soft_exit_key="s")
+
     t = threading.Thread(target=input_listener, daemon=True)
     t.start()
-    while t.is_alive():
-        time.sleep(1)
-    print("管理脚本退出。")
+
+    if args.attach:
+        os.execvp("tmux", ["tmux", "attach-session", "-t", args.session])
+    else:
+        while t.is_alive():
+            time.sleep(1)
+        print("管理脚本退出。")
 
 if __name__ == "__main__":
     main()
+

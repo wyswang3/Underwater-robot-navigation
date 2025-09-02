@@ -107,8 +107,8 @@ def main():
     # 初始化IMU设备，注意波特率设置为115200
     device = device_model.DeviceModel(
         deviceName="IMU测试设备",
-        portName="/dev/ttyUSB0",  # 根据实际情况修改为对应串口
-        baud=115200,
+        portName="/dev/ttyUSB1",  # 根据实际情况修改为对应串口
+        baud=230400,
         ADDR=0x50,
         callback_method=updateData
     )
