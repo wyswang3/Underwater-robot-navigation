@@ -1,0 +1,20 @@
+如果你是通过 AppImage 启动的 QGroundControl，确保文件已经赋予了执行权限：
+chmod +x QGroundControl.AppImage
+./QGroundControl.AppImage
+启动仿真（使用 SITL 模式）：
+Tools/autotest/sim_vehicle.py -v ArduSub --frame vectored --console --map
+--console 让你可以看到命令行的日志。
+
+--map 会显示地图视图，确保你可以看到 ROV 的运动。
+仿真默认会使用 UDP 端口 14550 来进行通信，确保 QGC 和仿真使用的是相同的端口。如果有需要，你也可以手动指定端口，例如：
+Tools/autotest/sim_vehicle.py -v ArduSub --frame vectored --console --map --mavlink-port 14550
+在修复了 c_cpp_properties.json 格式问题后，重新加载 VS Code，并尝试编译：
+./waf configure --board sitl
+./waf build
+
+
+PYTHONPATH=. /usr/bin/python3 -u apps/imu_realtime_pipeline.py
+
+查看终端界面
+
+tmux attach -t data_session
