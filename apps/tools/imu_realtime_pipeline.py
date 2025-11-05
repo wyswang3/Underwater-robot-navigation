@@ -13,8 +13,8 @@ import numpy as np
 
 # 兼容两种导入布局
 try:
-    from uwnav.drivers.WitHighModbus import device_model
-    from uwnav.drivers.WitHighModbus.filters import RealTimeIMUFilter
+    from uwnav.drivers.imu.WitHighModbus import device_model
+    from uwnav.drivers.imu.WitHighModbus.filters import RealTimeIMUFilter
 except ModuleNotFoundError:
     import device_model  # type: ignore
     from filters import RealTimeIMUFilter  # type: ignore

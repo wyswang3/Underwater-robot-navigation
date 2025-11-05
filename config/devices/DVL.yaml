@@ -1,0 +1,47 @@
+dvl_hover_h1000:
+  # 设备接口配置
+  interface:
+    type: "ethernet"  # 可以选择 "serial" 或 "ethernet" 类型
+    ip_address: "192.168.2.102"  # Ethernet模式下设备的IP地址
+    data_port: 10001  # 数据上传端口
+    command_port: 10000  # 命令控制端口
+
+  # 测量配置
+  measurement:
+    frequency: 20  # 最大数据更新率 20Hz
+    accuracy:
+      velocity: "±0.4% ± 5 mm/s"  # 测速精度
+      distance: "±0.05m"  # 最大对底高度精度
+    range:
+      max: 45  # 最大对底高度 45米（在理想条件下）
+      min: 0.05  # 最小对底高度 0.05米
+    beams:
+      count: 4  # 波束数量（四个波束）
+      angles:
+        - 25  # 波束角度（度）
+    
+  # 发射功率与其他配置
+  power:
+    mode: "auto"  # 自动调整发射功率（或选择手动模式）
+    levels: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]  # 可调整功率档位
+
+  # 数据格式配置
+  data_format:
+    options:
+      - PD6  # 二进制格式
+      - EPD6  # ASCII 格式
+    selected: "EPD6"  # 当前使用的数据格式（EPD6）
+
+  # 错误处理与告警配置
+  error_handling:
+    warn_if_idle_sec: 3.0  # 超过3秒未收到数据时报警
+    flush_period_sec: 0.5  # 每0.5秒刷盘一次
+
+  # 安装与方向配置
+  installation:
+    orientation: "forward"  # 设备安装方向（如前向）
+    installation_angle: 0  # 安装角度（度）
+    axes:
+      x: "forward"
+      y: "right"
+      z: "down"

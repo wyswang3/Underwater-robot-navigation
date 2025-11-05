@@ -2,7 +2,7 @@
 # coding: UTF-8
 import os, sys, csv, time, signal, threading
 from datetime import datetime, timedelta
-from uwnav.drivers.WitHighModbus.serial_io_tools import InputListenerThread, SerialReaderThread
+from uwnav.drivers.imu.WitHighModbus.serial_io_tools import InputListenerThread, SerialReaderThread
 
 # ===================== 配置 =====================
 SERIAL_PORT   = '/dev/ttyUSB0'   # Windows: 'COM3'
