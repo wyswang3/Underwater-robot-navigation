@@ -4,8 +4,6 @@ from collections import deque
 import threading
 from datetime import datetime
 from queue import Queue, Empty
-from typing import Tuple
-import os, sys, time, csv, signal, argparse, threading
 from drivers.imu.WitHighModbus import device_model
 from drivers.imu.WitHighModbus.filters import RealTimeIMUFilter
 
@@ -38,7 +36,7 @@ class IMUData:
             self.filtered_acc, self.filtered_gyr, self.yaw = filtered_data
 
 class IMUDevice:
-    def __init__(self, port, baud, address, raw_writer, fil_writer):
+    def __init__(self, port, baud, address, callback_method=None):
         self.port = port
         self.baud = baud
         self.address = address
@@ -47,9 +45,7 @@ class IMUDevice:
         self.sample_q = Queue(maxsize=4000)
         self.shutdown_event = threading.Event()
         self.imu_data = IMUData()  # 实例化 IMUData 类
-        self._stats = {"recv": 0, "wraw": 0, "wfilt": 0, "exc": 0, "last_recv_t": 0.0}
-        self.raw_writer = raw_writer  # 用于写入原始数据
-        self.fil_writer = fil_writer  # 用于写入滤波后的数据
+        self.callback_method = callback_method  # 回调方法，用于实时传递数据
 
     def open_device(self):
         """打开IMU设备连接"""
@@ -84,15 +80,13 @@ class IMUDevice:
             gyr = np.array([data.get("AsX"), data.get("AsY"), data.get("AsZ")], dtype=float)
             self.imu_data.update(t, acc, gyr)  # 更新IMU数据结构
             self.sample_q.put_nowait(self.imu_data)
-            self._stats["recv"] += 1
-            self._stats["last_recv_t"] = t
-            # 每25条样本打印一次概览
-            if DEBUG_PRINT_EVERY and self._stats["recv"] % DEBUG_PRINT_EVERY == 0:
-                print(f"[RECV] {self._stats['recv']}  acc={tuple(np.round(acc, 3))} gyr={tuple(np.round(gyr, 3))}")
+
+            # 如果回调函数存在，调用回调传递数据给上层
+            if self.callback_method:
+                self.callback_method(self.imu_data)
+
         except Exception as e:
-            self._stats["exc"] += 1
-            if self._stats["exc"] <= 5 or self._stats["exc"] % 100 == 0:
-                print(f"[WARN] 读取数据异常: {e}")
+            print(f"Data update error: {e}")
 
     def monitor_data(self):
         """监控数据，检测是否有长时间没有收到新数据"""
@@ -101,26 +95,19 @@ class IMUDevice:
             print(f"[WARN] {self._stats['recv']} 样本后 {now - self._stats['last_recv_t']:.1f}s 未收到新数据，检查端口/波特率/设备模式")
 
     def process_data(self):
-        """数据处理：滤波并保存"""
-        window = deque()
-        last_flush = time.time()
+        """数据处理：滤波并传递给回调"""
         while not self.shutdown_event.is_set():
-            if time.time() - last_flush >= FLUSH_PERIOD_SEC:
-                # 定期刷新文件
-                last_flush = time.time()
-                self.monitor_data()
-
             try:
                 item = self.sample_q.get(timeout=0.1)
+                # 执行滤波
+                self.imu_data.filter_data(self.filter)
+
+                # 通过回调传递数据给上层系统
+                if self.callback_method:
+                    self.callback_method(self.imu_data)
+
             except Empty:
                 continue
-
-            # 滤波并保存数据
-            self.imu_data.filter_data(self.filter)
-            self.raw_writer.writerow([self.imu_data.timestamp, *self.imu_data.acc, *self.imu_data.gyr])
-            self._stats["wraw"] += 1
-            self.fil_writer.writerow([self.imu_data.timestamp, *self.imu_data.filtered_acc, *self.imu_data.filtered_gyr, self.imu_data.yaw])
-            self._stats["wfilt"] += 1
 
     def start(self):
         """启动数据采集和处理"""
@@ -128,39 +115,3 @@ class IMUDevice:
         data_thread.daemon = True
         data_thread.start()
         return data_thread
-
-
-def make_writers(out_dir: str) -> Tuple[object, csv.writer, object, csv.writer]:
-    os.makedirs(out_dir, exist_ok=True)
-    date_str = time.strftime("%Y%m%d")
-    raw_path = os.path.join(out_dir, f"imu_raw_data_{date_str}.csv")
-    fil_path = os.path.join(out_dir, f"imu_filtered_data_{date_str}.csv")
-    raw_f = open(raw_path, "a", newline="", encoding="utf-8")
-    fil_f = open(fil_path, "a", newline="", encoding="utf-8")
-    raw_w, fil_w = csv.writer(raw_f), csv.writer(fil_f)
-    if raw_f.tell() == 0:
-        raw_w.writerow(["Timestamp", "AccX", "AccY", "AccZ", "AsX", "AsY", "AsZ", "HX", "HY", "HZ", "AngX", "AngY", "AngZ"])
-    if fil_f.tell() == 0:
-        fil_w.writerow(["Timestamp", "AccX_filt", "AccY_filt", "AccZ_filt", "AsX_filt", "AsY_filt", "AsZ_filt", "Yaw_filt(deg)"])
-    
-    return raw_f, raw_w, fil_f, fil_w
-
-def main():
-    out_dir = './output_data'  # 设置输出文件目录
-    raw_f, raw_w, fil_f, fil_w = make_writers(out_dir)
-
-    imu_device = IMUDevice(port='/dev/ttyUSB1', baud=230400, address=0x50, raw_writer=raw_w, fil_writer=fil_w)
-    imu_device.open_device()
-
-    imu_device.start()
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("程序终止")
-    finally:
-        imu_device.close_device()
-
-if __name__ == "__main__":
-    main()

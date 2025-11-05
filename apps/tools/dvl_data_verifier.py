@@ -6,7 +6,7 @@ import logging
 from uwnav.drivers.dvl.hover_h1000.protocol import parse_line
 
 # ---- 调试开关 ----
-DEBUG_PRINT_EVERY = 5   # 每 N 条样本打印一次概览；0 关闭
+DEBUG_PRINT_EVERY = 1   # 每 N 条样本打印一次概览；0 关闭
 WARN_IF_IDLE_SEC  = 3.0  # N 秒没收到样本则报警
 FLUSH_PERIOD_SEC  = 0.5  # 定期刷盘周期
 # -------------------
