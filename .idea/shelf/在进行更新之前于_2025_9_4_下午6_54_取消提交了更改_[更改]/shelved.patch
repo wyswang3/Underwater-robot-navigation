@@ -1,0 +1,15 @@
+Index: .idea/.name
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>imu_realtime_pipeline.py
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/.name b/.idea/.name
+--- a/.idea/.name	(revision fe4c8bdfa74f385441c40683fe0e94195e17d604)
++++ b/.idea/.name	(date 1756983257636)
+@@ -1,1 +1,1 @@
+-imu_realtime_pipeline.py
+\ No newline at end of file
++volt32_logger.py
+\ No newline at end of file

@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="a0e9ea2d-2814-4b19-a6ed-873beac0de7c" name="更改" comment="Merge remote-tracking branch 'origin/feature/imu-modbus-serial' into feature/imu-modbus-serial&#10;&#10;# Conflicts:&#10;#&#9;apps/imu_realtime_pipeline.py&#10;#&#9;apps/volt32_logger.py">
+      <change beforePath="$PROJECT_DIR$/.idea/.name" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/.name" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 0
+}</component>
+  <component name="ProjectId" id="328STIf3GQc1B7x6gIVbMVBR2vY" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;feature/imu-modbus-serial&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;D:/Underwater-robot-navigation&quot;
+  }
+}</component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="D:\Underwater-robot-navigation\uwnav\drivers" />
+      <recent name="D:\Underwater-robot-navigation\uwnav\fusion" />
+      <recent name="D:\Underwater-robot-navigation\uwnav\io" />
+      <recent name="D:\Underwater-robot-navigation\uwnav\nav" />
+      <recent name="D:\Underwater-robot-navigation\uwnav\preprocess" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-0509580d9d50-746f403e7f0c-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-241.14494.241" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="应用程序级" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="a0e9ea2d-2814-4b19-a6ed-873beac0de7c" name="更改" comment="" />
+      <created>1756800712273</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1756800712273</updated>
+    </task>
+    <task id="LOCAL-00001" summary="feat(imu): add IMU (WitHighModbus) module as regular folder">
+      <option name="closed" value="true" />
+      <created>1756808689052</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1756808689052</updated>
+    </task>
+    <task id="LOCAL-00002" summary="feat(imu): add IMU (WitHighModbus) module as regular folder">
+      <option name="closed" value="true" />
+      <created>1756808710329</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1756808710329</updated>
+    </task>
+    <task id="LOCAL-00003" summary="feat(imu): add IMU (WitHighModbus) module as regular folder">
+      <option name="closed" value="true" />
+      <created>1756810148682</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1756810148682</updated>
+    </task>
+    <task id="LOCAL-00004" summary="feat(imu): add IMU (WitHighModbus) module as regular folder">
+      <option name="closed" value="true" />
+      <created>1756810187661</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1756810187661</updated>
+    </task>
+    <task id="LOCAL-00005" summary="refactor: modularize repo; move WitHighModbus into uwnav.drivers.withigh and add apps/">
+      <option name="closed" value="true" />
+      <created>1756810875579</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1756810875579</updated>
+    </task>
+    <task id="LOCAL-00006" summary="refactor: modularize repo; move WitHighModbus into uwnav.drivers.withigh and add apps/">
+      <option name="closed" value="true" />
+      <created>1756811015228</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1756811015228</updated>
+    </task>
+    <task id="LOCAL-00007" summary="refactor: modularize repo; move WitHighModbus into uwnav.drivers.withigh and add apps/">
+      <option name="closed" value="true" />
+      <created>1756983373596</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1756983373596</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Merge remote-tracking branch 'origin/feature/imu-modbus-serial' into feature/imu-modbus-serial&#10;&#10;# Conflicts:&#10;#&#9;apps/imu_realtime_pipeline.py&#10;#&#9;apps/volt32_logger.py">
+      <option name="closed" value="true" />
+      <created>1756984957321</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1756984957321</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
+    <servers />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="feat(imu): add IMU (WitHighModbus) module as regular folder" />
+    <MESSAGE value="refactor: modularize repo; move WitHighModbus into uwnav.drivers.withigh and add apps/" />
+    <MESSAGE value="Merge remote-tracking branch 'origin/feature/imu-modbus-serial' into feature/imu-modbus-serial&#10;&#10;# Conflicts:&#10;#&#9;apps/imu_realtime_pipeline.py&#10;#&#9;apps/volt32_logger.py" />
+    <option name="LAST_COMMIT_MESSAGE" value="Merge remote-tracking branch 'origin/feature/imu-modbus-serial' into feature/imu-modbus-serial&#10;&#10;# Conflicts:&#10;#&#9;apps/imu_realtime_pipeline.py&#10;#&#9;apps/volt32_logger.py" />
+  </component>
+</project>
