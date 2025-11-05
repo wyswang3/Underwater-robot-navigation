@@ -36,3 +36,5 @@ sudo ip route add 192.168.2.0/24 dev enp7s0
 
 ping -c 4 192.168.2.250
 
+拉取Github远程更新并合并分支:
+./git-auto.sh -b feature/IMU-DVL-serial -p merge -m "Merge latest changes"

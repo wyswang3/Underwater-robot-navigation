@@ -1,21 +1,9 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-dvl_hover_h1000.py
--------------------
-DVL 设备抽象层：负责与 DVL（Hover H1000）设备通信并解析 PD6 协议数据。
-
-功能：
-1) 通过串口或 TCP 与 DVL 设备连接；
-2) 解析 PD6/EPD6 协议帧（包括对底速度、对底距离等数据）；
-3) 提供统一的数据结构（如 DVLData）供上层使用。
-"""
 import threading
 import socket
 import serial
 import time
 from queue import Queue
-from uwnav.drivers.dvl.hover_h1000.protocol import parse_line
+from drivers.dvl.hover_h1000.protocol import parse_line
 
 class DVLData:
     """用于存储解析后的 DVL 数据"""
@@ -120,4 +108,3 @@ class DVLDevice:
             self.sample_q.put_nowait(dvl_data)
         except Exception as e:
             print(f"Error adding data to queue: {e}")
-
