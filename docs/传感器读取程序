@@ -18,3 +18,21 @@ PYTHONPATH=. /usr/bin/python3 -u apps/imu_realtime_pipeline.py
 查看终端界面
 
 tmux attach -t data_session
+
+DVL测试程序命令行代码:
+# 在项目根目录
+pip install -e .
+# 成功后随处都能 import uwnav
+python apps/tools/dvl_data_verifier.py --port COM6 --baud 115200 --send-cs --send-cz --log INFO 
+
+# 进入项目根目录
+python apps/tools/dvl_serial_logger.py --port /dev/ttyUSB1 --baud 115200 --log INFO
+python .\apps\tools\dvl_data_verifier.py `
+  --port COM6 --baud 115200 `
+  --df 0 --pr 10 --pm 5 --send-cs --send-cz `
+  --log INFO
+
+
+# Windows 例子： --port COM5
+# 指定输出目录（可选）
+python apps/tools/dvl_serial_logger.py --outdir ./data

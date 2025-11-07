@@ -1,130 +1,250 @@
-#!/usr/bin/env python3
+# uwnav/drivers/dvl/hover_h1000/protocol.py
 # -*- coding: utf-8 -*-
+
 """
-protocol.py
------------
-PD6/EPD6 协议解析与命令组帧模块。
-
-功能：
-1. 解析 PD6/EPD6 格式的文本帧，提取数据并进行单位换算。
-2. 构造 16 字节命令，用于控制 DVL 设备的工作状态。
-
-支持的语句：
-- `SA` 系统姿态
-- `TS` 时间与系统参数
-- `BI` 体坐标系下速度
-- `BE` 大地坐标系下速度
-- `BD` 大地坐标系下位移与高度
+Hover H1000 PD6/EPD6 解析器（定宽优先，A/V 有效位）
+返回统一字段：
+  - 速度(毫米/秒)：ve, vn, vu
+  - 位移/高度(米)：e, n, u, depth
+  - 其他：pitch, roll, heading, ts(原始计数/时间字串), valid(True/False), src(帧类型)
+占位符 88888 / +88888 / -88888 视为 0。
 """
 
-import numpy as np
+from __future__ import annotations
+import re
+from typing import List, Dict, Optional
 
-# 解析数据的字典映射
-VALID_FLAGS = {"A": True, "V": False}
+# -------------------- 基础工具 --------------------
 
-# ----------------- 协议解析函数 -----------------
+_PLACEHOLDER_SET = {"88888", "+88888", "-88888"}
 
-def parse_line(line: str):
+def _strip_quotes(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        return s[1:-1].strip()
+    return s
+
+def _is_placeholder(s: str) -> bool:
+    return s.strip() in _PLACEHOLDER_SET
+
+def _as_int_mm(s: str) -> Optional[float]:
+    """速度字段（mm/s）。占位符→0；异常→None；尽量从混乱字符串摘数字"""
+    s0 = s.strip()
+    if not s0:
+        return None
+    if _is_placeholder(s0):
+        return 0.0
+    # 常规：纯整型
+    try:
+        return float(int(s0))
+    except Exception:
+        # 兜底：抓 +/-digits
+        m = re.search(r'([+\-]?\d{1,6})', s0)
+        if not m:
+            return None
+        v = m.group(1)
+        if _is_placeholder(v):
+            return 0.0
+        try:
+            return float(int(v))
+        except Exception:
+            return None
+
+def _as_float_m(s: str) -> Optional[float]:
+    """位移/深度（m）。占位符→0；异常→None"""
+    s0 = s.strip().replace(' ', '')
+    if not s0:
+        return None
+    if "88888" in s0:
+        return 0.0
+    try:
+        return float(s0)
+    except Exception:
+        m = re.search(r'([+\-]?\d+(?:\.\d+)?)', s0)
+        if not m:
+            return None
+        v = m.group(1)
+        if "88888" in v:
+            return 0.0
+        try:
+            return float(v)
+        except Exception:
+            return None
+
+def _valid_flag(token: str) -> Optional[bool]:
+    t = token.strip().upper()
+    if t == "A": return True
+    if t == "V": return False
+    return None
+
+def _split_fixed_or_csv(payload: str, widths: List[int], expect: int) -> List[str]:
     """
-    解析一行 PD6/EPD6 数据帧。
-    根据行头识别对应类型的数据，并进行单位换算。
-    只返回有效的数据（例如，速度、角度、深度等）。
-
-    :param line: 输入的一行 PD6 或 EPD6 格式的字符串
-    :return: 如果数据有效，返回字段字典；否则返回 None
+    先尝试定宽切片（去掉起始逗号/空格），失败再按逗号分割，不足填空。
     """
-    if not line.startswith(':'):
-        return None  # 无效行
+    s = payload.lstrip(' ,')
+    # 定宽
+    pos = 0
+    out = []
+    try:
+        for w in widths:
+            out.append(s[pos:pos+w])
+            pos += w + 1  # 宽度之间通常还有一个逗号或空格，+1 允许轻微错位
+        if len(out) >= expect:
+            return [x.strip() for x in out[:expect]]
+    except Exception:
+        pass
+    # 逗号
+    parts = [p.strip() for p in payload.split(',')]
+    while len(parts) < expect:
+        parts.append("")
+    return parts[:expect]
 
-    msg_type = line[1:3]  # 提取数据类型（如 SA, TS, BE 等）
-    fields = [f.strip() for f in line[3:].split(',')]  # 提取数据字段并去除空格
+# -------------------- 各帧解析 --------------------
 
-    # 处理不同类型的语句
-    if msg_type == "SA":  # 姿态信息
-        try:
-            pitch, roll, heading = map(float, fields)
-            return {"pitch": pitch, "roll": roll, "heading": heading, "type": "SA"}
-        except ValueError:
+def _parse_SA(payload: str) -> Optional[Dict]:
+    # :SA, pitch, roll, heading
+    # 定宽意义小，优先逗号/正则
+    parts = [p for p in payload.lstrip(' ,').split(',') if p != ""]
+    if len(parts) < 3:
+        nums = re.findall(r'[+\-]?\d+(?:\.\d+)?', payload)
+        if len(nums) < 3:
             return None
+        parts = nums[:3]
+    try:
+        return {
+            "src":"SA",
+            "pitch": float(parts[0]),
+            "roll": float(parts[1]),
+            "heading": float(parts[2]),
+        }
+    except Exception:
+        return None
 
-    elif msg_type == "TS":  # 时间与系统信息
-        try:
-            timestamp, salinity, temperature, depth, sound_speed, status = fields
-            timestamp = int(timestamp)  # 时间戳处理
-            return {"timestamp": timestamp, "salinity": float(salinity), "temperature": float(temperature),
-                    "depth": float(depth), "sound_speed": float(sound_speed), "status": status, "type": "TS"}
-        except ValueError:
+def _parse_TS(payload: str) -> Optional[Dict]:
+    # :TS, ts, sal, temp, depth, sound_speed, status
+    parts = [p.strip() for p in payload.lstrip(' ,').split(',')]
+    if len(parts) < 6:
+        nums = re.findall(r'[+\-]?\d+(?:\.\d+)?', payload)
+        if len(nums) < 6:
             return None
+        parts = [nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]]
+    try:
+        return {
+            "src":"TS",
+            "ts": parts[0],
+            "salinity": float(parts[1]),
+            "temperature": float(parts[2]),
+            "depth": _as_float_m(parts[3]),
+            "sound_speed": float(parts[4]),
+            "status": parts[5],
+        }
+    except Exception:
+        return None
 
-    elif msg_type == "BI":  # 体坐标系下速度
+def _parse_WI(payload: str) -> Optional[Dict]:
+    # :WI, vx, vy, vz, err, A/V   （体坐标速度＋误差）
+    fields = _split_fixed_or_csv(payload, widths=[6,6,6,4,1], expect=5)
+    vx = _as_int_mm(fields[0]); vy = _as_int_mm(fields[1]); vz = _as_int_mm(fields[2])
+    valid = _valid_flag(fields[-1])
+    return {"src":"WI", "ve":vx, "vn":vy, "vu":vz, "valid":valid}
+
+def _parse_BI(payload: str) -> Optional[Dict]:
+    # :BI, vx, vy, vz, err, A/V
+    fields = _split_fixed_or_csv(payload, widths=[6,6,6,4,1], expect=5)
+    vx = _as_int_mm(fields[0]); vy = _as_int_mm(fields[1]); vz = _as_int_mm(fields[2])
+    valid = _valid_flag(fields[-1])
+    return {"src":"BI", "ve":vx, "vn":vy, "vu":vz, "valid":valid}
+
+def _parse_WS(payload: str) -> Optional[Dict]:
+    # :WS, vx, vy, vz, A/V  （体坐标简版）
+    fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
+    vx = _as_int_mm(fields[0]); vy = _as_int_mm(fields[1]); vz = _as_int_mm(fields[2])
+    valid = _valid_flag(fields[-1])
+    return {"src":"WS", "ve":vx, "vn":vy, "vu":vz, "valid":valid}
+
+def _parse_BS(payload: str) -> Optional[Dict]:
+    # :BS, vx, vy, vz, A/V
+    fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
+    vx = _as_int_mm(fields[0]); vy = _as_int_mm(fields[1]); vz = _as_int_mm(fields[2])
+    valid = _valid_flag(fields[-1])
+    return {"src":"BS", "ve":vx, "vn":vy, "vu":vz, "valid":valid}
+
+def _parse_WE(payload: str) -> Optional[Dict]:
+    # :WE, ve, vn, vu, A/V  （东北天）
+    fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
+    ve = _as_int_mm(fields[0]); vn = _as_int_mm(fields[1]); vu = _as_int_mm(fields[2])
+    valid = _valid_flag(fields[-1])
+    return {"src":"WE", "ve":ve, "vn":vn, "vu":vu, "valid":valid}
+
+def _parse_BE(payload: str) -> Optional[Dict]:
+    # :BE, ve, vn, vu, A/V
+    fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
+    ve = _as_int_mm(fields[0]); vn = _as_int_mm(fields[1]); vu = _as_int_mm(fields[2])
+    valid = _valid_flag(fields[-1])
+    return {"src":"BE", "ve":ve, "vn":vn, "vu":vu, "valid":valid}
+
+def _parse_WD(payload: str) -> Optional[Dict]:
+    # :WD, dx, dy, dz, depth, q （体坐标位移/高度）
+    fields = _split_fixed_or_csv(payload, widths=[8,8,8,6,4], expect=5)
+    e = _as_float_m(fields[0]); n = _as_float_m(fields[1]); u = _as_float_m(fields[2])
+    depth = _as_float_m(fields[3])
+    return {"src":"WD", "e":e, "n":n, "u":u, "depth":depth}
+
+def _parse_BD(payload: str) -> Optional[Dict]:
+    # :BD, e, n, u, depth, q  （东北天位移/高度）
+    fields = _split_fixed_or_csv(payload, widths=[8,8,8,6,4], expect=5)
+    e = _as_float_m(fields[0]); n = _as_float_m(fields[1]); u = _as_float_m(fields[2])
+    depth = _as_float_m(fields[3])
+    return {"src":"BD", "e":e, "n":n, "u":u, "depth":depth}
+
+# -------------------- 主入口 --------------------
+
+_PARSERS = {
+    "SA": _parse_SA,
+    "TS": _parse_TS,
+    "WI": _parse_WI,
+    "BI": _parse_BI,
+    "WS": _parse_WS,
+    "BS": _parse_BS,
+    "WE": _parse_WE,
+    "BE": _parse_BE,
+    "WD": _parse_WD,
+    "BD": _parse_BD,
+}
+
+def parse_line(line: str) -> Optional[Dict]:
+    """解析单帧（行首需有 :XX）。"""
+    if not line:
+        return None
+    s = _strip_quotes(line)
+
+    # 清理多余前缀，如 '::::CS ...' → '::CS ...' → ':CS ...'
+    while s.startswith('::'):
+        s = s[1:]
+    if not s.startswith(':') or len(s) < 3:
+        return None
+
+    msg = s[1:3].upper()
+    payload = s[3:]
+    fn = _PARSERS.get(msg)
+    if fn:
         try:
-            vx, vy, vz, error, flag = fields
-            vx, vy, vz = map(int, (vx, vy, vz))  # 将速度转换为整数
-            return {"vx": vx / 1000.0, "vy": vy / 1000.0, "vz": vz / 1000.0, "error": error, "valid": VALID_FLAGS.get(flag, False), "type": "BI"}
-        except ValueError:
+            return fn(payload)
+        except Exception:
             return None
+    # 未知类型，返回 src 以便上层记录
+    return {"src": msg}
 
-    elif msg_type == "BE":  # 大地坐标系下速度
-        try:
-            ve, vn, vu, flag = fields
-            ve, vn, vu = map(int, (ve, vn, vu))
-            return {"ve": ve / 1000.0, "vn": vn / 1000.0, "vu": vu / 1000.0, "valid": VALID_FLAGS.get(flag, False), "type": "BE"}
-        except ValueError:
-            return None
-
-    elif msg_type == "BD":  # 大地坐标系下位移与高度
-        try:
-            e, n, u, depth, timestamp = fields
-            e, n, u = map(float, (e, n, u))
-            depth = float(depth)
-            return {"e": e, "n": n, "u": u, "depth": depth, "timestamp": timestamp, "type": "BD"}
-        except ValueError:
-            return None
-
-    else:
-        return None  # 不支持的语句类型
-
-# ----------------- 命令构造函数 -----------------
-
-def build_command(cmd: str, arg: str | int | float | None = None):
-    """
-    根据命令类型构造 16 字节命令帧。
-    
-    :param cmd: 命令类型（例如 "PR"、"DF"、"CS"）
-    :param arg: 命令参数（根据不同命令类型，类型不同）
-    :return: 16 字节命令帧，作为字节串
-    """
-    if cmd == "PR":  # 设置更新频率
-        return f"PR {str(arg).ljust(16, '0')}\r".encode("ascii")
-    
-    elif cmd == "BX":  # 设置量程（斜距）
-        return f"BX {str(arg).ljust(16, '0')}\r".encode("ascii")
-
-    elif cmd == "DF":  # 设置输出格式
-        return f"DF {str(arg).ljust(16, '0')}\r".encode("ascii")
-
-    elif cmd == "BR":  # 设置波特率
-        return f"BR {str(arg).ljust(16, '0')}\r".encode("ascii")
-
-    elif cmd == "IP":  # 修改 IP 地址
-        return f"IP {str(arg).ljust(16, '0')}\r".encode("ascii")
-
-    elif cmd == "CS":  # 启动测量
-        return "CS \r000000000000".encode("ascii")
-
-    elif cmd == "CZ":  # 停止测量
-        return "CZ \r000000000000".encode("ascii")
-
-    else:
-        return None  # 未知命令
-
-# ----------------- 调试与验证 -----------------
-
-if __name__ == "__main__":
-    # 测试协议解析与命令生成
-    test_line = ":SA,-1.76,0.07,322.57"
-    parsed_data = parse_line(test_line)
-    print("Parsed Data:", parsed_data)
-    
-    test_cmd = build_command("PR", 10)
-    print("Generated Command:", test_cmd)
+def parse_lines(raw: str) -> List[Dict]:
+    """一行可能含多帧：用 ':' 分割再逐帧解析。"""
+    if not raw:
+        return []
+    s = _strip_quotes(raw)
+    # 切块时保留 ':' 让 parse_line 识别
+    chunks = [f":{p}" for p in s.split(':') if p]
+    out: List[Dict] = []
+    for ck in chunks:
+        pkt = parse_line(ck)
+        if pkt:
+            out.append(pkt)
+    return out
