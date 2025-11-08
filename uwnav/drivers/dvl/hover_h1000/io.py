@@ -5,10 +5,18 @@
 uwnav/drivers/dvl/hover_h1000/io.py
 
 职责：
-- 定义 DVLData 数据类
-- 定义两个写手：DVLLogger（原始/解析双表）、MinimalSpeedWriter（仅有效速度）
+- 定义 DVLData 数据类（含 valid 标志）
+- 定义两个写手：
+    * DVLLogger：原始/解析双表
+    * MinimalSpeedWriter：仅写“有效(A)速度(m/s)+时间戳”的精简表
 - 定义 DVLSerialInterface（串口读/命令下发/解析回调）
 - 依赖：同目录的 protocol.py 提供 parse_lines()
+
+改进点：
+- 快速停止：_stop_event + cancel_read() + close() + join()（容错保护）
+- Windows/Unix 通用串口读：read_until('\r')，兼容 CR/CRLF
+- 命令通道：固定 16 字节优先（"CC " + 12 参数右侧空格填充 + '\r'），失败回退 ":CC,<arg>\r"
+- 有效位贯穿：protocol 返回的 valid (A/V/None) 写入 DVLData.valid，MinimalSpeedWriter 默认仅写 valid==True 的速度
 """
 
 from __future__ import annotations
@@ -25,6 +33,20 @@ from pathlib import Path
 import serial  # pip install pyserial
 
 from .protocol import parse_lines  # -> List[dict]
+
+__all__ = [
+    "DVLData",
+    "DVLLogger",
+    "MinimalSpeedWriter",
+    "DVLSerialInterface",
+    "DEBUG_PRINT_EVERY",
+    "FLUSH_EVERY",
+    "READ_IDLE_SLEEP",
+    "WARN_IF_IDLE_SEC",
+    "SENSOR_ID",
+    "RESP_WAIT_STEP",
+    "RESP_WAIT_TOTAL",
+]
 
 # 运行参数（库级默认，可被外部覆盖）
 DEBUG_PRINT_EVERY = 5
@@ -53,9 +75,14 @@ def _finite(x) -> bool:
 class DVLData:
     """
     解析后的统一结构：
-    - 速度：mm/s；属性 ve/vn/vu 为 m/s（若可转）
-    - 位移/高度：m
-    - src：BE/BS/BI/BD/SA/TS 等
+    - timestamp: 采集到该帧的本机 Unix 秒
+    - src: 帧类型（BE/BS/BI/BD/SA/TS ...）
+    - ve_mm, vn_mm, vu_mm: 东北天速度（mm/s）；None 表示无效/占位符
+    - depth_m, e_m, n_m, u_m: 位移/高度（m）
+    - valid: A/V/None（速度有效位；非速度帧通常为 None）
+
+    便捷属性：
+    - ve, vn, vu: 若 mm/s 有限，则转 m/s，否则为 None
     """
     timestamp: float
     src: str
@@ -66,6 +93,7 @@ class DVLData:
     e_m: Optional[float] = None
     n_m: Optional[float] = None
     u_m: Optional[float] = None
+    valid: Optional[bool] = None
 
     @property
     def ve(self) -> Optional[float]:
@@ -84,7 +112,7 @@ class DVLLogger:
     """
     写两份 CSV：
       1) dvl_raw_lines_*.csv  — 原始行 + 标注（CMD/RESP/空）
-      2) dvl_parsed_*.csv     — 解析后的统一字段（速度/位移/高度）
+      2) dvl_parsed_*.csv     — 解析后的统一字段（速度/位移/高度/valid）
     """
     def __init__(self, out_dir: str, sensor_id: str = SENSOR_ID):
         self.out_dir = Path(out_dir)
@@ -117,7 +145,7 @@ class DVLLogger:
                 "Timestamp(s)", "SensorID", "Src",
                 "East_Vel(mm_s)", "North_Vel(mm_s)", "Up_Vel(mm_s)",
                 "East_Vel(m_s)",  "North_Vel(m_s)",  "Up_Vel(m_s)",
-                "Depth(m)", "E(m)", "N(m)", "U(m)"
+                "Depth(m)", "E(m)", "N(m)", "U(m)", "Valid"
             ])
             f.flush()
         return f, w
@@ -130,12 +158,15 @@ class DVLLogger:
             d.timestamp, self.sensor_id, d.src,
             d.ve_mm, d.vn_mm, d.vu_mm,
             d.ve,    d.vn,    d.vu,
-            d.depth_m, d.e_m, d.n_m, d.u_m
+            d.depth_m, d.e_m, d.n_m, d.u_m, d.valid
         ])
         self._count += 1
 
         if DEBUG_PRINT_EVERY and (self._count % DEBUG_PRINT_EVERY == 0):
-            logging.info(f"[DVL] n={self._count} src={d.src} ve={d.ve_mm} vn={d.vn_mm} vu={d.vu_mm} depth={d.depth_m}")
+            logging.info(
+                f"[DVL] n={self._count} src={d.src} valid={d.valid} "
+                f"ve(mm)={d.ve_mm} vn(mm)={d.vn_mm} vu(mm)={d.vu_mm} depth={d.depth_m}"
+            )
 
         if FLUSH_EVERY and (self._count % FLUSH_EVERY == 0):
             try:
@@ -156,29 +187,39 @@ class DVLLogger:
 
 class MinimalSpeedWriter:
     """
-    仅写“有效速度(m/s)+时间戳”精简表，供快速融合/对齐。
+    仅写“有效速度(m/s)+时间戳”的精简表，供快速融合/对齐。
+    - only_valid=True：仅写 valid==True 的帧（A）
+    - require_all_axes=True：要求 ve/vn/vu 三轴均为有限数才写入
     """
-    def __init__(self, out_dir: str, sensor_id: str = SENSOR_ID):
+    def __init__(self, out_dir: str, sensor_id: str = SENSOR_ID,
+                 only_valid: bool = True, require_all_axes: bool = True):
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.sensor_id = sensor_id
+        self.only_valid = only_valid
+        self.require_all_axes = require_all_axes
+
         ts_start = time.strftime("%Y%m%d_%H%M%S")
         path = self.out_dir / f"dvl_speed_min_{ts_start}.csv"
         self.f = open(path, "a", newline="", encoding="utf-8")
         self.w = csv.writer(self.f)
         if self.f.tell() == 0:
-            self.w.writerow(["Timestamp(s)", "SensorID", "Src", "East_Vel(m_s)", "North_Vel(m_s)", "Up_Vel(m_s)"])
+            self.w.writerow(["Timestamp(s)", "SensorID", "Src", "East_Vel(m_s)", "North_Vel(m_s)", "Up_Vel(m_s)", "Valid"])
             self.f.flush()
         logging.info(f"[DVL-SPEED] -> {self.f.name}")
         self._n = 0
 
     def maybe_write(self, d: DVLData):
-        if _finite(d.ve) and _finite(d.vn) and _finite(d.vu):
-            self.w.writerow([d.timestamp, self.sensor_id, d.src, d.ve, d.vn, d.vu])
-            self._n += 1
-            if (self._n % 100) == 0:
-                try: self.f.flush()
-                except: pass
+        if self.only_valid and d.valid is not True:
+            return
+        if self.require_all_axes:
+            if not (_finite(d.ve) and _finite(d.vn) and _finite(d.vu)):
+                return
+        self.w.writerow([d.timestamp, self.sensor_id, d.src, d.ve, d.vn, d.vu, d.valid])
+        self._n += 1
+        if (self._n % 200) == 0:
+            try: self.f.flush()
+            except: pass
 
     def close(self):
         try: self.f.flush()
@@ -191,7 +232,7 @@ class DVLSerialInterface:
     串口读/命令下发 & 解析回调：
       - read_until('\\r')，兼容 CR/CRLF
       - 停止：set -> cancel_read() -> close() -> join()
-      - 命令：优先固定16字节（"CC " + 12参数空格填充 + '\r'），失败回退 ":CC,<arg>\r"
+      - 命令：优先固定16字节（"CC " + 12参数右侧空格填充 + '\\r'），失败回退 ":CC,<arg>\\r"
     """
     def __init__(self, port: str, baud: int = 115200,
                  parity: str = "N", stopbits: float = 1,
@@ -274,10 +315,15 @@ class DVLSerialInterface:
         n  = _to_float(pkt.get("n"))
         u  = _to_float(pkt.get("u"))
         depth = _to_float(pkt.get("depth"))
+        valid = pkt.get("valid", None)
+        if isinstance(valid, str):
+            v = valid.strip().upper()
+            valid = True if v == "A" else False if v == "V" else None
+
         return DVLData(
             timestamp=ts, src=src,
             ve_mm=ve, vn_mm=vn, vu_mm=vu,
-            depth_m=depth, e_m=e, n_m=n, u_m=u
+            depth_m=depth, e_m=e, n_m=n, u_m=u, valid=valid
         )
 
     def _listen(self, raw_only: bool):
@@ -337,6 +383,7 @@ class DVLSerialInterface:
 
     def stop_listening(self):
         self._stop_event.set()
+        # 尽量打断阻塞 read
         try:
             if self.serial_conn:
                 self.serial_conn.cancel_read()

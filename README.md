@@ -203,6 +203,29 @@ Underwater-robot-navigation/
    └─ golden/
       └─ dvl_pd6_samples.txt            ← 采样金样本（回归用）
 ```
+模块化落地期望：
+uwnav/
+  core/                      ← C++ 核心实时库
+    include/uwnav/...
+    src/
+      imu_driver.cpp         ← 串口读、解包、时间戳（100Hz）
+      dvl_driver.cpp         ← 串口读、定宽解析、A/V判定（10Hz）
+      eskf.cpp               ← 状态传播+观测更新（200Hz主循环+事件更新）
+      time_sync.cpp          ← 单机时钟、统计串口延迟
+      pub_ctrl_iface.cpp     ← 50Hz 发布估计结果/对接 MAVLink
+      log_ringbuf.cpp        ← 环形缓冲日志（零拷贝、低抖动）
+  apps/
+    nav_daemon/              ← C++ 可执行（服务）
+      main.cpp               ← 读配置、起线程、注册回调、优雅退出
+  tools/                     ← Python 工具（保留现有）
+    dvl_data_verifier.py
+    imu_logger.py
+    plot_*.py
+  drivers/
+    dvl/hover_h1000/         ← 现有 Python 驱动保留做工具
+    imu/WitHighModbus/
+  config/
+    nav.yaml                 ← 频率、端口、滤波器Q/R、DVL阈值、占位策略窗口等
 
 ---
 

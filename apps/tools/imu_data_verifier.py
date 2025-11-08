@@ -1,3 +1,15 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+IMU数据记录程序
+
+功能：
+- 读取IMU设备的数据，进行实时采集
+- 保存原始IMU数据与滤波后的数据
+- 采用Unix时间戳格式来标记每个数据点
+"""
+
 import time
 import numpy as np
 from queue import Empty, Queue
@@ -5,7 +17,10 @@ from datetime import datetime
 from uwnav.drivers.imu.WitHighModbus import device_model
 from uwnav.drivers.imu.WitHighModbus.filters import RealTimeIMUFilter
 import csv
-import os, sys, time, csv, signal, argparse, threading
+import os
+import signal
+import argparse
+import threading
 from typing import Tuple
 
 # ---- 调试开关 ----
@@ -85,6 +100,9 @@ class IMUDevice:
             self.sample_q.put_nowait(self.imu_data)
             self._stats["recv"] += 1
             self._stats["last_recv_t"] = t
+            # 每25条样本打印一次概览
+            if DEBUG_PRINT_EVERY and self._stats["recv"] % DEBUG_PRINT_EVERY == 0:
+                print(f"[RECV] {self._stats['recv']}  acc={tuple(np.round(acc, 3))} gyr={tuple(np.round(gyr, 3))}")
         except Exception as e:
             self._stats["exc"] += 1
             print(f"[WARN] 读取数据异常: {e}")

@@ -2,21 +2,28 @@
 # -*- coding: utf-8 -*-
 
 """
-Hover H1000 PD6/EPD6 解析器（定宽优先，A/V 有效位）
+Hover H1000 PD6/EPD6 协议解析器（定宽优先，兼容粘连/残缺）。
 返回统一字段：
   - 速度(毫米/秒)：ve, vn, vu
   - 位移/高度(米)：e, n, u, depth
-  - 其他：pitch, roll, heading, ts(原始计数/时间字串), valid(True/False), src(帧类型)
-占位符 88888 / +88888 / -88888 视为 0。
+  - 其他：pitch, roll, heading, ts(设备时间字符串或计数), salinity, temperature, sound_speed, status
+  - 有效位：valid(True/False/None)，src(帧类型, 如 BE/BS/BI/BD/SA/TS)
+
+解析原则：
+  * 先按手册固定宽度切片（PD6：速度 6 宽；位移 8 宽；深度 6 宽；误差 4 宽；标志 1 宽）
+  * 若定宽失败，回退逗号分隔+正则提取数字
+  * 占位符 "88888", "+88888", "-88888" 以及 "nan" 视为无效→返回 None（不当作 0）
+  * 一行可能含多帧（如 ":SA...:TS...:BE..."），请用 parse_lines(raw) 解析
 """
 
 from __future__ import annotations
 import re
 from typing import List, Dict, Optional
 
-# -------------------- 基础工具 --------------------
+# ====================== 工具函数 ======================
 
-_PLACEHOLDER_SET = {"88888", "+88888", "-88888"}
+_PLACEHOLDERS = {"88888", "+88888", "-88888"}
+_NAN_TOKENS = {"nan", "+nan", "-nan", "NaN", "NAN", "Nan"}
 
 def _strip_quotes(s: str) -> str:
     s = s.strip()
@@ -25,94 +32,127 @@ def _strip_quotes(s: str) -> str:
     return s
 
 def _is_placeholder(s: str) -> bool:
-    return s.strip() in _PLACEHOLDER_SET
+    return s.strip() in _PLACEHOLDERS
 
-def _as_int_mm(s: str) -> Optional[float]:
-    """速度字段（mm/s）。占位符→0；异常→None；尽量从混乱字符串摘数字"""
-    s0 = s.strip()
-    if not s0:
-        return None
-    if _is_placeholder(s0):
-        return 0.0
-    # 常规：纯整型
-    try:
-        return float(int(s0))
-    except Exception:
-        # 兜底：抓 +/-digits
-        m = re.search(r'([+\-]?\d{1,6})', s0)
-        if not m:
-            return None
-        v = m.group(1)
-        if _is_placeholder(v):
-            return 0.0
-        try:
-            return float(int(v))
-        except Exception:
-            return None
+def _is_nan_token(s: str) -> bool:
+    return s.strip() in _NAN_TOKENS
 
-def _as_float_m(s: str) -> Optional[float]:
-    """位移/深度（m）。占位符→0；异常→None"""
-    s0 = s.strip().replace(' ', '')
-    if not s0:
+def _clean_spaces(s: str) -> str:
+    # 去除字符串中多余的内部空格（不用于定宽切片，仅用于回退解析）
+    return re.sub(r"\s+", "", s.strip())
+
+def _take_numeric_int(token: str) -> Optional[float]:
+    """
+    速度字段用，整数（mm/s）。占位/NaN→None；尽量从混乱字符串抓一个 +/-digits。
+    """
+    if not token:
         return None
-    if "88888" in s0:
-        return 0.0
+    t = token.strip()
+    if _is_nan_token(t) or _is_placeholder(t):
+        return None
+    # 纯整型
     try:
-        return float(s0)
+        return float(int(t))
     except Exception:
-        m = re.search(r'([+\-]?\d+(?:\.\d+)?)', s0)
-        if not m:
-            return None
-        v = m.group(1)
-        if "88888" in v:
-            return 0.0
-        try:
-            return float(v)
-        except Exception:
-            return None
+        pass
+    m = re.search(r"([+\-]?\d{1,6})", t)
+    if not m:
+        return None
+    v = m.group(1)
+    if _is_placeholder(v) or _is_nan_token(v):
+        return None
+    try:
+        return float(int(v))
+    except Exception:
+        return None
+
+def _take_numeric_float(token: str) -> Optional[float]:
+    """
+    位移/深度用（m）。占位/NaN→None；尽量从混乱字符串抓一个 +/-digits(.digits)。
+    """
+    if not token:
+        return None
+    t = token.strip()
+    if _is_nan_token(t):
+        return None
+    if "88888" in t:
+        return None
+    # 常规浮点
+    try:
+        return float(_clean_spaces(t))
+    except Exception:
+        pass
+    m = re.search(r"([+\-]?\d+(?:\.\d+)?)", t)
+    if not m:
+        return None
+    v = m.group(1)
+    if "88888" in v or _is_nan_token(v):
+        return None
+    try:
+        return float(v)
+    except Exception:
+        return None
 
 def _valid_flag(token: str) -> Optional[bool]:
+    if not token:
+        return None
     t = token.strip().upper()
     if t == "A": return True
     if t == "V": return False
     return None
 
-def _split_fixed_or_csv(payload: str, widths: List[int], expect: int) -> List[str]:
+def _split_fixed(payload: str, widths: List[int]) -> Optional[List[str]]:
     """
-    先尝试定宽切片（去掉起始逗号/空格），失败再按逗号分割，不足填空。
+    定宽切片：从去掉前导逗号/空格的 payload 开始，按 widths 逐段切片。
+    注意：PD6 每段间常见有逗号分隔；此处策略：
+      - 先移除所有逗号，仅按宽度切片
+      - 切片后 strip()
     """
-    s = payload.lstrip(' ,')
-    # 定宽
+    if not payload:
+        return None
+    s = payload.lstrip(" ,")
+    # 去掉逗号（手册给的是定宽+逗号，直接去逗号更稳）
+    s = s.replace(",", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    # 为避免合并过度，先把空格去掉，仅保留正负号和数字与字母（A/V）
+    # 但位移/深度有小数点，需要保留 '.'
+    # 暂不删除空格，定宽直接从原串连续取片段（空格算占位）
     pos = 0
     out = []
     try:
         for w in widths:
-            out.append(s[pos:pos+w])
-            pos += w + 1  # 宽度之间通常还有一个逗号或空格，+1 允许轻微错位
-        if len(out) >= expect:
-            return [x.strip() for x in out[:expect]]
+            seg = s[pos:pos+w]
+            out.append(seg.strip())
+            pos += w
+        return out
     except Exception:
-        pass
-    # 逗号
-    parts = [p.strip() for p in payload.split(',')]
+        return None
+
+def _split_csv(payload: str, expect: int) -> List[str]:
+    parts = [p.strip() for p in payload.lstrip(" ,").split(",")]
     while len(parts) < expect:
         parts.append("")
     return parts[:expect]
 
-# -------------------- 各帧解析 --------------------
+def _split_fixed_or_csv(payload: str, widths: List[int], expect: int) -> List[str]:
+    fixed = _split_fixed(payload, widths)
+    if fixed is not None and len(fixed) >= expect:
+        return fixed[:expect]
+    return _split_csv(payload, expect)
+
+# ====================== 各帧解析 ======================
 
 def _parse_SA(payload: str) -> Optional[Dict]:
     # :SA, pitch, roll, heading
-    # 定宽意义小，优先逗号/正则
-    parts = [p for p in payload.lstrip(' ,').split(',') if p != ""]
-    if len(parts) < 3:
-        nums = re.findall(r'[+\-]?\d+(?:\.\d+)?', payload)
-        if len(nums) < 3:
-            return None
-        parts = nums[:3]
+    parts = _split_csv(payload, 3)
+    # 回退：用正则抓 3 个浮点
+    if not all(parts):
+        nums = re.findall(r"[+\-]?\d+(?:\.\d+)?", payload)
+        if len(nums) >= 3:
+            parts = nums[:3]
     try:
         return {
-            "src":"SA",
+            "src": "SA",
             "pitch": float(parts[0]),
             "roll": float(parts[1]),
             "heading": float(parts[2]),
@@ -122,126 +162,155 @@ def _parse_SA(payload: str) -> Optional[Dict]:
 
 def _parse_TS(payload: str) -> Optional[Dict]:
     # :TS, ts, sal, temp, depth, sound_speed, status
-    parts = [p.strip() for p in payload.lstrip(' ,').split(',')]
-    if len(parts) < 6:
-        nums = re.findall(r'[+\-]?\d+(?:\.\d+)?', payload)
-        if len(nums) < 6:
-            return None
-        parts = [nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]]
+    parts = _split_csv(payload, 6)
+    # 回退正则
+    if not parts[0] or not parts[1] or not parts[2]:
+        nums = re.findall(r"[+\-]?\d+(?:\.\d+)?", payload)
+        if len(nums) >= 6:
+            parts = nums[:6]
     try:
         return {
-            "src":"TS",
-            "ts": parts[0],
+            "src": "TS",
+            "ts": parts[0],  # 原始设备计数/时间字符串（不强转）
             "salinity": float(parts[1]),
             "temperature": float(parts[2]),
-            "depth": _as_float_m(parts[3]),
+            "depth": _take_numeric_float(parts[3]),
             "sound_speed": float(parts[4]),
             "status": parts[5],
         }
     except Exception:
         return None
 
-def _parse_WI(payload: str) -> Optional[Dict]:
-    # :WI, vx, vy, vz, err, A/V   （体坐标速度＋误差）
-    fields = _split_fixed_or_csv(payload, widths=[6,6,6,4,1], expect=5)
-    vx = _as_int_mm(fields[0]); vy = _as_int_mm(fields[1]); vz = _as_int_mm(fields[2])
-    valid = _valid_flag(fields[-1])
-    return {"src":"WI", "ve":vx, "vn":vy, "vu":vz, "valid":valid}
-
 def _parse_BI(payload: str) -> Optional[Dict]:
-    # :BI, vx, vy, vz, err, A/V
+    # :BI, vx, vy, vz, err, A/V   (体坐标；mm/s)
     fields = _split_fixed_or_csv(payload, widths=[6,6,6,4,1], expect=5)
-    vx = _as_int_mm(fields[0]); vy = _as_int_mm(fields[1]); vz = _as_int_mm(fields[2])
+    vx = _take_numeric_int(fields[0])
+    vy = _take_numeric_int(fields[1])
+    vz = _take_numeric_int(fields[2])
     valid = _valid_flag(fields[-1])
-    return {"src":"BI", "ve":vx, "vn":vy, "vu":vz, "valid":valid}
-
-def _parse_WS(payload: str) -> Optional[Dict]:
-    # :WS, vx, vy, vz, A/V  （体坐标简版）
-    fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
-    vx = _as_int_mm(fields[0]); vy = _as_int_mm(fields[1]); vz = _as_int_mm(fields[2])
-    valid = _valid_flag(fields[-1])
-    return {"src":"WS", "ve":vx, "vn":vy, "vu":vz, "valid":valid}
+    return {"src": "BI", "ve": vx, "vn": vy, "vu": vz, "valid": valid}
 
 def _parse_BS(payload: str) -> Optional[Dict]:
-    # :BS, vx, vy, vz, A/V
+    # :BS, vx, vy, vz, A/V       (体坐标；mm/s)
     fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
-    vx = _as_int_mm(fields[0]); vy = _as_int_mm(fields[1]); vz = _as_int_mm(fields[2])
+    vx = _take_numeric_int(fields[0])
+    vy = _take_numeric_int(fields[1])
+    vz = _take_numeric_int(fields[2])
     valid = _valid_flag(fields[-1])
-    return {"src":"BS", "ve":vx, "vn":vy, "vu":vz, "valid":valid}
-
-def _parse_WE(payload: str) -> Optional[Dict]:
-    # :WE, ve, vn, vu, A/V  （东北天）
-    fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
-    ve = _as_int_mm(fields[0]); vn = _as_int_mm(fields[1]); vu = _as_int_mm(fields[2])
-    valid = _valid_flag(fields[-1])
-    return {"src":"WE", "ve":ve, "vn":vn, "vu":vu, "valid":valid}
+    return {"src": "BS", "ve": vx, "vn": vy, "vu": vz, "valid": valid}
 
 def _parse_BE(payload: str) -> Optional[Dict]:
-    # :BE, ve, vn, vu, A/V
+    # :BE, ve, vn, vu, A/V       (东北天；mm/s)
     fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
-    ve = _as_int_mm(fields[0]); vn = _as_int_mm(fields[1]); vu = _as_int_mm(fields[2])
+    ve = _take_numeric_int(fields[0])
+    vn = _take_numeric_int(fields[1])
+    vu = _take_numeric_int(fields[2])
     valid = _valid_flag(fields[-1])
-    return {"src":"BE", "ve":ve, "vn":vn, "vu":vu, "valid":valid}
+    return {"src": "BE", "ve": ve, "vn": vn, "vu": vu, "valid": valid}
 
-def _parse_WD(payload: str) -> Optional[Dict]:
-    # :WD, dx, dy, dz, depth, q （体坐标位移/高度）
-    fields = _split_fixed_or_csv(payload, widths=[8,8,8,6,4], expect=5)
-    e = _as_float_m(fields[0]); n = _as_float_m(fields[1]); u = _as_float_m(fields[2])
-    depth = _as_float_m(fields[3])
-    return {"src":"WD", "e":e, "n":n, "u":u, "depth":depth}
+def _parse_WI(payload: str) -> Optional[Dict]:
+    # :WI, vx, vy, vz, err, A/V  (某些固件的体坐标速度；与 BI 类似)
+    fields = _split_fixed_or_csv(payload, widths=[6,6,6,4,1], expect=5)
+    vx = _take_numeric_int(fields[0])
+    vy = _take_numeric_int(fields[1])
+    vz = _take_numeric_int(fields[2])
+    valid = _valid_flag(fields[-1])
+    return {"src": "WI", "ve": vx, "vn": vy, "vu": vz, "valid": valid}
+
+def _parse_WS(payload: str) -> Optional[Dict]:
+    # :WS, vx, vy, vz, A/V       (某些固件的体坐标速度简版)
+    fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
+    vx = _take_numeric_int(fields[0])
+    vy = _take_numeric_int(fields[1])
+    vz = _take_numeric_int(fields[2])
+    valid = _valid_flag(fields[-1])
+    return {"src": "WS", "ve": vx, "vn": vy, "vu": vz, "valid": valid}
+
+def _parse_WE(payload: str) -> Optional[Dict]:
+    # :WE, ve, vn, vu, A/V       (某些固件的东北天速度；与 BE 类似)
+    fields = _split_fixed_or_csv(payload, widths=[6,6,6,1], expect=4)
+    ve = _take_numeric_int(fields[0])
+    vn = _take_numeric_int(fields[1])
+    vu = _take_numeric_int(fields[2])
+    valid = _valid_flag(fields[-1])
+    return {"src": "WE", "ve": ve, "vn": vn, "vu": vu, "valid": valid}
 
 def _parse_BD(payload: str) -> Optional[Dict]:
-    # :BD, e, n, u, depth, q  （东北天位移/高度）
+    # :BD, e, n, u, depth, q     (东北天位移/高度；米)
     fields = _split_fixed_or_csv(payload, widths=[8,8,8,6,4], expect=5)
-    e = _as_float_m(fields[0]); n = _as_float_m(fields[1]); u = _as_float_m(fields[2])
-    depth = _as_float_m(fields[3])
-    return {"src":"BD", "e":e, "n":n, "u":u, "depth":depth}
+    e = _take_numeric_float(fields[0])
+    n = _take_numeric_float(fields[1])
+    u = _take_numeric_float(fields[2])
+    depth = _take_numeric_float(fields[3])
+    return {"src": "BD", "e": e, "n": n, "u": u, "depth": depth}
 
-# -------------------- 主入口 --------------------
+def _parse_WD(payload: str) -> Optional[Dict]:
+    # :WD, dx, dy, dz, depth, q  (体坐标位移/高度；米)
+    fields = _split_fixed_or_csv(payload, widths=[8,8,8,6,4], expect=5)
+    e = _take_numeric_float(fields[0])
+    n = _take_numeric_float(fields[1])
+    u = _take_numeric_float(fields[2])
+    depth = _take_numeric_float(fields[3])
+    return {"src": "WD", "e": e, "n": n, "u": u, "depth": depth}
 
+# 帧类型到解析函数的映射
 _PARSERS = {
     "SA": _parse_SA,
     "TS": _parse_TS,
-    "WI": _parse_WI,
     "BI": _parse_BI,
-    "WS": _parse_WS,
     "BS": _parse_BS,
-    "WE": _parse_WE,
     "BE": _parse_BE,
-    "WD": _parse_WD,
+    "WI": _parse_WI,
+    "WS": _parse_WS,
+    "WE": _parse_WE,
     "BD": _parse_BD,
+    "WD": _parse_WD,
 }
 
+# ====================== 主入口 ======================
+
 def parse_line(line: str) -> Optional[Dict]:
-    """解析单帧（行首需有 :XX）。"""
+    """
+    解析单帧（行首需有 ":"），返回 dict 或 None。
+    """
     if not line:
         return None
     s = _strip_quotes(line)
 
-    # 清理多余前缀，如 '::::CS ...' → '::CS ...' → ':CS ...'
-    while s.startswith('::'):
+    # 清理多余冒号（一些设备/回显会出现 '::::CS ...'）
+    while s.startswith("::"):
         s = s[1:]
-    if not s.startswith(':') or len(s) < 3:
+    if not s.startswith(":") or len(s) < 3:
         return None
 
     msg = s[1:3].upper()
     payload = s[3:]
+
     fn = _PARSERS.get(msg)
-    if fn:
-        try:
-            return fn(payload)
-        except Exception:
-            return None
-    # 未知类型，返回 src 以便上层记录
-    return {"src": msg}
+    if fn is None:
+        # 未知类型也返回 src，便于上层记录/统计
+        return {"src": msg}
+
+    try:
+        pkt = fn(payload)
+        if pkt:
+            return pkt
+    except Exception:
+        pass
+    return None
+
 
 def parse_lines(raw: str) -> List[Dict]:
-    """一行可能含多帧：用 ':' 分割再逐帧解析。"""
+    """
+    一行可能含多帧：使用 ':' 切块，每块前补 ':' 再逐帧解析。
+    解析成功的帧以 dict 形式输出；失败的帧跳过。
+    """
     if not raw:
         return []
     s = _strip_quotes(raw)
-    # 切块时保留 ':' 让 parse_line 识别
-    chunks = [f":{p}" for p in s.split(':') if p]
+
+    # 切块（保留帧界定符）
+    chunks = [":" + c for c in s.split(":") if c]  # 丢弃空块
     out: List[Dict] = []
     for ck in chunks:
         pkt = parse_line(ck)
