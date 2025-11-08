@@ -43,7 +43,7 @@ class RealTimeIMUFilter:
     clamp_gyro_dps:对原始陀螺做幅值夹持（deg/s），0 关闭
     """
     def __init__(self,
-                 fs: float = 50,
+                 fs: float = 100,
                  cutoff: float = 4.0,
                  calibrate: bool = True,
                  calib_seconds: float = 1.0,

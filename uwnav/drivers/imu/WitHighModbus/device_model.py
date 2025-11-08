@@ -352,7 +352,7 @@ class DeviceModel:
         print("循环读取开始")
         while self.loop:
             self.readReg(0x34, 15)
-            time.sleep(0.02)
+            time.sleep(0.01)
         print("循环读取结束")
 
     # 关闭循环读取 Close loop reading
