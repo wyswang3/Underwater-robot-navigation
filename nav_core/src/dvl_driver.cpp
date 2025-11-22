@@ -295,135 +295,151 @@ void DvlDriver::threadFunc() {
 
 // 这里是协议解析入口：把一行文本解析成 DvlRawData
 bool DvlDriver::parseLine(const std::string& line, DvlRawData& out_raw) {
-    // ==== 清理字符串 ====
+    // ==== 1. 清理字符串 ====
     std::string s = trim(line);
     if (s.empty()) {
         return false;
     }
 
-    // PD6/EPD6 行通常以 ":" 开头，且可能一行多帧（":SA...:TS...:BE..."）
-    // 最小实现策略：
-    //  - 按 ':' 切分，逐块找第一个速度帧（BE/BS/BI/WE/WS/WI）
-    //  - 仅解析该速度帧，其他帧丢弃
-    auto now = ::time(nullptr);  // Unix 秒时间戳
+    // 把外围的引号去掉："..."
+    if (!s.empty() && (s.front() == '"' || s.front() == '\'')) {
+        s.erase(s.begin());
+    }
+    if (!s.empty() && (s.back() == '"' || s.back() == '\'')) {
+        s.pop_back();
+    }
+    if (s.empty()) {
+        return false;
+    }
 
-    auto parseVelocityFrame = [](const std::string& frame, DvlRawData& d, std::time_t ts) -> bool {
-        if (frame.size() < 3) {
+    auto now = ::time(nullptr);  // 暂用系统秒级时间
+
+    // ==== 2. 解析单个速度帧的内部函数（更鲁棒） ====
+    auto parseVelocityFrame = [](const std::string& frame_raw,
+                                 DvlRawData& d,
+                                 std::time_t ts) -> bool
+    {
+        if (frame_raw.size() < 2) {
             return false;
         }
-        // frame 形如 "BE,......"（不含前导 ':'）
-        std::string msg = frame.substr(0, 2);
+
+        // frame_raw 形如 "BE,+88888,+888+,VB..." 或 "BI   5,  1,   +,..."
+        // 先取前两个字符作为消息类型
+        std::string msg = frame_raw.substr(0, 2);
         for (auto& c : msg) {
             c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         }
-        // 只处理常见的速度帧；其他直接忽略
         if (msg != "BE" && msg != "BS" && msg != "BI" &&
             msg != "WE" && msg != "WS" && msg != "WI") {
             return false;
         }
 
-        std::string payload = frame.substr(2);
-        // 去掉前导逗号/空格
-        while (!payload.empty() &&
-               (payload[0] == ',' || std::isspace(static_cast<unsigned char>(payload[0])))) {
-            payload.erase(payload.begin());
-        }
+        // 去掉前两字符，剩下的是 payload
+        std::string payload = frame_raw.substr(2);
 
-        // 按逗号分隔；遇到 '*' 视为校验和开始，停止解析
-        std::vector<std::string> fields;
-        std::size_t start = 0;
-        while (start < payload.size()) {
-            std::size_t comma = payload.find(',', start);
-            std::size_t star  = payload.find('*', start);
-            std::size_t end   = std::string::npos;
-            if (star != std::string::npos &&
-                (comma == std::string::npos || star < comma)) {
-                end = star;
+        // 从 payload 中“扫描”出最多 3 个整数（允许+/-、任意空格/逗号/杂字符分隔）
+        std::vector<double> vel_mm;
+        vel_mm.reserve(3);
+
+        for (std::size_t i = 0; i < payload.size();) {
+            char c = payload[i];
+
+            // 寻找 [+-]?\d+ 型整数
+            if (c == '+' || c == '-' || std::isdigit(static_cast<unsigned char>(c))) {
+                std::size_t j = i;
+
+                // 可选符号
+                if (c == '+' || c == '-') {
+                    ++j;
+                    if (j >= payload.size() ||
+                        !std::isdigit(static_cast<unsigned char>(payload[j]))) {
+                        // "+" 或 "-" 后面不是数字，当作噪声跳过
+                        ++i;
+                        continue;
+                    }
+                }
+
+                // 后面连续的数字
+                while (j < payload.size() &&
+                       std::isdigit(static_cast<unsigned char>(payload[j]))) {
+                    ++j;
+                }
+
+                std::string tok = payload.substr(i, j - i);
+                double v = 0.0;
+                if (safeAtoi(tok, v)) {          // safeAtoi 来自前面匿名命名空间
+                    vel_mm.push_back(v);
+                    if (vel_mm.size() >= 3) {
+                        break;
+                    }
+                }
+
+                i = j;
             } else {
-                end = comma;
+                ++i;
             }
-            if (end == std::string::npos) {
-                end = payload.size();
-            }
-            auto token = trim(payload.substr(start, end - start));
-            if (!token.empty()) {
-                fields.push_back(token);
-            }
-            if (comma == std::string::npos || comma >= payload.size()) {
-                break;
-            }
-            start = comma + 1;
         }
 
-        if (fields.size() < 4) {
-            // 速度 3 段 + 有效位 1 段
+        if (vel_mm.empty()) {
+            // 一点有效整数都没找到
             return false;
         }
 
-        double ve_mm = 0.0, vn_mm = 0.0, vu_mm = 0.0;
-        bool ok_ve = safeAtoi(fields[0], ve_mm);
-        bool ok_vn = safeAtoi(fields[1], vn_mm);
-        bool ok_vu = safeAtoi(fields[2], vu_mm);
-
-        if (!ok_ve && !ok_vn && !ok_vu) {
-            // 全部无效就不输出
-            return false;
-        }
-
+        // 有效标志：找到最后一个 'A' 或 'V'
         int valid_flag = -1;
-        if (!fields[3].empty()) {
-            char c = static_cast<char>(std::toupper(static_cast<unsigned char>(fields[3][0])));
-            if (c == 'A')      valid_flag = 1;
-            else if (c == 'V') valid_flag = 0;
+        for (std::size_t i = payload.size(); i > 0; --i) {
+            char c = payload[i - 1];
+            if (!std::isalpha(static_cast<unsigned char>(c))) {
+                continue;
+            }
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (c == 'A') { valid_flag = 1; break; }
+            if (c == 'V') { valid_flag = 0; break; }
         }
 
         d.timestamp_s = static_cast<double>(ts);
-        d.src   = msg;
-        d.ve_mm = ok_ve ? ve_mm : 0.0;
-        d.vn_mm = ok_vn ? vn_mm : 0.0;
-        d.vu_mm = ok_vu ? vu_mm : 0.0;
-        d.depth_m = 0.0;
-        d.e_m     = 0.0;
-        d.n_m     = 0.0;
-        d.u_m     = 0.0;
-        d.valid   = valid_flag;
+        d.src         = msg;
+        d.ve_mm       = vel_mm.size() > 0 ? vel_mm[0] : 0.0;
+        d.vn_mm       = vel_mm.size() > 1 ? vel_mm[1] : 0.0;
+        d.vu_mm       = vel_mm.size() > 2 ? vel_mm[2] : 0.0;
+        d.depth_m     = 0.0;
+        d.e_m         = 0.0;
+        d.n_m         = 0.0;
+        d.u_m         = 0.0;
+        d.valid       = valid_flag;
         return true;
     };
 
-    // 按 ':' 切块，逐块尝试解析速度帧
-    // 注意：原始字符串可能本身就以 ':' 开头，例如 ":BE,......"
-    std::string work = s;
-    // 清理前后引号，模仿 Python _strip_quotes
-    if (!work.empty() && (work.front() == '"' || work.front() == '\'')) {
-        work.erase(work.begin());
-    }
-    if (!work.empty() && (work.back() == '"' || work.back() == '\'')) {
-        work.pop_back();
-    }
+    // ==== 3. 在整行中查找第一个 BE/BS/BI/WE/WS/WI 帧 ====
 
-    std::size_t start = 0;
+    // 有些行是以 ":" 开头，有些是中间才出现 ":BE"
+    // 我们不再按 ":" 分块，而是直接在整行里找 ":[tag]"
+    const char* tags[] = {"BE", "BS", "BI", "WE", "WS", "WI"};
+
     bool parsed = false;
-    while (start < work.size()) {
-        std::size_t colon = work.find(':', start);
-        if (colon == std::string::npos) {
-            break;
-        }
-        // 从冒号之后开始到下一次冒号前
-        std::size_t next_colon = work.find(':', colon + 1);
-        std::string frame = work.substr(
-            colon + 1,
-            (next_colon == std::string::npos ? work.size() : next_colon) - (colon + 1)
-        );
-        frame = trim(frame);
-        if (frame.empty()) {
-            start = (next_colon == std::string::npos ? work.size() : next_colon);
+    for (const char* tag : tags) {
+        std::string needle = std::string(":") + tag;
+        std::size_t pos = s.find(needle);
+        if (pos == std::string::npos) {
             continue;
         }
+
+        // 从 ":" 后开始，到下一次 ":" 或行尾
+        std::size_t frame_start = pos + 1;  // 指向 "B"
+        std::size_t next_colon  = s.find(':', frame_start);
+        std::string frame = (next_colon == std::string::npos)
+                            ? s.substr(frame_start)
+                            : s.substr(frame_start, next_colon - frame_start);
+
+        frame = trim(frame);
+        if (frame.empty()) {
+            continue;
+        }
+
         if (parseVelocityFrame(frame, out_raw, now)) {
             parsed = true;
             break;  // 只取第一个速度帧
         }
-        start = (next_colon == std::string::npos ? work.size() : next_colon);
     }
 
     if (!parsed) {
@@ -431,6 +447,7 @@ bool DvlDriver::parseLine(const std::string& line, DvlRawData& out_raw) {
     }
     return true;
 }
+
 
 // 接收一个解析好的原始样本：先 raw 回调，再做过滤，最后输出 DvlFrame
 void DvlDriver::handleRawSample(const DvlRawData& raw) {

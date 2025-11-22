@@ -6,6 +6,7 @@
         "*.py": "python",
         "*.sln": "csharp",
         "xlocinfo": "cpp",
-        "xstring": "cpp"
+        "xstring": "cpp",
+        "atomic": "cpp"
     }
 }
