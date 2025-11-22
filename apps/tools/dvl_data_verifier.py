@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-apps/tools/dvl_data_verifier.py
+apps/tools/dvl_data_verifier.py  (timebase 版)
 
-职责：
-- 解析命令行参数（Windows/Unix 通用）
-- 组合库：DVLSerialInterface + DVLLogger (+ MinimalSpeedWriter 可选)
-- 发送 DF/PR/PM/ST/CS/CZ
-- 同时写三份（可选第三份精简速度表）
+要点：
+- 在 on_raw/on_parsed 回调中统一取 (mono_ns, est_ns) = stamp()
+- 现有 DVLLogger 继续使用“单列时间戳”——此处喂入 est_s（不改库）
+- 另起一个 MinimalSpeedWriterTB，专写带双时间戳的“精简速度表”，便于后续与 IMU/DVL 融合只看 MonoNS
 """
 
 from __future__ import annotations
@@ -20,12 +19,50 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
+from uwnav.io.timebase import stamp  # ★ 统一时间基
 from uwnav.drivers.dvl.hover_h1000.io import (
     DVLLogger, MinimalSpeedWriter, DVLSerialInterface
 )
+from uwnav.io.data_paths import get_sensor_outdir
 
+# --------- 带双时间戳的最小速度写手（不改库里的 MinimalSpeedWriter） ---------
+import csv, os
+class MinimalSpeedWriterTB:
+    def __init__(self, out_dir: str, sensor_id: str = "DVL_H1000"):
+        os.makedirs(out_dir, exist_ok=True)
+        self.sensor_id = sensor_id
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        path = Path(out_dir) / f"dvl_speed_min_tb_{ts}.csv"
+        self.f = open(path, "a", newline="", encoding="utf-8")
+        self.w = csv.writer(self.f)
+        if self.f.tell() == 0:
+            self.w.writerow([
+                "MonoNS","EstNS","MonoS","EstS",
+                "SensorID","Src","East_Vel(m_s)","North_Vel(m_s)","Up_Vel(m_s)"
+            ])
+        logging.info(f"[DVL-SPEED-TB] -> {path}")
+        self._n = 0
+
+    def write_if_valid(self, mono_ns: int, est_ns: int, src: str,
+                       ve: Optional[float], vn: Optional[float], vu: Optional[float]):
+        # 三轴都有值才写（融合更省事）
+        if ve is None or vn is None or vu is None:
+            return
+        self.w.writerow([mono_ns, est_ns, mono_ns/1e9, est_ns/1e9,
+                         self.sensor_id, src, ve, vn, vu])
+        self._n += 1
+        if (self._n % 100) == 0:
+            try: self.f.flush()
+            except: pass
+
+    def close(self):
+        try: self.f.flush()
+        except: pass
+        self.f.close()
+
+# ----------------- CLI -----------------
 def parse_args():
-    ap = argparse.ArgumentParser(description="DVL data verifier/logger (PD6/EPD6)")
+    ap = argparse.ArgumentParser(description="DVL data verifier/logger (PD6/EPD6, timebase unified)")
     # 串口
     ap.add_argument("--port", default="/dev/ttyUSB1", help="Serial port (e.g., /dev/ttyUSB0 or COM6)")
     ap.add_argument("--baud", type=int, default=115200, help="Baudrate")
@@ -50,16 +87,14 @@ def parse_args():
     # 运行
     ap.add_argument("--raw-only", action="store_true", help="Only log raw lines, skip parsing")
     ap.add_argument("--outdir", default=None, help="Output directory; default=<repo_root>/data")
-    ap.add_argument("--no-min-speed", action="store_true", help="Do not write minimal speed CSV")
+    ap.add_argument("--no-min-speed", action="store_true", help="Do not write minimal speed CSV (timebase)")
     ap.add_argument("--log", default="INFO", choices=["DEBUG", "INFO", "WARN", "ERROR"])
     return ap.parse_args()
 
-
 def _default_outdir(args_outdir: Optional[str]) -> str:
-    if args_outdir:
-        return args_outdir
-    return str(Path(__file__).resolve().parents[2] / "data")
-
+    # ★ 使用统一路径函数：按日期 + sensor=dvl 分类
+    return str(get_sensor_outdir("dvl", args_outdir))
+# ----------------- 主程序 -----------------
 
 def main():
     args = parse_args()
@@ -70,27 +105,31 @@ def main():
     )
 
     out_dir = _default_outdir(args.outdir)
-    logger = DVLLogger(out_dir)
+    logger = DVLLogger(out_dir)  # 仍旧单列时间戳（我们喂 est_s）
+    speed_min_tb = None if args.no_min_speed else MinimalSpeedWriterTB(out_dir)
 
-    # 可选：仅有效速度（m/s）精简表
-    speed_min = None if args.no_min_speed else MinimalSpeedWriter(out_dir)
-
-    stop_event = signal.signal
-
+    # ---- 信号处理：抛 KeyboardInterrupt 进入 finally ----
     def _on_signal(sig, frame):
         logging.info("signal received, shutting down...")
-        # 仅置标志，由 DVLSerialInterface 的 stop 来打断读取
-        # 这里用异常流（KeyboardInterrupt）也可，但保持对称更稳
         raise KeyboardInterrupt()
-
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    # 包装 on_parsed：既写完整 parsed，又写最小速度表
-    def _on_parsed_and_filter(d):
+    # ---- 包装回调：统一时间基 ----
+    def _on_raw_with_timebase(ts_unused: float, line: str, note: str):
+        mono_ns, est_ns = stamp()
+        est_s = est_ns / 1e9
+        # 用 est_s 代替库里原本的 time.time()，保持日志“可读时间线”
+        logger.store_raw_line(est_s, line, note)
+
+    def _on_parsed_with_timebase(d):
+        # d 是 uwnav.drivers...io.DVLData，内部 timestamp 是库里 time.time()
+        # 这里不改库，直接写原 parsed（其 Timestamp 列仍为库时间）；
+        # 另外我们再写一份带双时间戳的精简速度表
         logger.store_parsed(d)
-        if speed_min:
-            speed_min.maybe_write(d)
+        if speed_min_tb:
+            mono_ns, est_ns = stamp()
+            speed_min_tb.write_if_valid(mono_ns, est_ns, d.src, d.ve, d.vn, d.vu)
 
     dvl = DVLSerialInterface(
         port=args.port,
@@ -102,14 +141,14 @@ def main():
         xonxoff=args.xonxoff,
         no_dtr=args.no_dtr,
         no_rts=args.no_rts,
-        on_raw=logger.store_raw_line,
-        on_parsed=_on_parsed_and_filter,
+        on_raw=_on_raw_with_timebase,
+        on_parsed=_on_parsed_with_timebase,
     )
 
     if not dvl.start_listening(raw_only=args.raw_only):
         logging.error("start_listening failed, exit.")
         logger.close()
-        if speed_min: speed_min.close()
+        if speed_min_tb: speed_min_tb.close()
         return
 
     try:
@@ -131,7 +170,7 @@ def main():
             logging.info("[DVL-CMD] CS (start)")
             dvl.write_cmd_try("CS", "")
 
-        # 主循环：轻量 sleep
+        # 主循环
         while True:
             time.sleep(0.1)
 
@@ -147,9 +186,8 @@ def main():
         time.sleep(0.1)
         dvl.stop_listening()
         logger.close()
-        if speed_min: speed_min.close()
+        if speed_min_tb: speed_min_tb.close()
         logging.info(f"bye. stats: {dvl.stats()}")
-
 
 if __name__ == "__main__":
     main()

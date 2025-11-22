@@ -4,11 +4,9 @@
 """
 apps/tools/imu_data_verifier.py
 
-功能：
-- 以 100 Hz 目标采样调用 HWT9073-485（底层仍为 Modbus 回调）
-- 回调线程只做采样入队；后台线程做滤波、落盘、打印
-- 时间戳：Unix 秒 (float)
-- CSV：原始/滤波分别写，半秒 flush 一次
+更新要点（基于 uwnav/io/timebase.py）：
+- 统一时间源：每帧取 (mono_ns, est_ns)；滤波用 mono 秒（单调、连续），CSV 同时写 MonoNS 与 EstNS。
+- 回调线程仅入队；后台线程滤波+写盘；半秒 flush。
 """
 
 from __future__ import annotations
@@ -16,23 +14,24 @@ from __future__ import annotations
 import os
 import csv
 import time
-import math
 import signal
 import argparse
 import threading
 from dataclasses import dataclass
 from queue import Queue, Empty
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 
+from uwnav.io.timebase import stamp, to_sec   # ★ 统一时间基
 from uwnav.drivers.imu.WitHighModbus import device_model
 from uwnav.drivers.imu.WitHighModbus.filters import RealTimeIMUFilter
+from uwnav.io.data_paths import get_sensor_outdir
 
 # ---- 默认参数 ----
-DEFAULT_FS = 100.0       # 目标采样频率（Hz）
+DEFAULT_FS = 100.0       # 目标采样频率（Hz，供滤波器 dt 参考）
 DEFAULT_CUTOFF = 6.0     # 低通截止（Hz）
-QUEUE_SIZE = 2000        # 队列容量（丢最老策略）
+QUEUE_SIZE = 2000        # 队列容量（满时丢最老）
 WARN_IF_IDLE_SEC = 3.0   # N 秒没数据报警
 FLUSH_PERIOD_SEC = 0.5   # flush 周期
 DEBUG_PRINT_EVERY = 25   # 每 N 帧打印一次
@@ -40,9 +39,19 @@ DEBUG_PRINT_EVERY = 25   # 每 N 帧打印一次
 
 @dataclass
 class IMUSample:
-    t_unix: float          # Unix 时间戳（秒）
+    mono_ns: int           # 单调时钟（纳秒，用于融合/积分）
+    est_ns: int            # 估计实时时间（纳秒，用于落盘/展示）
     acc: np.ndarray        # (3,)
     gyr: np.ndarray        # (3,) deg/s
+
+    @property
+    def mono_s(self) -> float:
+        return self.mono_ns / 1e9
+
+    @property
+    def est_s(self) -> float:
+        return self.est_ns / 1e9
+
 
 class IMURecorder:
     def __init__(self, port: str, baud: int, addr: int,
@@ -52,7 +61,8 @@ class IMURecorder:
         self.baud = baud
         self.addr = addr
 
-        # 实时滤波器（含 1s 静置校准 + 低通 + 航向角积分解缠）
+        # 实时滤波器（1s 静置校准 + 低通 + 航向角积分解缠）
+        # ★ 这里的 fs 仅用于滤波器的 dt 估计与归一化截止频率
         self.filter = RealTimeIMUFilter(fs=fs, cutoff=cutoff, calibrate=True)
 
         # 设备与线程
@@ -62,7 +72,7 @@ class IMURecorder:
         self.worker: Optional[threading.Thread] = None
 
         # 统计
-        self.last_rx_ts = 0.0
+        self.last_rx_est_s = 0.0
         self.n_recv = 0
         self.n_drop = 0
         self.n_wraw = 0
@@ -81,12 +91,18 @@ class IMURecorder:
             self.raw_w = csv.writer(self.raw_f)
             self.flt_w = csv.writer(self.flt_f)
             if self.raw_f.tell() == 0:
-                self.raw_w.writerow(["Timestamp(s)","AccX","AccY","AccZ",
-                                     "GyrX(deg/s)","GyrY(deg/s)","GyrZ(deg/s)"])
+                self.raw_w.writerow([
+                    "MonoNS","EstNS","MonoS","EstS",
+                    "AccX","AccY","AccZ",
+                    "GyrX(deg/s)","GyrY(deg/s)","GyrZ(deg/s)"
+                ])
             if self.flt_f.tell() == 0:
-                self.flt_w.writerow(["Timestamp(s)","AccX_f","AccY_f","AccZ_f",
-                                     "GyrX_f(deg/s)","GyrY_f(deg/s)","GyrZ_f(deg/s)",
-                                     "Yaw_f(deg)"])
+                self.flt_w.writerow([
+                    "MonoNS","EstNS","MonoS","EstS",
+                    "AccX_f","AccY_f","AccZ_f",
+                    "GyrX_f(deg/s)","GyrY_f(deg/s)","GyrZ_f(deg/s)",
+                    "Yaw_f(deg)"
+                ])
 
     # ---------- 设备 ----------
     def open(self):
@@ -124,14 +140,17 @@ class IMURecorder:
     def _on_sample(self, data: dict):
         if self.stop_evt.is_set():
             return
-        t = time.time()
+
+        # ★ 统一时间：一次获取 (mono_ns, est_ns)
+        mono_ns, est_ns = stamp()
+
         try:
             acc = np.array([data.get("AccX"), data.get("AccY"), data.get("AccZ")], dtype=float)
             gyr = np.array([data.get("AsX"),  data.get("AsY"),  data.get("AsZ")], dtype=float)  # deg/s
         except Exception:
             return
 
-        s = IMUSample(t_unix=t, acc=acc, gyr=gyr)
+        s = IMUSample(mono_ns=mono_ns, est_ns=est_ns, acc=acc, gyr=gyr)
 
         # 非阻塞入队；队满丢最老
         try:
@@ -146,10 +165,10 @@ class IMURecorder:
                 return
 
         self.n_recv += 1
-        self.last_rx_ts = t
+        self.last_rx_est_s = s.est_s
 
         if DEBUG_PRINT_EVERY and (self.n_recv % DEBUG_PRINT_EVERY == 0):
-            print(f"[RECV] n={self.n_recv} acc={np.round(acc,3)} gyr={np.round(gyr,3)}")
+            print(f"[RECV] n={self.n_recv} acc={np.round(acc,3)} gyr={np.round(gyr,3)} est_s={s.est_s:.6f}")
 
     # ---------- 后台线程 ----------
     def start(self):
@@ -170,20 +189,27 @@ class IMURecorder:
             try:
                 s = self.q.get(timeout=0.1)
             except Empty:
-                if self.last_rx_ts and (time.time() - self.last_rx_ts > WARN_IF_IDLE_SEC):
+                if self.last_rx_est_s and (time.time() - self.last_rx_est_s > WARN_IF_IDLE_SEC):
                     print(f"[IMU] idle > {WARN_IF_IDLE_SEC:.1f}s without data. Check port/baud/mode.")
                 continue
 
-            # 调滤波器：校准期返回 None
-            out = self.filter.process_sample(s.t_unix, s.acc, s.gyr)
-            # 原始必写
+            # ★ 滤波器统一使用“单调秒”做 dt（连续、不回拨）
+            out = self.filter.process_sample(s.mono_s, s.acc, s.gyr)
+
+            # 原始必写（双时间戳 + 秒制便读）
             if self.raw_w:
-                self.raw_w.writerow([s.t_unix, *s.acc.tolist(), *s.gyr.tolist()])
+                self.raw_w.writerow([
+                    s.mono_ns, s.est_ns, s.mono_s, s.est_s,
+                    *s.acc.tolist(), *s.gyr.tolist()
+                ])
                 self.n_wraw += 1
 
             if out is not None and self.flt_w:
-                acc_f, gyr_f, yaw_deg = out  # gyr_f 为 deg/s（与滤波器说明保持一致）
-                self.flt_w.writerow([s.t_unix, *acc_f.tolist(), *gyr_f.tolist(), float(yaw_deg)])
+                acc_f, gyr_f, yaw_deg = out  # gyr_f 为 deg/s
+                self.flt_w.writerow([
+                    s.mono_ns, s.est_ns, s.mono_s, s.est_s,
+                    *acc_f.tolist(), *gyr_f.tolist(), float(yaw_deg)
+                ])
                 self.n_wfilt += 1
 
             # 定期 flush
@@ -201,13 +227,13 @@ class IMURecorder:
 
 
 def make_argparser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="IMU HWT9073-485 logger (raw + filtered)")
+    ap = argparse.ArgumentParser(description="IMU HWT9073-485 logger (raw + filtered) [timebase unified]")
     ap.add_argument("--port", default="/dev/ttyUSB1", help="Serial port, e.g., /dev/ttyUSB0 or COM6")
     ap.add_argument("--baud", type=int, default=230400, help="Baudrate (default 230400)")
     ap.add_argument("--addr", type=lambda x: int(x, 0), default=0x50, help="Modbus address (hex like 0x50)")
-    ap.add_argument("--fs", type=float, default=DEFAULT_FS, help="Target sample freq for filter (Hz)")
+    ap.add_argument("--fs", type=float, default=DEFAULT_FS, help="Filter sample freq (Hz)")
     ap.add_argument("--cutoff", type=float, default=DEFAULT_CUTOFF, help="Low-pass cutoff (Hz)")
-    ap.add_argument("--outdir", default="./data", help="Output directory")
+    ap.add_argument("--outdir", default=None, help="Data root directory (default=<repo_root>/data)")
     ap.add_argument("--log-every", type=int, default=DEBUG_PRINT_EVERY, help="Print every N frames (0=off)")
     return ap
 
@@ -217,9 +243,13 @@ def main():
     global DEBUG_PRINT_EVERY
     DEBUG_PRINT_EVERY = max(0, int(args.log_every))
 
+    # ★ 关键：按日期 + imu 分类保存
+    sensor_outdir = get_sensor_outdir("imu", args.outdir)
+
     rec = IMURecorder(
         port=args.port, baud=args.baud, addr=args.addr,
-        fs=args.fs, cutoff=args.cutoff, outdir=args.outdir
+        fs=args.fs, cutoff=args.cutoff,
+        outdir=str(sensor_outdir)          # ★ 传给 recorder 的是最终目标目录
     )
 
     stop_evt = threading.Event()
@@ -237,8 +267,8 @@ def main():
         while not stop_evt.is_set():
             time.sleep(1.0)
             st = rec.stats()
-            age = float("inf") if rec.last_rx_ts == 0 else (time.time() - rec.last_rx_ts)
-            print(f"[STAT] recv={st['recv']} drop={st['drop']} wraw={st['wraw']} wfilt={st['wfilt']} age={age:.2f}s")
+            age = float("inf") if rec.last_rx_est_s == 0 else (time.time() - rec.last_rx_est_s)
+            print(f"[STAT] recv={st['recv']} drop={st['drop']} wraw={st['wraw']} wfilt={st['wfilt']} idle_age={age:.2f}s")
     finally:
         rec.stop()
         rec.close()

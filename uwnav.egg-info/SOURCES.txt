@@ -17,6 +17,8 @@ uwnav.egg-info/requires.txt
 uwnav.egg-info/top_level.txt
 uwnav/drivers/__init__.py
 uwnav/drivers/dvl/hover_h1000/__init__.py
+uwnav/drivers/dvl/hover_h1000/command.py
+uwnav/drivers/dvl/hover_h1000/io.py
 uwnav/drivers/dvl/hover_h1000/protocol.py
 uwnav/drivers/dvl/hover_h1000/serial_if.py
 uwnav/drivers/dvl/hover_h1000/tcp_if.py
@@ -42,6 +44,8 @@ uwnav/fusion/__init__.py
 uwnav/fusion/meas_models/__init__.py
 uwnav/fusion/meas_models/dvl.py
 uwnav/io/__init__.py
+uwnav/io/data_paths.py
+uwnav/io/timebase.py
 uwnav/nav/__init__.py
 uwnav/preprocess/__init__.py
 uwnav/sensors/__init__.py

@@ -204,28 +204,119 @@ Underwater-robot-navigation/
       └─ dvl_pd6_samples.txt            ← 采样金样本（回归用）
 ```
 模块化落地期望：
-uwnav/
-  core/                      ← C++ 核心实时库
-    include/uwnav/...
-    src/
-      imu_driver.cpp         ← 串口读、解包、时间戳（100Hz）
-      dvl_driver.cpp         ← 串口读、定宽解析、A/V判定（10Hz）
-      eskf.cpp               ← 状态传播+观测更新（200Hz主循环+事件更新）
-      time_sync.cpp          ← 单机时钟、统计串口延迟
-      pub_ctrl_iface.cpp     ← 50Hz 发布估计结果/对接 MAVLink
-      log_ringbuf.cpp        ← 环形缓冲日志（零拷贝、低抖动）
-  apps/
-    nav_daemon/              ← C++ 可执行（服务）
-      main.cpp               ← 读配置、起线程、注册回调、优雅退出
-  tools/                     ← Python 工具（保留现有）
-    dvl_data_verifier.py
-    imu_logger.py
-    plot_*.py
-  drivers/
-    dvl/hover_h1000/         ← 现有 Python 驱动保留做工具
-    imu/WitHighModbus/
-  config/
-    nav.yaml                 ← 频率、端口、滤波器Q/R、DVL阈值、占位策略窗口等
+Underwater-robot-navigation/
+├─ README.md
+├─ pyproject.toml
+├─ requirements.txt
+│
+├─ config/
+│  ├─ devices/
+│  │  ├─ imu.yaml                       ← IMU 串口/速率/单位配置
+│  │  └─ dvl_hover_h1000.yaml           ← DVL 串口/TCP、PR/PM、格式
+│  ├─ fusion/
+│  │  └─ eskf.yaml                      ← ESKF 噪声、初值、门控、坐标约定
+│  └─ lever_arm.yaml                    ← 各传感器杆臂（机体系）
+│
+├─ data/                                ← 只存数据（按日期分文件夹）
+│  └─ 2025-11-05/
+│
+├─ logs/
+│
+├─ docs/
+│  ├─ protocols/
+│  │  └─ HoverH1000_PD6.md              ← PD6/EPD6 帧格式/定宽切片规则
+│  └─ sensors/
+│     ├─ dvl_hover_h1000_setup.md       ← 接线/参数/检验流程
+│     └─ imu_hwt9073_notes.md
+│
+├─ apps/
+│  ├─ acquire/                          ← 只“读取与落盘”，不做融合
+│  │  ├─ imu_logger.py
+│  │  ├─ dvl_logger.py
+│  │  ├─ power_logger.py
+│  │  └─ usbl_logger.py                 ← 预留
+│  ├─ pipelines/                        ← 在线：读取→融合→发布
+│  │  ├─ realtime_nav.py                ← 用原生 ESKF（pybind）跑实时导航
+│  │  └─ nav_fusion_demo.py
+│  ├─ tools/
+│  │  ├─ dvl_data_verifier.py           ← DVL 协议/定宽解析验证 + 命令下发
+│  │  ├─ imu_data_verifier.py           ← IMU 采样/滤波验证
+│  │  ├─ tmux_telemetry_manager.py
+│  │  └─ data_replay.py
+│  └─ examples/
+│     ├─ imu_quickstart.py
+│     └─ dvl_quickstart.py
+│
+├─ scripts/                              ← shell/批处理/部署脚本（可留空）
+├─ tests/                                ← 单元/集成测试（后续补）
+│
+├─ uwnav/
+│  ├─ __init__.py
+│  │
+│  ├─ drivers/                           ← 设备驱动/协议层（不做融合/坐标变换）
+│  │  ├─ imu/
+│  │  │  ├─ WitHighModbus/               ← 现有 Python Modbus 驱动（保留）
+│  │  │  │  ├─ device_model.py
+│  │  │  │  ├─ filters.py                ← 实时滤波器（Python 版，便于对照/回放）
+│  │  │  │  ├─ serial_io_tools.py
+│  │  │  │  └─ ...（原文件保留整理）
+│  │  │  └─ WitCSharp/                   ← C# 读取方案（可选工具链）
+│  │  │     ├─ ImuReader/
+│  │  │     │  ├─ Program.cs
+│  │  │     │  └─ ImuReader.App.csproj
+│  │  │     └─ Wit.Example_HWT9073_485/  ← 厂家示例（只当参考，不在主链路）
+│  │  │        └─ Hwt9073/Components/...
+│  │  │
+│  │  └─ dvl/
+│  │     └─ hover_h1000/
+│  │        ├─ __init__.py
+│  │        ├─ protocol.py               ← 定宽优先解析 + A/V 有效位 + 占位符策略
+│  │        ├─ serial_if.py              ← 串口 read_until('\r') + 回调
+│  │        └─ tcp_if.py                 ← 网口接入（如 10000/10001）
+│  │
+│  ├─ sensors/                           ← 设备抽象层（统一单位/时间戳/健康度）
+│  │  ├─ __init__.py
+│  │  ├─ imu.py                          ← 统一输出（ts, acc[g], gyr[deg/s] 等）
+│  │  └─ dvl_hover_h1000.py              ← 输出 DVLData（ve/vn/vu mm/s & m/s）
+│  │
+│  ├─ fusion/
+│  │  ├─ __init__.py
+│  │  ├─ eskf.py                         ← Python 外观（包装 _eskf_native）
+│  │  ├─ process_models.py               ← 连续模型/离散化（文档化参数）
+│  │  └─ meas_models/
+│  │     ├─ __init__.py
+│  │     └─ dvl.py                       ← H/R/门控（与 C 层一致，便于离线验证）
+│  │
+│  ├─ nav/
+│  │  ├─ __init__.py
+│  │  ├─ frames.py                       ← 坐标定义/旋转/ENU<->Body
+│  │  └─ state_def.py                    ← 状态/噪声枚举等
+│  │
+│  ├─ io/
+│  │  ├─ __init__.py
+│  │  ├─ recorder.py
+│  │  └─ loader.py
+│  │
+│  ├─ preprocess/
+│  │  ├─ __init__.py
+│  │  ├─ calibrations.py
+│  │  └─ align.py
+│  │
+│  └─ native/                            ← 原生“热路径”实现（C/C++）
+│     ├─ eskf_cpp/                       ← 推荐 C++17 + Eigen（或 eskf_c/ 纯 C）
+│     │  ├─ include/
+│     │  │  └─ eskf.hpp                  ← 类接口（固定维度矩阵）
+│     │  ├─ src/
+│     │  │  └─ eskf.cpp                  ← 预测/更新/门控/离散化
+│     │  ├─ CMakeLists.txt
+│     │  └─ README.md
+│     ├─ pybind/
+│     │  ├─ eskf_bind.cpp                ← pybind11 绑定，生成 _eskf_native.so
+│     │  ├─ CMakeLists.txt
+│     │  └─ setup.py                     ← 任选其一构建路径（CMake 或 setuptools）
+│     └─ build/                          ← 构建产物（git 忽略）
+│
+└─ uwnav.egg-info/                       ← 打包元数据
 
 ---
 

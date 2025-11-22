@@ -1,8 +1,20 @@
-# sensor2_rotating.py
-# coding: UTF-8
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+apps/tools/sensor2_rotating.py  (timebase 版)
+
+- 串口行读取 → 聚合 CH0..CH{N-1} 成一帧
+- 统一时间戳：MonoNS/EstNS（以及其秒制版本 MonoS/EstS）
+- 按日期/大小轮换 CSV；支持按行自动 flush
+"""
+
 import os, sys, csv, time, signal, threading
 from datetime import datetime, timedelta
+from uwnav.io.timebase import stamp  # ★ 统一时间基：返回 (mono_ns:int, est_ns:int)
 from uwnav.drivers.imu.WitHighModbus.serial_io_tools import InputListenerThread, SerialReaderThread
+from uwnav.io.data_paths import get_sensor_outdir
+
 
 # ===================== 配置 =====================
 SERIAL_PORT   = '/dev/ttyUSB0'   # Windows: 'COM3'
@@ -12,7 +24,7 @@ FILENAME_PREF = "motor_data"
 OUT_DIR       = None
 ROTATE_MB     = 50
 KEEP_DAYS     = 7
-FLUSH_SEC     = 60  # 仍保留后台定时flush
+FLUSH_SEC     = 60   # 仍保留后台定时 flush
 # —— 调试与写盘可视化 ——
 DEBUG_RAW_SNIFF = 20     # 仅打印前 N 行原始数据，0 关闭
 DEBUG_RAW_ECHO  = False  # True 打印所有原始行（高频会刷屏）
@@ -158,9 +170,12 @@ class PeriodicFlusher(threading.Thread):
 
 # ---------- 主流程 ----------
 def main():
-    out_dir = OUT_DIR or os.path.dirname(os.path.abspath(__file__))
+    # OUT_DIR 视为数据根目录（可为 None）
+    # 最终结果形如：<data_root>/YYYY-MM-DD/volt/
+    sensor_outdir = get_sensor_outdir("volt", OUT_DIR)
+
     header  = ['Timestamp'] + [f'CH{i}' for i in range(N_CHANNELS)]
-    writer  = RollingCSVWriter(out_dir, FILENAME_PREF, header,
+    writer  = RollingCSVWriter(str(sensor_outdir), FILENAME_PREF, header,
                                rotate_mb=ROTATE_MB, keep_days=KEEP_DAYS,
                                autoflush_every=AUTOFLUSH_EVERY)
 
@@ -168,6 +183,7 @@ def main():
     buf = ChannelBuffer(N_CHANNELS)
     sniff_count = {"n": 0}
     frames_written = {"n": 0}
+
 
     def on_serial_line(payload: str):
         # ---- 调试：打印原始数据 ----
@@ -181,11 +197,12 @@ def main():
         ch_key, value_str = parsed
         row_values = buf.update(ch_key, value_str)
         if row_values is not None:
-            ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-            writer.writerow([ts] + row_values)
+            mono_ns, est_ns = stamp()          # ★ 统一取样时刻
+            mono_s, est_s   = mono_ns/1e9, est_ns/1e9
+            writer.writerow([mono_ns, est_ns, mono_s, est_s] + row_values)
             frames_written["n"] += 1
             if DEBUG_WRITE_LOG:
-                print(f"[WRITE] {ts}  写入1帧（{N_CHANNELS}通道）  → {writer.current_path}")
+                print(f"[WRITE] est_s={est_s:.6f}  写入1帧（{N_CHANNELS}通道）  → {writer.current_path}")
 
     # 串口读取线程
     serial_th = SerialReaderThread(
@@ -223,10 +240,8 @@ def main():
 
     # 收尾
     print("[SYS] 正在收尾…")
-    # 让串口线程/flush线程有机会退出
     serial_th.join(timeout=JOIN_TIMEOUT_S)
     flush_th.join(timeout=JOIN_TIMEOUT_S)
-    # 不再 join 输入线程（避免其阻塞在 input() 导致卡住）
     writer.flush()
     writer.close()
     print(f"[STAT] 总写入帧数：{frames_written['n']}  输出文件：{writer.current_path}")
@@ -234,4 +249,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
