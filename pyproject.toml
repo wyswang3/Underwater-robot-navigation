@@ -4,17 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uwnav"
-version = "0.0.1"
-description = "Underwater navigation stack"
+version = "0.1.0"
+description = "Underwater navigation & data acquisition stack"
 requires-python = ">=3.8"
-dependencies = ["numpy", "pyserial", "pyyaml"]
 
+dependencies = [
+    "numpy",
+    "pyserial",
+    "pyyaml",
+]
+
+# 安装 uwnav 与 apps 作为包
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["uwnav*", "apps*"]   # 把 apps 做成包一并安装
+include = ["uwnav*", "apps*"]
 
+
+# ======================
+# Entry point 脚本设置
+# ======================
 [project.scripts]
-imu-pipeline = "apps.imu_realtime_pipeline:main"
-volt32-logger = "apps.volt32_logger:main"
-tmux-manager  = "apps.tmux_telemetry_manager:main"
+# ---- Acquire采集脚本 ----
+imu-logger         = "apps.acquire.imu_logger:main"
+dvl-logger         = "apps.acquire.DVL_logger:main"        # 匹配大小写
+volt32-logger      = "apps.acquire.Volt32_logger:main"     # 匹配大小写
 
+# ---- Tools 工具脚本 ----
+dvl-data-verifier  = "apps.tools.dvl_data_verifier:main"
+imu-data-verifier  = "apps.tools.imu_data_verifier:main"
+multi-postproc     = "apps.tools.multisensor_postproc:main"
+tmux-manager       = "apps.tools.tmux_telemetry_manager:main"
+volt32-tool        = "apps.tools.volt32_logger:main"       # tools下的volt logger
+
+# ---- Pipelines（如果有 main）----
+# imu-pipeline      = "apps.pipelines.imu_realtime_pipeline:main"

@@ -60,7 +60,34 @@ Underwater-robot-navigation/
 │   ├── preprocess/
 │   └── io/                ← CSV 加载 / 时间基
 │
-└── docs/                  ← 协议文档 / 设计说明
+└── docs/                  ← 协议文档 / 设计说明nav_core/
+├── nav_core/
+│   ├─ timebase.h        # 时间基准（mono_ns / est_ns）
+│   ├─ imu_types.h       # IMU 数据结构与过滤配置
+│   ├─ imu_driver_wit.h  # WitMotion IMU 驱动（HWT9073-485）
+│   ├─ dvl_driver.h      # Hover H1000 DVL 驱动
+│   ├─ volt_driver.h     # 电压电流驱动
+│   ├─ eskf.h            # 扩展卡尔曼滤波入口
+│   └─ bin_logger.h      # 二进制日志记录
+│
+├─ src/
+│   ├─ timebase.cpp
+│   ├─ imu_driver_wit.cpp    # 当前核心 IMU 驱动（Modbus 230400）
+│   ├─ dvl_driver.cpp
+│   ├─ volt_driver.cpp
+│   ├─ eskf.cpp
+│   ├─ bin_logger.cpp
+│   └─ nav_daemon.cpp        # 主程序：uwnav_navd
+│
+├─ third_party/
+│   └─ witmotion/
+│       ├─ REG.h             # WitMotion IMU 寄存器表
+│       ├─ wit_c_sdk.h       # SDK 头文件
+│       └─ wit_c_sdk.c       # Modbus 协议解析核心（厂家提供）
+│
+└─ CMakeLists.txt
+
+
 ```
 
 ---
