@@ -74,8 +74,8 @@ Underwater-robot-navigation/
 │   ├── preprocess/            ← 数据预处理（滤波、插值、对齐等）
 │   └── io/                    ← CSV/NPY 加载、时间基管理
 │
-├── nav_core/                  ← C++ 实时导航内核（部署到 Orange Pi）
-│   ├── include/nav_core/
+├── nav_core/                 ← C++ 实时导航内核（部署到 Orange Pi）
+│   ├── include
 │   │     timebase.h           ← 时间基准（mono_ns / est_ns）
 │   │     imu_types.h          ← IMU 数据结构与过滤配置
 │   │     imu_driver_wit.h     ← WitMotion HWT9073-485 IMU 驱动
