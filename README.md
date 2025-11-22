@@ -28,65 +28,83 @@
 
 ```
 Underwater-robot-navigation/
-├── README.md              ← 当前文档
-├── pyproject.toml
-├── config/
-│   ├── devices/           ← 传感器配置（端口 / 波特率 / 安装角 / 数据格式）
-│   ├── fusion/            ← ESKF / 门控 / 噪声
-│   └── lever_arm.yaml     ← 传感器杆臂（机体系）
+├── README.md                  ← 当前项目总说明
+├── pyproject.toml             ← Python 包/工具的构建配置
 │
-├── data/                  ← ★ 统一数据根目录（按日期归档）
+├── config/
+│   ├── devices/               ← 传感器配置（端口 / 波特率 / 安装角 / 数据格式）
+│   ├── fusion/                ← ESKF / 门控 / 噪声等导航融合参数
+│   └── lever_arm.yaml         ← 各传感器相对机体的杆臂参数
+│
+├── data/                      ← ★ 统一数据根目录（按日期归档）
 │   └── YYYY-MM-DD/
 │        ├── imu/
 │        ├── dvl/
 │        ├── volt/
-│        └── aligned/      ← 后处理输出（对齐后的融合CSV）
+│        └── aligned/          ← 后处理输出（对齐后的融合 CSV/NPY 等）
 │
-├── apps/
-│   ├── tools/             ← 实验工具（最常用）
-│   │    ├── tmux_telemetry_manager.py
-│   │    ├── dvl_data_verifier.py
-│   │    ├── multisensor_postproc.py    ← ★ 新增：三传感器后处理 + 可视化
-│   │    └── imu_data_verifier.py
-│   └── acquire/           ← 纯采集脚本（读取 + 落盘）
-│        ├── imu_realtime_pipeline.py
-│        ├── dvl_data_verifier.py
-│        └── volt32_logger.py
+├── apps/                      ← 面向用户/实验的 Python 脚本集合
+│   │  __init__.py
+│   │
+│   ├── acquire/               ← 纯采集脚本（读取 + 落盘，不做复杂处理）
+│   │     DVL_logger.py        ← DVL 原始数据采集（按当前命名保留大小写）
+│   │     imu_logger.py        ← IMU 原始数据采集
+│   │     Volt32_logger.py     ← 电压/电流采集（采集层的版本）
+│   │
+│   ├── tools/                 ← 实验/后处理工具（最常用）
+│   │     dvl_data_verifier.py       ← DVL 数据质量检查与可视化
+│   │     imu_data_verifier.py       ← IMU 数据质量检查与可视化
+│   │     multisensor_postproc.py    ← 多传感器后处理 + 对齐/融合可视化
+│   │     tmux_telemetry_manager.py  ← tmux 会话管理，多脚本协同运行
+│   │     volt32_logger.py           ← 电压/电流工具版记录脚本
+│   │
+│   ├── pipelines/             ← 实时管线/组合流程（IMU+DVL 等）
+│   │     __init__.py
+│   │     # 例如：imu_realtime_pipeline.py（如有）
+│   │
+│   └── examples/              ← 示例脚本（demo、实验草稿）
+│         __init__.py
+│         # 示例：xxx_example.py（可选）
 │
-├── uwnav/                 ← 核心库（驱动 / 传感器抽象 / 融合 / 工具）
-│   ├── drivers/           ← IMU / DVL 驱动 & 协议
-│   ├── sensors/           ← 输出结构化 IMUData / DVLData
-│   ├── fusion/            ← ESKF、观测模型、门控
-│   ├── preprocess/
-│   └── io/                ← CSV 加载 / 时间基
+├── uwnav/                     ← Python 核心库（驱动抽象 / 融合算法 / IO 工具）
+│   ├── __init__.py
+│   ├── drivers/               ← 传感器协议驱动（Python 版 IMU / DVL 等）
+│   ├── sensors/               ← 结构化数据类型（IMUData / DVLData 等）
+│   ├── fusion/                ← Python 版 ESKF / 观测模型 / 门控策略
+│   ├── preprocess/            ← 数据预处理（滤波、插值、对齐等）
+│   └── io/                    ← CSV/NPY 加载、时间基管理
 │
-└── docs/                  ← 协议文档 / 设计说明nav_core/
-├── nav_core/
-│   ├─ timebase.h        # 时间基准（mono_ns / est_ns）
-│   ├─ imu_types.h       # IMU 数据结构与过滤配置
-│   ├─ imu_driver_wit.h  # WitMotion IMU 驱动（HWT9073-485）
-│   ├─ dvl_driver.h      # Hover H1000 DVL 驱动
-│   ├─ volt_driver.h     # 电压电流驱动
-│   ├─ eskf.h            # 扩展卡尔曼滤波入口
-│   └─ bin_logger.h      # 二进制日志记录
+├── nav_core/                  ← C++ 实时导航内核（部署到 Orange Pi）
+│   ├── include/nav_core/
+│   │     timebase.h           ← 时间基准（mono_ns / est_ns）
+│   │     imu_types.h          ← IMU 数据结构与过滤配置
+│   │     imu_driver_wit.h     ← WitMotion HWT9073-485 IMU 驱动
+│   │     dvl_driver.h         ← Hover H1000 DVL 驱动
+│   │     eskf.h               ← 扩展卡尔曼滤波入口
+│   │     bin_logger.h         ← 二进制日志记录接口
+│   │
+│   ├── src/
+│   │     timebase.cpp
+│   │     imu_driver_wit.cpp   ← 当前核心 IMU 驱动（Modbus 230400, 100 Hz 轮询）
+│   │     dvl_driver.cpp       ← DVL 串口读 / PD6 解析 / 过滤
+│   │     eskf.cpp             ← ESKF 预测 + 更新骨架
+│   │     bin_logger.cpp       ← 高效二进制日志写入
+│   │     nav_daemon.cpp       ← 主程序：uwnav_navd（实时导航守护进程）
+│   │
+│   ├── third_party/
+│   │     └── witmotion/
+│   │           REG.h          ← WitMotion IMU 寄存器表
+│   │           wit_c_sdk.h    ← 厂家 C SDK 头文件
+│   │           wit_c_sdk.c    ← Modbus 协议解析核心（厂家提供）
+│   │
+│   └── CMakeLists.txt         ← nav_core 子工程构建配置
 │
-├─ src/
-│   ├─ timebase.cpp
-│   ├─ imu_driver_wit.cpp    # 当前核心 IMU 驱动（Modbus 230400）
-│   ├─ dvl_driver.cpp
-│   ├─ volt_driver.cpp
-│   ├─ eskf.cpp
-│   ├─ bin_logger.cpp
-│   └─ nav_daemon.cpp        # 主程序：uwnav_navd
+├── docs/                      ← 协议文档 / 设计说明 / 图示
+│   ├── protocols/             ← 传感器通讯协议说明（例如 DVL PD6）
+│   ├── sensors/               ← 传感器安装、标定与参数说明
+│   └── design/                ← 系统设计、架构说明、实验记录
 │
-├─ third_party/
-│   └─ witmotion/
-│       ├─ REG.h             # WitMotion IMU 寄存器表
-│       ├─ wit_c_sdk.h       # SDK 头文件
-│       └─ wit_c_sdk.c       # Modbus 协议解析核心（厂家提供）
-│
-└─ CMakeLists.txt
-
+└── logs/                      ← 运行日志（可选，用于 nav_daemon / apps）
 
 ```
 

@@ -1,8 +1,8 @@
-PWD d:/Underwater-robot-navigation/docs/filters
+PWD d:/Underwater-robot-navigation/nav_core/docs/filters
 INPUT d:/texlive/2025/texmf.cnf
 INPUT d:/texlive/2025/texmf-dist/web2c/texmf.cnf
 INPUT d:/texlive/2025/texmf-var/web2c/pdftex/pdflatex.fmt
-INPUT d:/Underwater-robot-navigation/docs/filters/eskf_design.tex
+INPUT d:/Underwater-robot-navigation/nav_core/docs/filters/eskf_design.tex
 OUTPUT eskf_design.log
 INPUT d:/texlive/2025/texmf-dist/tex/latex/ctex/ctexart.cls
 INPUT d:/texlive/2025/texmf-dist/tex/latex/ctex/ctexart.cls
