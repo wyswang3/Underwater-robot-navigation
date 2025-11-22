@@ -20,11 +20,14 @@ add_library(nav_core
 )
 
 # 头文件路径：
-#   - nav_core 自己的公共头文件在 include/nav_core/
-#   - WitMotion SDK 头文件在 third_party/witmotion/
-target_include_directories(nav_core PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/witmotion
+#   - 公共 API 头文件：  nav_core/include/nav_core/*.h
+#     调用方式：        #include "nav_core/eskf.h"
+#   - WitMotion SDK 头：nav_core/third_party/witmotion/*.h
+target_include_directories(nav_core
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include        # 提供 "nav_core/xxx.h"
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/witmotion
 )
 
 # 线程库（Linux/Orange Pi 上使用 pthread，Windows 用 CMake 的 Threads 抽象）
