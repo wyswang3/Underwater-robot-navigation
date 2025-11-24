@@ -41,4 +41,6 @@ ping -c 4 192.168.2.250
 
 保存为项目根目录的 git-auto.sh，然后在 Linux / Orange Pi 上：
 增加了一个新脚本：
-python git_auto.py -m "推送更新"
+git add .
+git commit -m "保存本地改动"
+python git_auto.py -m "继续推送更新"
