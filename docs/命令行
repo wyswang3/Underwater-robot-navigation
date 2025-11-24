@@ -40,13 +40,5 @@ ping -c 4 192.168.2.250
 使用说明小结
 
 保存为项目根目录的 git-auto.sh，然后在 Linux / Orange Pi 上：
-
-chmod +x git-auto.sh
-./git-auto.sh -b feature/IMU-DVL-serial -m "更新 README 和导航文档"
-
-
-在 Windows 上，推荐使用 Git Bash：
-
-cd /d/Underwater-robot-navigation
-./git-auto.sh -b feature/IMU-DVL-serial -m "测试：通过脚本提交一次 README 修改"
-
+增加了一个新脚本：
+python git_auto.py -m "推送更新"
