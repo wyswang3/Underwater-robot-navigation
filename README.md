@@ -1,296 +1,295 @@
+当然可以。我来为你打造一份 **高度详尽、教学式的新手友好 README**，不仅“说明项目”，而且能做到：
+
+1. **新人一小时内即可理解项目结构**
+2. **两小时内可以成功运行程序**（IMU or DVL 单测 + 全链路运行）
+3. **清楚知道每个文件夹在做什么**
+4. **知道怎样部署到香橙派、怎样调试、怎样排错**
+5. **知道如何扩展（USBL、水深计、PX4/MPC、深度学习）**
+
+我会整理成一种“工程项目说明 + 教学课程式”的风格，比常规 README 更适合新人入门。
+
+下面就是新版 README（你可以直接复制覆盖项目根目录）：
 
 ---
 
-# **README.md – Underwater Robot Navigation System**
+# Underwater Robot Navigation System
 
-**(IMU + DVL + Volt Telemetry Framework · Multi-Sensor Logging & Processing Pipeline)**
-升级后的正式版
-
-
----
-
-## 1. 项目简介（Overview）
-
-本项目构建一个 **多传感器水下导航数据链路**，覆盖：
-
-1. **多源传感器采集**（IMU / DVL / 电压电流板 / 未来 USBL、Depth）
-2. **统一时间基记录**（MonoNS / EstNS）
-3. **按日期 + 传感器类型归档的数据结构**
-4. **自动可视化与后处理工具**
-5. **为 ESKF / LSTM / 物理建模 / MPC 控制 提供标准输入**
-
-项目采用模块化架构：
-采集脚本 → data/ 归档 → tools/ 后处理 → uwnav/ 融合逻辑。
+**多传感器水下定位导航系统（IMU + DVL + ESKF + Python/C++ 运行框架）**
+**分支：`feature/IMU-DVL-serial`**
 
 ---
 
-## 2. 项目结构（Project Structure）
+# 0. 本文档能帮你什么？
+
+如果你是第一次接触本项目，这份 README 可以让你：
+
+* 快速理解项目整体结构、分层逻辑以及传感器数据流向
+* 学会在 Orange Pi 上**编译与运行 C++ 导航核心**
+* 学会使用 Python 工具链**采集/校验/对齐/可视化传感器数据**
+* 学会如何排查常见错误（IMU / DVL / USB / 波特率）
+* 理解接下来你需要修改哪些文件（便于参与开发）
+
+---
+
+# 1. 项目定位（What is this system for?）
+
+本系统是一套针对 **水下 ROV/AUV 的实时导航体系**，由 Python + C++ 两部分构成：
+
+* **Python：数据采集（IMU/DVL）、工具、后处理、可视化、训练数据准备**
+* **C++：实时运行在 SBC（Orange Pi）上的导航核心**
+
+  * 传感器驱动（IMU / DVL）
+  * 时间同步
+  * 扩展卡尔曼滤波（ESKF）
+  * 二进制日志写入
+
+目标：
+**在真实水池/海上环境中，为 ROV 提供实时的 6DoF 位姿、速度估计，并为后续控制系统（MPC/RL）提供可靠反馈。**
+
+---
+
+# 2. 项目目录结构（超清晰解说版）
 
 ```
 Underwater-robot-navigation/
-├── README.md                  ← 当前项目总说明
-├── pyproject.toml             ← Python 包/工具的构建配置
 │
-├── config/
-│   ├── devices/               ← 传感器配置（端口 / 波特率 / 安装角 / 数据格式）
-│   ├── fusion/                ← ESKF / 门控 / 噪声等导航融合参数
-│   └── lever_arm.yaml         ← 各传感器相对机体的杆臂参数
+├── config/                     # YAML 配置文件（传感器、ESKF、杆臂）
+│   ├── devices/                # 串口/波特率/安装角
+│   ├── fusion/                 # ESKF 参数（噪声、门控）
+│   └── lever_arm.yaml          # IMU/DVL/USBL 的机体系杆臂
 │
-├── data/                      ← ★ 统一数据根目录（按日期归档）
+├── data/                       # 所有数据写入此目录（自动按日期分类）
 │   └── YYYY-MM-DD/
-│        ├── imu/
-│        ├── dvl/
-│        ├── volt/
-│        └── aligned/          ← 后处理输出（对齐后的融合 CSV/NPY 等）
+│        ├── imu/               # IMU 100Hz 原始数据
+│        ├── dvl/               # DVL 10Hz 原始数据
+│        ├── volt/              # 电流/电压数据
+│        └── aligned/           # 多传感器对齐、融合后的CSV
 │
-├── apps/                      ← 面向用户/实验的 Python 脚本集合
-│   │  __init__.py
-│   │
-│   ├── acquire/               ← 纯采集脚本（读取 + 落盘，不做复杂处理）
-│   │     DVL_logger.py        ← DVL 原始数据采集（按当前命名保留大小写）
-│   │     imu_logger.py        ← IMU 原始数据采集
-│   │     Volt32_logger.py     ← 电压/电流采集（采集层的版本）
-│   │
-│   ├── tools/                 ← 实验/后处理工具（最常用）
-│   │     dvl_data_verifier.py       ← DVL 数据质量检查与可视化
-│   │     imu_data_verifier.py       ← IMU 数据质量检查与可视化
-│   │     multisensor_postproc.py    ← 多传感器后处理 + 对齐/融合可视化
-│   │     tmux_telemetry_manager.py  ← tmux 会话管理，多脚本协同运行
-│   │     volt32_logger.py           ← 电压/电流工具版记录脚本
-│   │
-│   ├── pipelines/             ← 实时管线/组合流程（IMU+DVL 等）
-│   │     __init__.py
-│   │     # 例如：imu_realtime_pipeline.py（如有）
-│   │
-│   └── examples/              ← 示例脚本（demo、实验草稿）
-│         __init__.py
-│         # 示例：xxx_example.py（可选）
+├── apps/                       # Python 工具链（最常用）
+│   ├── acquire/                # 采集脚本 IMU/DVL/Volt（落盘）
+│   │    ├── imu_logger.py
+│   │    ├── DVL_logger.py
+│   │    └── Volt32_logger.py
+│   ├── tools/                  # 后处理/校验/可视化/多传感器融合
+│   │    ├── dvl_data_verifier.py
+│   │    ├── imu_data_verifier.py
+│   │    ├── multisensor_postproc.py
+│   │    └── tmux_telemetry_manager.py
+│   ├── pipelines/              # 多传感器自动流水线（可扩展）
+│   └── examples/               # 示例
 │
-├── uwnav/                     ← Python 核心库（驱动抽象 / 融合算法 / IO 工具）
-│   ├── __init__.py
-│   ├── drivers/               ← 传感器协议驱动（Python 版 IMU / DVL 等）
-│   ├── sensors/               ← 结构化数据类型（IMUData / DVLData 等）
-│   ├── fusion/                ← Python 版 ESKF / 观测模型 / 门控策略
-│   ├── preprocess/            ← 数据预处理（滤波、插值、对齐等）
-│   └── io/                    ← CSV/NPY 加载、时间基管理
+├── uwnav/                      # Python 版导航库（数据结构、融合、预处理）
+│   ├── drivers/                # Python版 IMU/DVL 驱动
+│   ├── sensors/                # IMUData / DVLData
+│   ├── fusion/                 # Python版ESKF
+│   ├── preprocess/             # 滤波/时间对齐
+│   └── io/                     # CSV 读写
 │
-├── nav_core/                 ← C++ 实时导航内核（部署到 Orange Pi）
-│   ├── include
-│   │     timebase.h           ← 时间基准（mono_ns / est_ns）
-│   │     imu_types.h          ← IMU 数据结构与过滤配置
-│   │     imu_driver_wit.h     ← WitMotion HWT9073-485 IMU 驱动
-│   │     dvl_driver.h         ← Hover H1000 DVL 驱动
-│   │     eskf.h               ← 扩展卡尔曼滤波入口
-│   │     bin_logger.h         ← 二进制日志记录接口
-│   │
-│   ├── src/
-│   │     timebase.cpp
-│   │     imu_driver_wit.cpp   ← 当前核心 IMU 驱动（Modbus 230400, 100 Hz 轮询）
-│   │     dvl_driver.cpp       ← DVL 串口读 / PD6 解析 / 过滤
-│   │     eskf.cpp             ← ESKF 预测 + 更新骨架
-│   │     bin_logger.cpp       ← 高效二进制日志写入
-│   │     nav_daemon.cpp       ← 主程序：uwnav_navd（实时导航守护进程）
-│   │
-│   ├── third_party/
-│   │     └── witmotion/
-│   │           REG.h          ← WitMotion IMU 寄存器表
-│   │           wit_c_sdk.h    ← 厂家 C SDK 头文件
-│   │           wit_c_sdk.c    ← Modbus 协议解析核心（厂家提供）
-│   │
-│   └── CMakeLists.txt         ← nav_core 子工程构建配置
+├── nav_core/                   # ★ C++ 实时导航核心（运行在 Orange Pi）
+│   ├── include/nav_core/       # 头文件（API）
+│   ├── src/                    # 所有 CPP 实现文件
+│   ├── third_party/witmotion/  # WitMotion 官方 SDK
+│   └── CMakeLists.txt
 │
-├── docs/                      ← 协议文档 / 设计说明 / 图示
-│   ├── protocols/             ← 传感器通讯协议说明（例如 DVL PD6）
-│   ├── sensors/               ← 传感器安装、标定与参数说明
-│   └── design/                ← 系统设计、架构说明、实验记录
-│
-└── logs/                      ← 运行日志（可选，用于 nav_daemon / apps）
-
+└── docs/                       # 官方文档
+    ├── device_test_and_debug.md   # 上电测试与排错（非常重要）
+    ├── protocols/                 # 传感器协议（DVL/IMU）
+    ├── sensors/                   # 安装说明
+    └── design/                    # 导航架构说明
 ```
+
+如果你是新人：
+**先看 docs/device_test_and_debug.md**
+这是整个系统的“入门和救命文档”。
 
 ---
 
-## 3. 数据目录规范（Data Directory Standard）
+# 3. Python 环境安装（在 PC 或 Orange Pi 都可）
 
-项目所有传感器采集数据统一写入：
-
-```
-data/YYYY-MM-DD/<sensor>/
-```
-
-例如：
-
-```
-data/2025-11-27/
-    imu/
-        imu_raw_data_20251127.csv
-        imu_filtered_data_20251127.csv
-    dvl/
-        dvl_speed_min_tb_20251127.csv
-    volt/
-        motor_data_20251127_1015.csv
-    aligned/
-        aligned_imu_dvl_volt_20251127.csv
-```
-
-此结构允许：
-
-* 自动对齐（IMU/DVL/Volt）
-* 自动按日期管理
-* 多次实验清晰区分
-* 与 tmux 管理器一键联动
-
----
-
-## 4. 多传感器实时采集（IMU + DVL + Volt）
-
-### **4.1 使用 tmux 管理器（一键启动三路采集）**
-
-Linux 环境下执行：
+推荐使用 Python ≥ 3.8：
 
 ```bash
-python3 apps/tools/tmux_telemetry_manager.py \
-  --imu-port /dev/ttyUSB1 --imu-baud 230400 \
-  --dvl-port /dev/ttyUSB2 --dvl-baud 115200 \
-  --volt-port /dev/ttyUSB0 --volt-baud 115200 \
-  --attach
+pip install numpy pyserial pyyaml
 ```
 
-启动后自动创建三个 tmux 窗口：
-
-```
-window 0 : IMU
-window 1 : DVL
-window 2 : Volt
-```
-
-退出方式：
-
-* 在管理器终端输入：`s`（优雅关闭三路传感器）
-* 或在 tmux 内按 `Ctrl+C`
-
----
-
-## 5. 单独采集脚本（Acquire Layer）
-
-### **5.1 IMU — HWT9073-485**
+安装项目本体（可选）：
 
 ```bash
-python3 apps/acquire/imu_realtime_pipeline.py --port /dev/ttyUSB1 --baud 230400
+pip install -e .
 ```
-
-特性：
-
-* 230400 baud 高速串口
-* 实时滤波（窗口可调）
-* 输出 raw / filtered double CSV
-* 自动归档到 `data/YYYY-MM-DD/imu/`
 
 ---
 
-### **5.2 DVL — Hover H1000**
+# 4. C++ 导航核心编译（在 Orange Pi 上）
+
+### 4.1 安装依赖
 
 ```bash
-python3 apps/acquire/dvl_data_verifier.py --port /dev/ttyUSB2 --baud 115200
+sudo apt update
+sudo apt install -y git build-essential cmake g++ pkg-config
 ```
 
-特性：
-
-* PD6 / EPD6 协议解析
-* 自动 downlink 发送：DF/PR/PM/ST/CS/CZ
-* 输出双时间戳速度表（MonoNS + EstNS）
-* 自动归档到 `data/YYYY-MM-DD/dvl/`
-
----
-
-### **5.3 Volt32 — 16/32 路电压电流板**
+### 4.2 编译 nav_core
 
 ```bash
-python3 apps/acquire/volt32_logger.py --port /dev/ttyUSB0 --baud 115200
+cd nav_core
+mkdir build && cd build
+cmake ..
+make -j4
 ```
 
-特性：
+生成：
 
-* 自动滚动文件（50MB）
-* 7 天自动清理
-* Zero-loss 实时写入
-* 自动归档到 `data/YYYY-MM-DD/volt/`
+* `uwnav_navd` → 主程序
+* `libnav_core.a` → C++ 库
 
 ---
 
-## 6. 三传感器离线后处理（Post-Processing）
+# 5. 运行：IMU / DVL / 全链路（实时导航）
 
-新工具：
-**`apps/tools/multisensor_postproc.py`**
-
-### 使用方式：
+### 5.1 测试 IMU
 
 ```bash
-python3 apps/tools/multisensor_postproc.py \
-  --date 2025-11-27 \
-  --save-merged
+sudo ./uwnav_navd \
+  --imu-port /dev/ttyUSB0 \
+  --imu-baud 230400 \
+  --dvl-port /dev/null \
+  --log-dir ./data
 ```
 
-功能：
+### 5.2 测试 DVL
 
-* 自动扫描：imu / dvl / volt 文件
-* 统一解析时间戳（EstS / t_s）
-* 使用 merge_asof() 完成时间对齐
-* 输出对齐后的融合表（aligned CSV）
-* 自动绘制三类可视化图像：
-
-  * IMU 滤波加速度三轴
-  * DVL 东、北、上速度
-  * Volt 前两路电压/电流趋势图
-
-输出路径：
-
-```
-data/YYYY-MM-DD/aligned/aligned_imu_dvl_volt_YYYY-MM-DD.csv
-```
-
----
-
-## 7. 核心库 uwnav/（Drivers → Sensors → Fusion）
-
-```
-uwnav/
-├── drivers/               ← 设备驱动（IMU 485 / DVL PD6 / TCP）
-├── sensors/               ← 统一输出 IMUData, DVLData
-├── fusion/                ← ESKF（python外观 + C++ 热路径）
-├── preprocess/            ← 标定 / 数据对齐
-└── io/                    ← 读取工具 / 时间基（MonoNS / EstNS）
-```
-
-你之后的定位融合、轨迹控制、环境感知都基于此管线构建。
-
----
-
-## 8. 后续规划（Roadmap）
-
-| 阶段      | 内容                                |
-| ------- | --------------------------------- |
-| Phase 1 | IMU + DVL + Volt 采集闭环（已完成）        |
-| Phase 2 | USBL + 深度计接入（计划）                  |
-| Phase 3 | 完整时间同步（稳态 + 对齐）                   |
-| Phase 4 | 离线 ESKF（Python）与在线 ESKF（pybind11） |
-| Phase 5 | 实池实验数据闭环验证（自动评估工具）                |
-| Phase 6 | 与 MPC 控制集成                        |
-
----
-
-## 9. 快速安装
+**注意：必须在水中运行！空转不得超过 2 秒！**
 
 ```bash
-pip install -r requirements.txt
+sudo ./uwnav_navd \
+  --imu-port /dev/null \
+  --dvl-port /dev/ttyUSB1 \
+  --dvl-baud 115200 \
+  --log-dir ./data
+```
+
+### 5.3 全链路导航 IMU + DVL + ESKF
+
+```bash
+sudo ./uwnav_navd \
+  --imu-port /dev/ttyUSB0 \
+  --imu-baud 230400 \
+  --dvl-port /dev/ttyUSB1 \
+  --dvl-baud 115200 \
+  --log-dir ./data
+```
+
+日志文件将自动写入：
+
+```
+data/YYYY-MM-DD/
+    imu.bin
+    dvl.bin
+    eskf.bin
 ```
 
 ---
 
-## 10. 文档导航（Docs）
+# 6. Python 后处理：对齐 + 可视化 + 融合
 
-* DVL 协议说明：`docs/protocols/HoverH1000_PD6.md`
-* DVL 安装手册：`docs/sensors/dvl_hover_h1000_setup.md`
-* IMU 笔记：`docs/sensors/imu_hwt9073_notes.md`
+完成实验后运行：
+
+```bash
+python apps/tools/multisensor_postproc.py
+```
+
+你会得到：
+
+```
+aligned/
+    fusion_imu_dvl.csv
+    plots/      ← 自动生成可视化
+```
+
+这一步对于：
+
+* 深度学习动力学辨识（LSTM/Transformer）
+* 控制系统（MPC/AMPC）
+* 误差分析
+* 轨迹跟踪评估
+
+都非常关键。
+
+---
+
+# 7. 上电测试指南（强烈建议新人阅读）
+
+文档位置：
+
+```
+docs/device_test_and_debug.md
+```
+
+内容包括：
+
+* DVL 必须在水中运行的原因
+* IMU RS485 线序校验方法
+* 波特率常见错误排查
+* 如何查看串口原始数据
+* ESKF 为什么没有输出
+* 如何验证二进制日志文件格式
+
+> **这是新人上手必读的文档之一。**
+
+---
+
+# 8. 如何扩展（未来开发路线图）
+
+| 模块                 | 状态    | 说明                   |
+| ------------------ | ----- | -------------------- |
+| IMU 驱动（Modbus）     | 完成    | 100Hz, 稳定            |
+| DVL 驱动（PD6）        | 完成    | 多帧解析                 |
+| ESKF               | 完成基础版 | 可进一步扩展偏差估计           |
+| Python 数据流水线       | 完成    | 支持对齐分析               |
+| USBL 模块            | 待接入   | 数据解析器设计中             |
+| 深度传感器接口            | 待接入   |                      |
+| PX4 / ArduSub 控制闭环 | 计划    |                      |
+| 水动力学辨识（深度学习）       | 进行中   | LSTM/Hybrid Dynamics |
+| MPC 控制器            | 计划适配  | C++/PX4 接口           |
+
+---
+
+# 9. 常见问题（FAQ）
+
+### Q1：为什么 DVL 必须在水中运行？
+
+因为换能器在空气中无法建立声场，会导致过热损坏。
+
+### Q2：IMU 数据全是 0 或者 NAN？
+
+通常是 RS485 A/B 线反了。
+
+### Q3：为什么 ESKF 没有输出？
+
+可能 IMU 数据无效、未移动设备、或缺少第一帧初始化。
+
+### Q4：为什么 DVL 解析失败？
+
+可能收到的帧不是 PD6 格式，请用：
+
+```bash
+sudo cat /dev/ttyUSB1
+```
+
+查看原始输出。
+
+---
+
+# 10. 贡献与开发指南
+
+欢迎提交 PR / Issue。
+项目鼓励：
+
+* 模块化开发
+* 文档完善
+* 传感器驱动补充
+* 控制算法集成
+* 深度学习动力学建模
 
 ---
