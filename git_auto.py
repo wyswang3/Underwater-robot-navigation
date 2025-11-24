@@ -43,7 +43,7 @@ def main():
     parser.add_argument("-m", "--message", default="", help="提交说明（必填）")
     parser.add_argument("-b", "--branch", default="feature/IMU-DVL-serial",
                         help="分支名称（默认：feature/IMU-DVL-serial）")
-    parser.add_argument("-p", "--pull-mode", default="rebase",
+    parser.add_argument("-p", "--pull-mode", default="none",
                         choices=["rebase", "merge", "none"], help="pull 模式")
     args = parser.parse_args()
 
