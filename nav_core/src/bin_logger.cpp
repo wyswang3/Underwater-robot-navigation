@@ -1,4 +1,4 @@
-#include "nav_core/bin_logger.h"
+#include "bin_logger.h"
 
 #include <cstdio>
 #include <utility>

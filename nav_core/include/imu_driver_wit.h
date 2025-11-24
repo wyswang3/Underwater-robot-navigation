@@ -7,7 +7,7 @@
 #include <string>
 #include <thread>
 
-#include "nav_core/imu_types.h"
+#include "imu_types.h"
 
 namespace nav_core {
 
@@ -43,11 +43,14 @@ public:
                  const ImuFilterConfig& filter,
                  FrameCallback on_frame,
                  RawCallback   on_raw = nullptr);
-
+        // ★★ 必须补上这个，否则 cpp 里无法编译 ★★
+    bool sdk_inited_ = false;
     ~ImuDriverWit();
 
     /// 启动 IMU 驱动线程（打开串口，初始化 Wit SDK）
     bool start();
+
+
 
     /// 停止 IMU 驱动线程（关闭串口，释放 Wit SDK）
     void stop();

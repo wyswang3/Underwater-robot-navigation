@@ -1,5 +1,5 @@
-#include "nav_core/imu_driver_wit.h"
-#include "nav_core/timebase.h"
+#include "imu_driver_wit.h"
+#include "timebase.h"
 
 #include <cerrno>
 #include <cmath>

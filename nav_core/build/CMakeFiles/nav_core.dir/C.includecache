@@ -1,0 +1,24 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/wys/Underwater-robot-navigation/nav_core/third_party/witmotion/REG.h
+
+/home/wys/Underwater-robot-navigation/nav_core/third_party/witmotion/wit_c_sdk.c
+wit_c_sdk.h
+/home/wys/Underwater-robot-navigation/nav_core/third_party/witmotion/wit_c_sdk.h
+
+/home/wys/Underwater-robot-navigation/nav_core/third_party/witmotion/wit_c_sdk.h
+stdint.h
+-
+stdio.h
+-
+string.h
+-
+REG.h
+/home/wys/Underwater-robot-navigation/nav_core/third_party/witmotion/REG.h
+

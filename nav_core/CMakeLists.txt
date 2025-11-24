@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
-project(nav_core LANGUAGES CXX)
+project(nav_core LANGUAGES C CXX)
+
 
 # ================== 编译选项 ==================
 set(CMAKE_CXX_STANDARD 17)
@@ -8,16 +9,15 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ================== nav_core 库 ==================
 add_library(nav_core
-    # 核心逻辑
     src/timebase.cpp
     src/imu_driver_wit.cpp
     src/dvl_driver.cpp
     src/eskf.cpp
     src/bin_logger.cpp
 
-    # 厂家 WitMotion C SDK (Modbus 协议解析)
-    third_party/witmotion/wit_c_sdk.c
+    third_party/witmotion/wit_c_sdk.c   # ← 必须是这个相对路径
 )
+
 
 # 头文件路径：
 #   - 公共 API 头文件：  nav_core/include/nav_core/*.h

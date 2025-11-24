@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <array>
 
-#include "nav_core/imu_types.h"   // ImuFrame
-#include "nav_core/dvl_driver.h"  // DvlFrame（假定这里声明了 DvlFrame）
+#include "imu_types.h"   // ImuFrame
+#include "dvl_driver.h"  // DvlFrame（假定这里声明了 DvlFrame）
 
 namespace nav_core {
 

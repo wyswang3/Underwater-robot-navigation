@@ -11,11 +11,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "nav_core/imu_driver_wit.h"
-#include "nav_core/imu_types.h"
-#include "nav_core/dvl_driver.h"
-#include "nav_core/eskf.h"
-#include "nav_core/bin_logger.h"
+#include "imu_driver_wit.h"
+#include "imu_types.h"
+#include "dvl_driver.h"
+#include "eskf.h"
+#include "bin_logger.h"
 
 // ================ 全局停止标志（信号处理） ================
 
