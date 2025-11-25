@@ -361,6 +361,10 @@ void ImuDriverWit::onRegUpdate(uint32_t start_reg, uint32_t num) {
 void ImuDriverWit::makeFrameFromRegs(uint32_t /*start_reg*/,
                                      uint32_t /*num*/,
                                      ImuFrame& out) {
+    // （可选）先标记为无效，确保 early-return 时不会误用旧数据
+    out.valid  = false;
+    out.status = 0;
+
     // ---- 1. 从 sReg[] 中取出各物理量 ----
     auto get_i16 = [](int reg) -> int16_t {
         if (reg < 0 || reg >= REGSIZE) {
@@ -387,10 +391,10 @@ void ImuDriverWit::makeFrameFromRegs(uint32_t /*start_reg*/,
         acc_g[i]    = static_cast<double>(get_i16(AX + i)) / 32768.0 * 16.0;
         gyro_dps[i] = static_cast<double>(get_i16(GX + i)) / 32768.0 * 2000.0;
 
-        const uint32_t hi = static_cast<uint16_t>(get_i16(HRoll + 2 * i));
-        const uint32_t lo = static_cast<uint16_t>(get_i16(LRoll + 2 * i));
+        const uint32_t hi    = static_cast<uint16_t>(get_i16(HRoll + 2 * i));
+        const uint32_t lo    = static_cast<uint16_t>(get_i16(LRoll + 2 * i));
         const uint32_t iBuff = (hi << 16) | lo;
-        angle_deg[i] = static_cast<double>(static_cast<int32_t>(iBuff)) / 1000.0;
+        angle_deg[i]         = static_cast<double>(static_cast<int32_t>(iBuff)) / 1000.0;
     }
 
     const double temp_c = static_cast<double>(get_i16(TEMP905x)) / 100.0;
@@ -444,14 +448,17 @@ void ImuDriverWit::makeFrameFromRegs(uint32_t /*start_reg*/,
         }
     }
 
-    // ---- 3. 时间戳 + 填充 ImuFrame ----
-    int64_t mono_ns = 0;
-    int64_t est_ns  = 0;
-    stamp(mono_ns, est_ns);
+    // ---- 3. 时间戳（使用新的 timebase::stamp） ----
+    using uwnav::timebase::SensorKind;
+    using uwnav::timebase::stamp;
 
-    out.mono_ns = mono_ns;
-    out.est_ns  = est_ns;
+    auto ts = stamp("imu0", SensorKind::IMU);
 
+    // 兼容旧字段：
+    out.mono_ns = ts.host_time_ns;        // 单调时间
+    out.est_ns  = ts.corrected_time_ns;   // 经过 latency 修正后的统一时间
+
+    // ---- 4. 填充 IMU 数据 ----
     out.lin_acc[0] = static_cast<float>(ax);
     out.lin_acc[1] = static_cast<float>(ay);
     out.lin_acc[2] = static_cast<float>(az);
@@ -460,13 +467,14 @@ void ImuDriverWit::makeFrameFromRegs(uint32_t /*start_reg*/,
     out.ang_vel[1] = static_cast<float>(gy);
     out.ang_vel[2] = static_cast<float>(gz);
 
-    out.euler[0]   = static_cast<float>(roll);
-    out.euler[1]   = static_cast<float>(pitch);
-    out.euler[2]   = static_cast<float>(yaw);
+    out.euler[0] = static_cast<float>(roll);
+    out.euler[1] = static_cast<float>(pitch);
+    out.euler[2] = static_cast<float>(yaw);
 
     out.temperature = static_cast<float>(temp_c);
     out.valid       = true;
     out.status      = 0;
 }
+
 
 } // namespace nav_core

@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List
 
-from uwnav.io.timebase import stamp
+from uwnav.io.timebase import stamp, SensorKind
 from uwnav.drivers.imu.WitHighModbus.serial_io_tools import SerialReaderThread
 
 # ===================== RollingCSVWriter =====================
@@ -295,13 +295,15 @@ def main():
             return
 
         # 一帧齐全 → 写入 CSV
-        mono_ns, est_ns = stamp()
-        est_s = est_ns / 1e9
+        ts = stamp("volt0", SensorKind.OTHER)
+        est_s = ts.corrected_time_ns / 1e9
+
         try:
             ts_str = datetime.fromtimestamp(est_s).strftime("%Y-%m-%d %H:%M:%S.%f")
         except Exception:
             # 兜底：使用系统时间
             ts_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+
         writer.writerow([ts_str, est_s] + row_values)
         frames_written["n"] += 1
 

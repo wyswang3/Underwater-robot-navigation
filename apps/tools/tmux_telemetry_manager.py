@@ -181,7 +181,7 @@ def main():
     in_apps = os.path.basename(here_dir()) == "apps"
     default_imu = "imu_data_verifier.py" if in_apps else "apps/tools/imu_data_verifier.py"
     default_dvl = "dvl_data_verifier.py"     if in_apps else "apps/tools/dvl_data_verifier.py"
-    default_volt = "volt32_logger.py"        if in_apps else "apps/tools/volt32_logger.py"
+    default_volt = "volt32_data_verifier.py"        if in_apps else "apps/tools/volt32_data_verifier.py"
 
     ap = argparse.ArgumentParser(description="tmux telemetry manager (IMU + DVL + Volt)")
     ap.add_argument("--session", default=SESSION_DEFAULT, help="tmux 会话名")

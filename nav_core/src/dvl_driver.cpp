@@ -312,12 +312,10 @@ bool DvlDriver::parseLine(const std::string& line, DvlRawData& out_raw) {
         return false;
     }
 
-    auto now = ::time(nullptr);  // 暂用系统秒级时间
-
     // ==== 2. 解析单个速度帧的内部函数（更鲁棒） ====
     auto parseVelocityFrame = [](const std::string& frame_raw,
                                  DvlRawData& d,
-                                 std::time_t ts) -> bool
+                                 std::time_t ts_wall) -> bool
     {
         if (frame_raw.size() < 2) {
             return false;
@@ -397,7 +395,8 @@ bool DvlDriver::parseLine(const std::string& line, DvlRawData& out_raw) {
             if (c == 'V') { valid_flag = 0; break; }
         }
 
-        d.timestamp_s = static_cast<double>(ts);
+        // DVL 自带的 wall-clock 时间（秒），仅作参考
+        d.timestamp_s = static_cast<double>(ts_wall);
         d.src         = msg;
         d.ve_mm       = vel_mm.size() > 0 ? vel_mm[0] : 0.0;
         d.vn_mm       = vel_mm.size() > 1 ? vel_mm[1] : 0.0;
@@ -412,8 +411,9 @@ bool DvlDriver::parseLine(const std::string& line, DvlRawData& out_raw) {
 
     // ==== 3. 在整行中查找第一个 BE/BS/BI/WE/WS/WI 帧 ====
 
-    // 有些行是以 ":" 开头，有些是中间才出现 ":BE"
-    // 我们不再按 ":" 分块，而是直接在整行里找 ":[tag]"
+    // 用系统时间作为 DVL 原始时间参考（秒级 wall-clock）
+    std::time_t ts_wall = ::time(nullptr);
+
     const char* tags[] = {"BE", "BS", "BI", "WE", "WS", "WI"};
 
     bool parsed = false;
@@ -425,7 +425,7 @@ bool DvlDriver::parseLine(const std::string& line, DvlRawData& out_raw) {
         }
 
         // 从 ":" 后开始，到下一次 ":" 或行尾
-        std::size_t frame_start = pos + 1;  // 指向 "B"
+        std::size_t frame_start = pos + 1;  // 指向 "B" 或 "W"
         std::size_t next_colon  = s.find(':', frame_start);
         std::string frame = (next_colon == std::string::npos)
                             ? s.substr(frame_start)
@@ -436,7 +436,7 @@ bool DvlDriver::parseLine(const std::string& line, DvlRawData& out_raw) {
             continue;
         }
 
-        if (parseVelocityFrame(frame, out_raw, now)) {
+        if (parseVelocityFrame(frame, out_raw, ts_wall)) {
             parsed = true;
             break;  // 只取第一个速度帧
         }
@@ -445,30 +445,19 @@ bool DvlDriver::parseLine(const std::string& line, DvlRawData& out_raw) {
     if (!parsed) {
         return false;
     }
+
+    // ==== 4. 统一时间戳（使用 uwnav::timebase） ====
+    using uwnav::timebase::SensorKind;
+    using uwnav::timebase::stamp;
+
+    auto ts = stamp("dvl0", SensorKind::DVL);
+    out_raw.mono_ns = ts.host_time_ns;        // steady_clock 单调时间
+    out_raw.est_ns  = ts.corrected_time_ns;   // 经过 DVL 默认延迟修正后的统一时间
+
     return true;
 }
 
 
-// 接收一个解析好的原始样本：先 raw 回调，再做过滤，最后输出 DvlFrame
-void DvlDriver::handleRawSample(const DvlRawData& raw) {
-    if (on_raw_) {
-        on_raw_(raw);
-    }
-
-    if (!on_frame_) {
-        return; // 没有上层订阅速度帧，直接返回
-    }
-
-    DvlFrame frame{};
-    if (!passFilter(raw, frame)) {
-        n_filtered_out_++;
-        return;
-    }
-
-    on_frame_(frame);
-}
-
-// 过滤逻辑 + 填充 DvlFrame
 bool DvlDriver::passFilter(const DvlRawData& raw, DvlFrame& out_frame) {
     DvlFilterConfig cfg = filter_cfg_; // 拷贝一份，避免读写竞争
 
@@ -500,25 +489,26 @@ bool DvlDriver::passFilter(const DvlRawData& raw, DvlFrame& out_frame) {
         }
     }
 
-    // 4) 质量门控（预留，将来可根据协议字段设置 raw.quality）
+    // 4) 质量门控（预留）
     if (cfg.min_quality > 0) {
-        // 目前 DvlRawData 还没有 quality 字段，这里先忽略，默认通过
+        // raw.quality 未来加入后再补充逻辑
     }
 
-    // 若通过过滤，则生成 DvlFrame
-    int64_t mono_ns = 0;
-    int64_t est_ns  = 0;
-    stamp(mono_ns, est_ns);
+    // ==== 5) 使用新的 timebase 打统一时间戳 ====
+    using uwnav::timebase::SensorKind;
+    using uwnav::timebase::stamp;
 
-    out_frame.mono_ns = mono_ns;
-    out_frame.est_ns  = est_ns;
-    out_frame.vel[0]  = static_cast<float>(ve);
-    out_frame.vel[1]  = static_cast<float>(vn);
-    out_frame.vel[2]  = static_cast<float>(vu);
+    auto ts = stamp("dvl0", SensorKind::DVL);
+    out_frame.mono_ns = ts.host_time_ns;
+    out_frame.est_ns  = ts.corrected_time_ns;
+
+    // ==== 6) 填充速度 ====
+    out_frame.vel[0] = static_cast<float>(ve);
+    out_frame.vel[1] = static_cast<float>(vn);
+    out_frame.vel[2] = static_cast<float>(vu);
+
     out_frame.valid   = true;
-    out_frame.quality = 0; // 将来可填真实质量
+    out_frame.quality = 0; // 未来加入 DVL 质量字段时再更新
 
     return true;
 }
-
-} // namespace nav_core

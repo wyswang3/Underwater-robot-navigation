@@ -27,7 +27,7 @@ from pathlib import Path
 from queue import Queue, Empty
 from typing import Optional
 
-from uwnav.io.timebase import stamp
+from uwnav.io.timebase import SensorKind, stamp
 from uwnav.sensors.imu import IMUDevice, IMUData
 
 
@@ -166,8 +166,11 @@ def main():
 
     # ========== 回调 ==========
     def imu_callback(frame: IMUData):
-        mono_ns, est_ns = stamp()
-        est_s = est_ns / 1e9
+        ts = stamp("imu0", SensorKind.IMU)
+        
+        mono_ns = ts.host_time_ns
+        est_ns  = ts.corrected_time_ns
+        est_s   = est_ns / 1e9
 
         # 写原始 log
         raw_w.writerow([

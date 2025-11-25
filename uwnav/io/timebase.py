@@ -1,118 +1,181 @@
 # uwnav/io/timebase.py
 # -*- coding: utf-8 -*-
 """
-统一时间基：面向“离线无网络/无NTP”的水下场景
-- 双时间戳：单调时钟 mono_ns（对齐/融合唯一真相）+ 估计实时时间 est_ns（展示/文件）
-- est_ns = epoch_real_ns + (monotonic_ns - epoch_mono_ns)
-- 提供线程安全的全局实例与便捷函数
+统一时间基（Python 版）
+
+与 C++ 版 uwnav::timebase 对齐的最小实现：
+
+- 仅使用单调时钟 time.monotonic_ns() 作为唯一时间源
+- 不再维护 real/epoch 语义，也不再做“真实墙上时间”估计
+- 提供按传感器类型区分的默认延迟（LatencyDefaults）
+- 提供统一时间戳结构 Stamp：
+    * host_time_ns      —— 采集/解析瞬间的主机单调时间
+    * corrected_time_ns —— host_time_ns - latency_ns
+    * sensor_time_ns    —— 可选，预留给将来使用传感器内部时间戳
+    * latency_ns        —— 本次使用的延迟估计
+
+推荐用法（采集脚本中）：
+    from uwnav.io.timebase import SensorKind, stamp
+
+    ts = stamp("imu0", SensorKind.IMU)
+    packet.mono_ns = ts.host_time_ns
+    packet.est_ns  = ts.corrected_time_ns
 """
 
 from __future__ import annotations
+
+import enum
 import time
-import threading
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Optional
 
 __all__ = [
-    "TimeBase", "get_timebase",
-    "stamp", "stamp_s",
-    "mono_ns", "est_ns",
-    "to_sec", "to_iso8601",
-    "resync_epoch"
+    "SensorKind",
+    "Stamp",
+    "LatencyDefaults",
+    "latency_defaults",
+    "now_ns",
+    "stamp",
+    "to_sec",
 ]
 
-@dataclass(frozen=True)
-class _Epoch:
-    real_ns: int
-    mono_ns: int
 
-class TimeBase:
+# ========================= 基础时间源 =========================
+
+
+def now_ns() -> int:
     """
-    会话级时间基（线程安全）：
-    - 初始化时拍下 (real_ns, mono_ns)
-    - 可在必要时 resync（例如人工校时/收到上位机广播时间）
-    - 通常融合只用 mono_ns；est_ns 用于 CSV 展示/离线可读性
+    返回当前单调时间（ns）。
+    对应 C++ 的 uwnav::timebase::now_ns()
     """
-    def __init__(self, epoch_real_ns: Optional[int] = None, epoch_mono_ns: Optional[int] = None):
-        r = time.time_ns() if epoch_real_ns is None else int(epoch_real_ns)
-        m = time.monotonic_ns() if epoch_mono_ns is None else int(epoch_mono_ns)
-        self._lock = threading.RLock()
-        self._epoch = _Epoch(real_ns=r, mono_ns=m)
-
-    # ---- 基本API ----
-    def stamp(self) -> Tuple[int, int]:
-        """
-        返回 (mono_ns, est_ns)
-        mono_ns：单调时钟； est_ns：估计实时时间
-        """
-        with self._lock:
-            now_mono = time.monotonic_ns()
-            est = self._epoch.real_ns + (now_mono - self._epoch.mono_ns)
-            return now_mono, est
-
-    def mono_ns(self) -> int:
-        return time.monotonic_ns()
-
-    def est_ns(self) -> int:
-        with self._lock:
-            now_mono = time.monotonic_ns()
-            return self._epoch.real_ns + (now_mono - self._epoch.mono_ns)
-
-    def stamp_s(self) -> Tuple[float, float]:
-        m, e = self.stamp()
-        return m / 1e9, e / 1e9
-
-    # ---- 工具 ----
-    @staticmethod
-    def to_sec(ns: int) -> float:
-        return ns / 1e9
-
-    @staticmethod
-    def to_iso8601(est_ns: int) -> str:
-        # 仅用于日志/展示；避免在融合里频繁调用（有开销）
-        import datetime as _dt
-        s = est_ns / 1e9
-        return _dt.datetime.utcfromtimestamp(s).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
-    # ---- 纠偏/重同步 ----
-    def resync(self, new_real_ns: int) -> None:
-        """
-        当收到“更可信”的实时时间（例如人工校时/外部基准）：
-        仅调整 real_ns，使 est_ns 平移；mono 基准不变，保证融合连续
-        """
-        with self._lock:
-            self._epoch = _Epoch(real_ns=int(new_real_ns), mono_ns=self._epoch.mono_ns)
+    return time.monotonic_ns()
 
 
-# ---- 全局单例与便捷函数 ----
-_global_tb: Optional[TimeBase] = None
-_global_lock = threading.Lock()
+# ========================= 传感器类型 & 时间戳结构 =========================
 
-def get_timebase() -> TimeBase:
-    global _global_tb
-    if _global_tb is None:
-        with _global_lock:
-            if _global_tb is None:
-                _global_tb = TimeBase()
-    return _global_tb
 
-def resync_epoch(new_real_ns: int) -> None:
-    get_timebase().resync(new_real_ns)
+class SensorKind(enum.Enum):
+    IMU = "imu"
+    DVL = "dvl"
+    USBL = "usbl"
+    OTHER = "other"
 
-def stamp() -> Tuple[int, int]:
-    return get_timebase().stamp()
 
-def stamp_s() -> Tuple[float, float]:
-    return get_timebase().stamp_s()
+@dataclass
+class Stamp:
+    """
+    与 C++ 版 Stamp 对齐的 Python 结构：
+    - sensor_id: 传感器实例标识，例如 "imu0", "dvl0"
+    - kind:      传感器类型（IMU/DVL/USBL/OTHER）
+    - host_time_ns:      调用 stamp() 时的主机单调时间
+    - corrected_time_ns: host_time_ns - latency_ns
+    - sensor_time_ns:    可选，预留将来用传感器内部时间戳对齐
+    - latency_ns:        本次使用的延迟估计（根据 kind 或显式传入）
+    """
 
-def mono_ns() -> int:
-    return get_timebase().mono_ns()
+    sensor_id: str
+    kind: SensorKind
+    host_time_ns: int
+    corrected_time_ns: int
+    sensor_time_ns: Optional[int] = None
+    latency_ns: int = 0
 
-def est_ns() -> int:
-    return get_timebase().est_ns()
+
+# ========================= 默认延迟配置 =========================
+
+
+@dataclass
+class LatencyDefaults:
+    """
+    默认延迟（单位：ns）
+
+    注意：这些值是工程经验参数，需在下水联调时根据实际情况微调：
+      - imu_ns:   IMU 从测量到到达主机的典型时延
+      - dvl_ns:   DVL 帧从测量到到达主机的典型时延
+      - usbl_ns:  USBL/其它慢速定位传感器的典型时延
+      - other_ns: 其它未分类传感器的默认时延
+    """
+    imu_ns: int = 2_000_000        # 2 ms
+    dvl_ns: int = 50_000_000       # 50 ms
+    usbl_ns: int = 150_000_000     # 150 ms
+    other_ns: int = 0              # 默认不补偿
+
+
+_latency_defaults = LatencyDefaults()
+
+
+def latency_defaults() -> LatencyDefaults:
+    """
+    获取可修改的默认延迟配置对象。
+
+    示例：
+        from uwnav.io.timebase import latency_defaults
+        cfg = latency_defaults()
+        cfg.dvl_ns = 80_000_000
+    """
+    return _latency_defaults
+
+
+def _default_latency_ns(kind: SensorKind) -> int:
+    d = _latency_defaults
+    if kind is SensorKind.IMU:
+        return d.imu_ns
+    if kind is SensorKind.DVL:
+        return d.dvl_ns
+    if kind is SensorKind.USBL:
+        return d.usbl_ns
+    return d.other_ns
+
+
+# ========================= 核心 API：stamp =========================
+
+
+def stamp(
+    sensor_id: str,
+    kind: SensorKind,
+    sensor_time_ns: Optional[int] = None,
+    latency_ns: Optional[int] = None,
+) -> Stamp:
+    """
+    统一打时间戳的核心函数（Python 版）。
+
+    参数：
+        sensor_id:      传感器实例 ID，如 "imu0", "dvl0"
+        kind:           传感器类型（SensorKind.IMU/DVL/USBL/OTHER）
+        sensor_time_ns: 可选，传感器内部时间（将来做更精细对齐时使用）
+        latency_ns:     可选，显式指定延迟；若为 None，则使用默认值
+
+    返回：
+        Stamp 对象，包含：
+            host_time_ns
+            corrected_time_ns
+            sensor_time_ns
+            latency_ns
+
+    当前实现：
+        host_time_ns      = time.monotonic_ns()
+        latency_ns        = 显式传入 或 默认延迟
+        corrected_time_ns = host_time_ns - latency_ns
+    """
+    host = now_ns()
+    lat = latency_ns if latency_ns is not None else _default_latency_ns(kind)
+    corrected = host - lat
+
+    return Stamp(
+        sensor_id=sensor_id,
+        kind=kind,
+        host_time_ns=host,
+        corrected_time_ns=corrected,
+        sensor_time_ns=sensor_time_ns,
+        latency_ns=lat,
+    )
+
+
+# ========================= 工具函数 =========================
+
 
 def to_sec(ns: int) -> float:
-    return TimeBase.to_sec(ns)
-
-def to_iso8601(est_ns_: int) -> str:
-    return TimeBase.to_iso8601(est_ns_)
+    """
+    ns → 秒（float）
+    """
+    return ns / 1e9

@@ -25,23 +25,26 @@ namespace nav_core {
  *  - 实时融合一般使用经过过滤的 DvlFrame。
  */
 struct DvlRawData {
-    double      timestamp_s = 0.0;   ///< Unix wall time [s]
-    std::string src;                 ///< Frame type, e.g. "BD", "SA"
-    double      ve_mm = 0.0;
-    double      vn_mm = 0.0;
-    double      vu_mm = 0.0;
-    double      depth_m = 0.0;
-    double      e_m = 0.0;
-    double      n_m = 0.0;
-    double      u_m = 0.0;
-    // valid: 1 = A(Valid), 0 = V(Invalid), -1 = Unknown/None
-    int         valid = -1;
+    int64_t mono_ns = 0;   // steady-clock
+    int64_t est_ns  = 0;   // latency-corrected timebase
+    double  timestamp_s = 0.0;  // DVL internal time
 
-    // 便捷：转 m/s，若无效可由上层再做 NaN 检查
+    std::string src;
+    double ve_mm = 0.0;
+    double vn_mm = 0.0;
+    double vu_mm = 0.0;
+    double depth_m = 0.0;
+    double e_m = 0.0;
+    double n_m = 0.0;
+    double u_m = 0.0;
+    int valid = -1;
+
     inline double ve_mps() const { return ve_mm * 1e-3; }
     inline double vn_mps() const { return vn_mm * 1e-3; }
     inline double vu_mps() const { return vu_mm * 1e-3; }
 };
+
+
 
 
 /**

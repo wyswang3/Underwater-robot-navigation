@@ -26,7 +26,7 @@ from typing import Optional
 
 import csv
 
-from uwnav.io.timebase import stamp
+from uwnav.io.timebase import SensorKind, stamp
 from uwnav.drivers.dvl.hover_h1000.io import (
     DVLSerialInterface,
     DVLLogger,
@@ -173,16 +173,26 @@ def main():
 
     # ---- 回调 ----
     def on_raw(_ts_unused: float, line: str, note: str):
-        mono_ns, est_ns = stamp()
-        est_s = est_ns / 1e9
+        ts = stamp("dvl0", SensorKind.DVL)
+        mono_ns = ts.host_time_ns
+        est_ns  = ts.corrected_time_ns
+        est_s   = est_ns / 1e9
+
         dvl_logger.store_raw_line(est_s, line, note)
         stats["raw"] += 1
 
     def on_parsed(d):
         # d 是 DVLData
         dvl_logger.store_parsed(d)
-        mono_ns, est_ns = stamp()
-        speed_writer.write_if_valid(mono_ns, est_ns, d.src, d.ve, d.vn, d.vu)
+        
+        ts = stamp("dvl0", SensorKind.DVL)
+        mono_ns = ts.host_time_ns
+        est_ns  = ts.corrected_time_ns
+        speed_writer.write_if_valid(
+        mono_ns, est_ns,
+        d.src,
+        d.ve, d.vn, d.vu
+        )
         stats["parsed"] += 1
 
     # DVL 串口接口
