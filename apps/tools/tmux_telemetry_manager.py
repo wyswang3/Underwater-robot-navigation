@@ -179,7 +179,7 @@ def build_tmux_command(env: dict, python_cmd: str, script: str, cli_args: List[s
 def main():
     # 根据是否在 apps/ 下决定默认脚本相对路径
     in_apps = os.path.basename(here_dir()) == "apps"
-    default_imu = "imu_data_verifier.py" if in_apps else "apps/tools/imu_realtime_pipeline.py"
+    default_imu = "imu_data_verifier.py" if in_apps else "apps/tools/imu_data_verifier.py"
     default_dvl = "dvl_data_verifier.py"     if in_apps else "apps/tools/dvl_data_verifier.py"
     default_volt = "volt32_logger.py"        if in_apps else "apps/tools/volt32_logger.py"
 

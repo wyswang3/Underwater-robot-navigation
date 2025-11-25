@@ -7,9 +7,14 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <iomanip>
 
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 #include "imu_driver_wit.h"
 #include "imu_types.h"
@@ -27,22 +32,30 @@ void signal_handler(int) {
     g_stop.store(true);
 }
 
+// 简单确保单级目录存在（根目录用）
+// 对 logs/ 这样的根目录足够，具体的子目录由 BinLogger 自己递归创建
 bool ensure_dir(const std::string& path) {
-    // 简单版本：如果目录不存在则尝试创建
-    struct stat st;
+    if (path.empty()) return false;
+
+    struct stat st{};
     if (stat(path.c_str(), &st) == 0) {
-        // 已存在且是目录
         return (st.st_mode & S_IFDIR) != 0;
     }
-    // 不存在则创建
-    if (mkdir(path.c_str(), 0755) != 0) {
+
+#ifdef _WIN32
+    int ret = _mkdir(path.c_str());
+#else
+    int ret = mkdir(path.c_str(), 0755);
+#endif
+
+    if (ret != 0) {
         std::perror("mkdir");
         return false;
     }
     return true;
 }
 
-// 去掉路径末尾的 '/'
+// 去掉路径末尾的 / 或 \
 std::string rstrip_slash(const std::string& path) {
     if (path.empty()) return path;
     std::string p = path;
@@ -52,7 +65,24 @@ std::string rstrip_slash(const std::string& path) {
     return p;
 }
 
-// 命令行帮助
+// 获取今天日期：YYYY-MM-DD
+std::string today_date() {
+    using namespace std::chrono;
+    auto now = system_clock::now();
+    std::time_t tt = system_clock::to_time_t(now);
+
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d", &tm);
+    return std::string(buf);
+}
+
+// 命令行使用说明
 void print_usage(const char* prog) {
     std::cout << "Usage: " << prog << " [options]\n"
               << "  --imu-port <path>      default: /dev/ttyUSB0\n"
@@ -60,7 +90,7 @@ void print_usage(const char* prog) {
               << "  --imu-addr <hex>       default: 0x50\n"
               << "  --dvl-port <path>      default: /dev/ttyUSB1\n"
               << "  --dvl-baud <baud>      default: 115200\n"
-              << "  --log-dir <dir>        default: ./data\n"
+              << "  --log-dir <dir>        default: ./logs\n"
               << "  -h, --help             show this help\n";
 }
 
@@ -115,7 +145,8 @@ int main(int argc, char** argv) {
     std::string dvl_port  = "/dev/ttyUSB1";
     int         dvl_baud  = 115200;
 
-    std::string log_dir   = "./data";
+    // log_dir 作为“根目录”，实际写入会在 log_dir/DATE/ 下
+    std::string log_root  = "./logs";
 
     // -------- 命令行解析（简单版） --------
     for (int i = 1; i < argc; ++i) {
@@ -125,7 +156,6 @@ int main(int argc, char** argv) {
         } else if (arg == "--imu-baud" && i + 1 < argc) {
             imu_baud = std::atoi(argv[++i]);
         } else if (arg == "--imu-addr" && i + 1 < argc) {
-            // 支持十进制或 0x.. 十六进制
             const char* p = argv[++i];
             if (std::strlen(p) > 2 && (p[0] == '0') && (p[1] == 'x' || p[1] == 'X')) {
                 imu_addr = static_cast<uint8_t>(std::strtol(p, nullptr, 16));
@@ -137,7 +167,7 @@ int main(int argc, char** argv) {
         } else if (arg == "--dvl-baud" && i + 1 < argc) {
             dvl_baud = std::atoi(argv[++i]);
         } else if (arg == "--log-dir" && i + 1 < argc) {
-            log_dir = argv[++i];
+            log_root = argv[++i];
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argv[0]);
             return 0;
@@ -148,11 +178,16 @@ int main(int argc, char** argv) {
         }
     }
 
-    log_dir = rstrip_slash(log_dir);
-    if (!ensure_dir(log_dir)) {
-        std::cerr << "[navd] Failed to ensure log dir: " << log_dir << "\n";
+    log_root = rstrip_slash(log_root);
+    if (!ensure_dir(log_root)) {
+        std::cerr << "[navd] Failed to ensure log root dir: " << log_root << "\n";
         return 1;
     }
+
+    // 使用日期子目录：logs/YYYY-MM-DD/
+    const std::string date_str    = today_date();
+    const std::string log_dir     = log_root + "/" + date_str;
+    // 具体子目录和文件由 BinLogger 在 open() 时递归创建
 
     // -------- 设置信号处理，支持 Ctrl+C 优雅退出 --------
     std::signal(SIGINT,  signal_handler);
@@ -160,25 +195,25 @@ int main(int argc, char** argv) {
 
     // -------- 配置 ESKF 参数（保守值，可后续从 YAML 读取） --------
     nav_core::EskfConfig eskf_cfg;
-    eskf_cfg.imu_rate_hz       = 100.0;
-    eskf_cfg.dvl_rate_hz       = 10.0;
-    eskf_cfg.gravity           = 9.80665;   // m/s^2
-    eskf_cfg.accel_noise_std   = 0.15;      // m/s^2，保守估计
-    eskf_cfg.gyro_noise_std    = 0.02;      // rad/s，保守估计
-    eskf_cfg.dvl_vel_noise_std = 0.02;      // m/s，保守估计
+    eskf_cfg.imu_rate_hz         = 100.0;
+    eskf_cfg.dvl_rate_hz         = 10.0;
+    eskf_cfg.gravity             = 9.80665;   // m/s^2
+    eskf_cfg.accel_noise_std     = 0.15;      // m/s^2，保守估计
+    eskf_cfg.gyro_noise_std      = 0.02;      // rad/s，保守估计
+    eskf_cfg.dvl_vel_noise_std   = 0.02;      // m/s，保守估计
     eskf_cfg.process_noise_scale = 1.0;
     eskf_cfg.meas_noise_scale    = 1.0;
 
     nav_core::Eskf eskf(eskf_cfg);
 
-    // -------- 二进制日志打开 --------
+    // -------- 二进制日志：IMU / DVL / ESKF --------
     nav_core::BinLogger imu_logger;
     nav_core::BinLogger dvl_logger;
     nav_core::BinLogger state_logger;
 
-    std::string imu_log_path   = log_dir + "/imu.bin";
-    std::string dvl_log_path   = log_dir + "/dvl.bin";
-    std::string state_log_path = log_dir + "/eskf.bin";
+    const std::string imu_log_path   = log_dir + "/imu.bin";
+    const std::string dvl_log_path   = log_dir + "/dvl.bin";
+    const std::string state_log_path = log_dir + "/eskf.bin";
 
     if (!imu_logger.open(imu_log_path, false)) {
         std::cerr << "[navd] Failed to open IMU log file: " << imu_log_path << "\n";
@@ -230,7 +265,7 @@ int main(int argc, char** argv) {
         pkt.valid       = static_cast<uint8_t>(f.valid ? 1 : 0);
         imu_logger.writePod(pkt);
 
-        // 3) 记录当前 ESKF 状态（可选，频率与 IMU 一致）
+        // 3) 记录当前 ESKF 状态（频率与 IMU 一致）
         nav_core::EskfState st;
         if (eskf.latestState(st) && st.valid) {
             EskfLogPacket sp{};
@@ -300,9 +335,11 @@ int main(int argc, char** argv) {
 
     std::cout << "[navd] Started navigation daemon\n"
               << "       IMU: " << imu_port << " @" << imu_baud
-              << " addr=0x" << std::hex << int(imu_addr) << std::dec << "\n"
+              << " addr=0x" << std::hex << static_cast<int>(imu_addr)
+              << std::dec << "\n"
               << "       DVL: " << dvl_port << " @" << dvl_baud << "\n"
-              << "       log dir: " << log_dir << "\n";
+              << "       log root: " << log_root << "\n"
+              << "       log dir : " << log_dir << "\n";
 
     // -------- 主循环：保持进程存活，直到收到停止信号 --------
     using namespace std::chrono_literals;

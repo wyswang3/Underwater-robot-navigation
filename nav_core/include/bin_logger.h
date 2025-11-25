@@ -9,17 +9,18 @@
 namespace nav_core {
 
 /**
- * @brief 简单的二进制日志记录器
+ * @brief 简单的二进制日志记录器（单文件）
  *
  * 特点：
  *  - 线程安全（内部使用 mutex）
- *  - 只负责“顺序写入原始字节流”，不关心数据格式
- *  - 可用于记录 IMU/DVL/ESKF 状态等
+ *  - 只负责顺序写入原始字节流，不关心数据格式
+ *  - 可用于记录 IMU / DVL / ESKF 状态等
  *
  * 用法示例：
- *   BinLogger logger("data.bin");
- *   MyPacket pkt{...};
- *   logger.writePod(pkt);
+ *   BinLogger imu_logger;
+ *   imu_logger.open("logs/2025-11-25/imu_raw.bin");
+ *   ImuFrame frm{...};
+ *   imu_logger.writePod(frm);
  */
 class BinLogger {
 public:
@@ -46,11 +47,14 @@ public:
         return write(&value, sizeof(T));
     }
 
+    /// （可选）写一行文本（自动追加换行，主要用于 nav_info.txt 这类简单诊断）
+    bool writeLine(const std::string& line);
+
     /// 强制 flush 到磁盘
     void flush();
 
 private:
-    // 禁止拷贝，只允许移动（如果你需要可以后续实现 move 语义）
+    // 禁止拷贝
     BinLogger(const BinLogger&) = delete;
     BinLogger& operator=(const BinLogger&) = delete;
 
