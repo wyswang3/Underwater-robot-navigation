@@ -79,7 +79,7 @@ Underwater-robot-navigation/
 │   └── io/                     # CSV 读写
 │
 ├── nav_core/                   # ★ C++ 实时导航核心（运行在 Orange Pi）
-│   ├── include/nav_core/       # 头文件（API）
+│   ├── include/       # 头文件（API）
 │   ├── src/                    # 所有 CPP 实现文件
 │   ├── third_party/witmotion/  # WitMotion 官方 SDK
 │   └── CMakeLists.txt
