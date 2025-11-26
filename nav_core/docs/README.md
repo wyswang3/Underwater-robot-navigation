@@ -76,7 +76,7 @@ uwnav_navd
 
 ```
 nav_core/
-├─ include/nav_core/
+├─ include/
 │   ├─ timebase.h        # 时间基准（mono_ns / est_ns）
 │   ├─ imu_types.h       # IMU 数据结构与过滤配置
 │   ├─ imu_driver_wit.h  # WitMotion IMU 驱动（HWT9073-485）

@@ -8,5 +8,6 @@
         "xlocinfo": "cpp",
         "xstring": "cpp",
         "atomic": "cpp"
-    }
+    },
+    "cmake.sourceDirectory": "D:/Underwater-robot-navigation/nav_core"
 }
