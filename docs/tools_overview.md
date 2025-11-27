@@ -1,232 +1,267 @@
-
 ---
-**Underwater Robot Navigation Project – Tools Layer Overview**
-**（工具层总体说明文档 · 正式版）**
+
+# **Underwater Robot Navigation – Tools Layer Overview**
+
+**工具层总体说明文档（正式版 · 2025 更新）**
 
 ---
 
 ## 1. 工具层简介
 
-`apps/tools/` 目录包含本项目的**基础数据采集工具**，用于在实验环境中稳定、可靠地获取原始传感器数据（IMU / 电压&电流板 / DVL 等），为导航定位模块、动力学建模模块、控制系统模块提供高质量输入。
+`apps/tools/` 目录包含本项目的**基础数据采集与数据后处理工具**。
+工具层位于整个系统架构中最底层，承担“数据生产”的职责。其核心任务包括：
 
-工具层的核心目标包括：
+* 稳定采集多种传感器数据（IMU / DVL / 电压电流板）
+* 统一时间基（MonoNS + EstNS）对齐多传感器时间
+* 长时间采集能力（自动文件轮换、定期 flush）
+* 多窗口采集管理（tmux 自动化）
+* 实验后对原始数据进行后处理和格式化整合（multisensor_postproc）
 
-* 稳定采集与记录传感器数据
-* 提供实时调试、异常检测、滤波、文件轮换能力
-* 实验阶段快速验证硬件与通信
-* 构建可追踪、可复现实验的数据生产流水线
-* 作为 uwnav/ 内部导航模块的基础输入层
-
-此目录的脚本不直接参与导航或滤波计算，它们专注于数据采集和工程实用性。
+这些工具是导航系统、动力学建模模块、控制模块、和深度学习模块的数据输入源头。
 
 ---
 
-## 2. 目录结构
+## 2. 目录结构（2025 最新版）
 
 ```
 apps/tools/
 │
-├── imu_realtime_pipeline.py      # 高速 IMU 实时采集 + 滤波管线
-├── volt32_logger.py              # 多通道电压/电流采集 + Rolling CSV
-└── tmux_telemetry_manager.py     # 一键 tmux 启动多路传感器采集管理器
+├── imu_data_verifier.py              # IMU，高速采集 + raw/filt 双CSV + timebase
+├── volt32_logger.py                  # 多路电压/电流采集 + RollingCSVWriter
+├── dvl_data_verifier.py              # DVL PD6/EPD6 数据采集 + timebase
+│
+├── multisensor_postproc.py           # 多传感器数据后处理（同步/格式化/可视化）
+│
+└── tmux_telemetry_manager.py         # 多传感器一键启动（tmux 管理）
 ```
 
-未来拟加入：
+**已删除脚本**（不再提及）：
 
-* `dvl_data_verifier.py`（Hover H1000 DVL：统一时间基记录器）
+* `imu_realtime_pipeline.py`
+* `sensor2_rotating.py`
 
 ---
 
-## 3. 工具脚本详细说明
+## 3. 工具脚本详细说明（最新版）
 
 ---
 
-### 3.1 IMU Realtime Pipeline
+## 3.1 IMU Data Verifier（统一时间基 + 原始/滤波双流）
 
-**文件：`imu_realtime_pipeline.py`**
-**功能：IMU 高速实时采集 + 滑动窗口滤波 + 双 CSV 输出**
+**文件：`imu_data_verifier.py`**
+**功能：IMU高速采集、滤波、结构化记录、时间统一（MonoNS / EstNS）**
 
-适用设备：
-WitMotion HWT9073-485 / WT901C-485 等 Modbus IMU（经 485→USB 转换）
+适配设备：
+WitMotion HWT9073-485 / WT901C-485
 
-**核心能力：**
+核心特点：
 
-* 以 230400 波特率进行高频采集
-* 回调中抽取加速度/角速度/欧拉角/磁场
-* 数据以结构化 dict 推入队列，由消费者线程处理
-* 写入两类 CSV 文件：
+* 单调时间基：`stamp("imu0", SensorKind.IMU)`
+* 原始数据记录：raw.csv
+* 滤波后数据：filt.csv
+* 实时滤波器（RealTimeIMUFilter）：
 
-  1. 原始数据（raw）
-  2. 滤波后数据（filtered）
+  * 初始静置校准（bias）
+  * 加速度/角速度低通滤波
+  * 航向角解缠
+* 空闲超时报警（>3s）
+* 回调线程轻量化 + 后台消费者线程
+* SIGINT/SIGTERM 平滑退出
 
-**工程特性：**
+适用：
 
-* 自动调试输出；空闲超时报警
-* 滑动窗口实时滤波（RealTimeIMUFilter）
-* 定期 flush 写盘
-* 优雅退出机制（signal handler）
-* 可用于：
-
-  * IMU 通信调试
-  * 滤波器研究
-  * 采集深度学习训练用数据集
-
-输出示例：
-
-```
-timestamp, Ax, Ay, Az, Gx, Gy, Gz, HX, HY, HZ, Roll, Pitch, Yaw
-...
-```
+* 下水前 IMU 通信调试
+* IMU 噪声与稳定性验证
+* 动力学建模数据采集（LSTM / PhysicsNN）
+* ESKF 的高频输入源
 
 ---
 
-### 3.2 Volt32 Logger
+## 3.2 Volt32 Logger（多通道电压/电流板）
 
 **文件：`volt32_logger.py`**
-**功能：电压/电流采集卡日志器（多通道 + 文件轮换）**
+**功能：记录 16/32 路电压/电流传感器数据，适用于电机功率分析**
 
-适用设备：
-STM32 + 16/32 路 ADC 数据采集板
+特点：
 
-**核心能力：**
+* RollingCSVWriter：
 
-* 从串口读取一行包含多通道电压/电流的 ASCII 数据
-* 支持 N=16 或未来扩展 N=32 通道
-* 使用 RollingCSVWriter 自动处理：
+  * 文件大小轮换（默认 50MB）
+  * 跨天轮换
+  * 自动清理 7 天前日志
+* CH0~CH15 自动聚合一帧再写入
+* 自动解析 "CHx: value" 行
+* 支持调试 raw 输出
+* 后台定时 flush
+* 用于电机功率–推力实验 & system identification
 
-  * 按大小滚动（默认 50MB）
-  * 按天滚动（跨天自动新文件）
-  * 自动清理超过 N 天（默认 7 天）旧日志
-
-**工程特性：**
-
-* 容错解析（空格/Tab 混合）
-* 后台周期性刷盘
-* 可视化调试输出
-* 支持交互式键盘命令退出
-* 专为长时间记录（数小时–数天）设计
-
-输出示例：
+输出格式：
 
 ```
-Timestamp, CH0, CH1, ..., CH15
-...
+Timestamp, t_s_volt, CH0..CH15
 ```
-
-适用场景：
-
-* 推进器功率–推力实验
-* 电源系统健康监测
-* 动力学建模的功率输入记录
 
 ---
 
-### 3.3 tmux Telemetry Manager
+## 3.3 DVL Data Verifier（Hover H1000）
+
+**文件：`dvl_data_verifier.py`**
+**功能：以 PD6/EPD6 协议解析 Hover H1000 DVL 数据**
+
+特点：
+
+* 统一时间基：`stamp("dvl0", SensorKind.DVL)`
+* 自动执行安全指令：
+
+  * 启动：CZ → CS
+  * 停止：CZ（退出时自动发送）
+* 双输出：
+
+  * 完整 raw/parsed 日志（用于排障）
+  * 精简速度表（Mono+Est 时间基，用于融合/学习）
+* 速率统计、高鲁棒解析（兼容 BE/BI/BS/WE 等帧）
+
+输出：
+
+```
+MonoNS, EstNS, SensorID, Src, East, North, Up
+```
+
+适用：
+
+* 池试/海试的 DVL 调试验证
+* ESKF 融合 IMU+DVL
+* 速度数据记录与分析
+
+---
+
+## 3.4 MultiSensor Post-Processor（新增 · 非采集脚本）
+
+**文件：`multisensor_postproc.py`**
+**功能：多传感器原始数据的“后处理工具”**
+
+工具层中最新加入的脚本，用于：
+
+* IMU、DVL、Volt32 的数据**统一整理**
+* 多传感器 CSV 的**时间轴对齐（MonoNS）**
+* 数据清洗、缺失补齐、格式重整
+* 时间同步后的联表合成（如 multi-sensor merged CSV）
+* 可选绘图：加速度/角速度/速度/电流可视化
+* 指定范围裁剪（如 20000–20200）
+* 支持大型数据集（多段采集自动拼接）
+
+典型任务：
+
+```
+python3 multisensor_postproc.py \
+  --imu data/2025-11-27/imu/imu_raw_*.csv \
+  --dvl data/2025-11-27/dvl/dvl_speed_min_tb_*.csv \
+  --volt data/2025-11-27/volt/motor_data_*.csv \
+  --out processed/2025-11-27/
+```
+
+它是整个“数据清洗→建模→融合”链路的关键工具。
+
+---
+
+## 3.5 tmux Telemetry Manager（一键运行多路采集）
 
 **文件：`tmux_telemetry_manager.py`**
-**功能：多传感器采集脚本管理器（tmux session orchestration）**
 
-**作用：**
-为 IMU 与电压记录器提供“一键启动、多窗口同步运行”的能力。
+功能：
 
-**核心能力：**
+* 一键启动多个传感器（IMU / DVL / Volt）
+* 自动创建 tmux session + 多窗口布局
+* 串口参数自动带入
+* 支持列表端口（--list-ports）
+* 适合池试/现场调试
 
-* 创建 tmux 会话
-* 自动左右分屏：
-
-  * pane 1：IMU 采集
-  * pane 2：Volt32 Logger
-* 智能解析脚本路径（支持 apps/ 下执行）
-* 自动串口扫描（`--list-ports`）
-* 可选择 attach 显示界面或后台运行
-* 支持扩展：
-
-  * 添加 DVL Pane
-  * 添加 USBL Pane
-
-典型启动命令：
+示例：
 
 ```bash
 python3 tmux_telemetry_manager.py \
-  --imu-script imu_realtime_pipeline.py --imu-port /dev/ttyUSB1 --imu-baud 230400 \
-  --volt-script volt32_logger.py        --volt-port /dev/ttyUSB0 --volt-baud 115200
-```
-
-极大提升实验效率，是现场调试、池试的必备工具。
-
----
-
-## 4. 工具层与整体系统架构关系
-
-```
-                  +------------------------------+
-                  |          apps/tools/         |
-                  |  (数据采集 / 调试 / 校验层)  |
-                  +---------------+--------------+
-                                  |
-                        传感器原始数据 logs/
-                                  |
-                                  v
-        +----------------------------------------------+
-        |                   data/                      |
-        |   imu/   volt/   dvl/   usbl/   ...         |
-        | (按传感器类型分类保存原始 CSV / TB 数据)     |
-        +--------------------+-------------------------+
-                             |
-                             | 输入数据流
-                             v
-        +----------------------------------------------+
-        |                    uwnav/                    |
-        |    (驱动层 + 时间基 + 数据同步 + ESKF)      |
-        |     IMU → ESKF ← DVL / USBL / 深度传感器     |
-        +--------------------+-------------------------+
-                             |
-                             | 位姿/速度/状态
-                             v
-        +----------------------------------------------+
-        |          控制层 / MPC / RL / 轨迹生成         |
-        +----------------------------------------------+
+    --imu-port /dev/ttyUSB1 \
+    --volt-port /dev/ttyUSB0 \
+    --dvl-port /dev/ttyUSB2
 ```
 
 ---
 
-## 5. 数据分类保存（下一版将启用）
+## 4. 工具层与系统架构关系（正式版）
 
-当前工具脚本默认把数据写到 `data/` 下。
-为未来导航系统的多传感器融合，建议采用如下目录结构：
+```
+             +-----------------------------+
+             |         apps/tools          |
+             |  传感器数据采集与后处理层   |
+             +-----------+-----------------+
+                         |
+        raw sensor logs  |  (IMU / DVL / Volt / USBL)
+                         v
+             +-----------------------------+
+             |            data/            |
+             |  multi-day multi-sensor     |
+             +-------------+---------------+
+                           |  timebase(MonoNS)
+                           v
+             +-----------------------------+
+             |            uwnav/           |
+             |  统一时间基 + 驱动 + ESKF   |
+             +-------------+---------------+
+                           |
+                           v
+             +-----------------------------+
+             |        nav_core control     |
+             |       MPC / RL / TrajGen    |
+             +-----------------------------+
+```
+
+---
+
+## 5. 数据目录规范（采用时间分层结构）
 
 ```
 data/
-  yyyy-mm-dd/
+  2025-11-27/
     imu/
     dvl/
     volt/
     usbl/
-    camera/
 ```
 
-之后你确认目录格式后，我将：
+优点：
 
-* 更新所有工具脚本的默认输出路径
-* 增加自动创建按日期划分的多层目录
-* 更新 tmux_telemetry_manager，自动写入对应 sensor 子目录
-* 生成新的 `tools_overview.md（v2）`
-
----
-
-## 6. 工程建议（正式版）
-
-1. **RollingCSVWriter 可抽象为公共 I/O 工具**
-   放入 `uwnav.io.logging`，减少重复代码。
-
-2. **加入统一时间基（timebase.stamp）改造 IMU 与 Volt 工具**
-   现在 DVL 已支持，IMU 与 Volt 也建议对齐。
-
-3. **增加一个 multi-sensor 一键三路采集 manager（IMU+DVL+Volt）**
-   未来数据更加一致。
-
-4. **所有工具脚本建议在 `--outdir` 中自动选择按日期/传感器分类的目录**
-   方便后续融合/训练。
+* 多传感器天然归档
+* timestamp 统一 → 方便对齐融合
+* 记录整洁，数据可溯源
 
 ---
 
+## 6. 工程设计建议（更新版）
+
+### 6.1 RollingCSVWriter 建议统一整理
+
+放入 `uwnav.io.logging`，tools 与 acquire 层共用同一实现。
+
+### 6.2 multisensor_postproc 作为数据入口
+
+将所有训练/建模前的数据清洗步骤集中处理。
+
+### 6.3 未来工具层可加入：
+
+* USBL logger
+* 摄像头帧抓取（含时间基）
+* 多传感器校准工具（IMU–DVL lever arm）
+
+---
+
+## 7. 文档状态
+
+本文件为 Tools Layer 的正式说明文档，适用于：
+
+* 工程组新人
+* 池试操作人员
+* 数据处理人员
+* 深度学习建模组
+* 导航系统开发者（ESKF/MPC/RL）
+
+---
