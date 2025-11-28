@@ -1,42 +1,101 @@
----
-
+````markdown
 # nav_core 运行说明（Orange Pi / 香橙派）
 
-本文件说明如何在香橙派上编译、运行 C++ 导航守护进程 `uwnav_navd`，并介绍该进程产生日志的目录结构及二进制格式，方便后续离线分析与工具开发。
+本说明文档面向工程使用场景，介绍 `nav_core` C++ 子项目在香橙派上的编译、运行方式，以及导航守护进程 `uwnav_navd` 的日志目录结构与二进制格式，便于后续数据分析与工具开发。
 
 ---
 
-## 1. 功能概述
+## 1. 模块与功能概述
 
-`nav_core` C++ 子项目主要实现：
+`nav_core` 子项目由一个核心静态库和若干可执行程序组成：
 
-* IMU（HWT9073-485, Modbus RTU, 230400bps）实时读取与滤波；
-* DVL（Hover H1000, PD6/EPD6）实时读取与滤波；
-* 基于 IMU + DVL 的扩展卡尔曼滤波（ESKF）状态估计（位置/速度/姿态/零偏）；
-* 将 IMU、DVL、ESKF 状态以二进制形式落盘到 `logs/YYYY-MM-DD/` 目录。
+- **核心库：`nav_core`**
+  - IMU 驱动：HWT9073-485（Modbus RTU，230400 bps）
+  - DVL 驱动：Hover H1000（PD6/EPD6 串口协议）
+  - 实时 IMU 滤波与航向积分：
+    - 对加速度 / 角速度做低通滤波和启动期零偏估计
+    - 对 Z 轴角速度积分并解缠，生成平滑的 yaw 观测
+  - 扩展卡尔曼滤波（ESKF）：
+    - 输入：IMU（高频预测）+ DVL（速度更新）+ yaw 观测（低频）
+    - 输出：位置 / 速度 / 姿态 / IMU 零偏估计
+  - 二进制日志写入：
+    - `imu.bin`：IMU 观测序列
+    - `dvl.bin`：DVL 观测序列
+    - `eskf.bin`：ESKF 状态序列
 
-该进程 **不直接控制推进器**，只负责导航相关的数据采集与状态估计。
+- **导航守护进程：`uwnav_navd`**
+  - 运行在香橙派上，负责：
+    - 打开 IMU / DVL 串口
+    - 驱动 `nav_core` 中的 ESKF 进行状态估计
+    - 将 IMU / DVL / ESKF 状态落盘
+  - 注意：**不直接控制推进器**，仅负责导航相关数据采集与状态估计。
+
+- **工具程序（可选）：`dump_imu_bin`**
+  - 用于离线解析 `imu.bin` 等二进制文件，并输出为人类可读格式（文本 / CSV）。
+  - 由 CMake 选项 `BUILD_NAV_TOOLS` 控制是否编译。
 
 ---
 
-## 2. 环境与编译
+## 2. C++ 工程目录结构
 
-### 2.1 环境要求
+`nav_core` 子项目整体结构如下：
 
-* 硬件：香橙派 / Orange Pi（Linux 系统）
-* 软件：
+Underwater-robot-navigation/
+└── nav_core/
+    ├── CMakeLists.txt                 # nav_core 构建脚本
+    ├── include/
+    │   └── nav_core/                  # 对外暴露的头文件
+    │       ├── imu_driver_wit.h
+    │       ├── dvl_driver.h
+    │       ├── eskf.h
+    │       ├── imu_rt_filter.h
+    │       ├── bin_logger.h
+    │       └── timebase.h
+    ├── src/
+    │   ├── nav_daemon.cpp             # 主程序 uwnav_navd（导航守护进程）
+    │   ├── timebase.cpp
+    │   ├── imu_driver_wit.cpp
+    │   ├── dvl_driver.cpp
+    │   ├── eskf.cpp
+    │   ├── bin_logger.cpp
+    │   ├── imu_rt_filter.cpp          # 实时 IMU 滤波 / 航向积分
+    │   └── dump_imu_bin.cpp           # 二进制日志解析工具源文件
+    └── third_party/
+        └── witmotion/                 # WitMotion 官方 SDK
+            ├── wit_c_sdk.c
+            └── *.h
 
-  * CMake ≥ 3.14
-  * g++ 支持 C++17
-  * Git（用于 clone 仓库）
-* 已连接传感器：
+说明：
+- `nav_core` 是核心静态库，包含 IMU/DVL 驱动、滤波器、ESKF、日志工具等全部模块。
+- `nav_daemon.cpp` 编译为独立可执行程序 `uwnav_navd`。
+- `dump_imu_bin.cpp` 当前作为库的一部分编译（编译工具时会用到。
+- `third_party/witmotion/` 路径在 CMake 中写死，不要随意移动。
 
-  * IMU（HWT9073-485）接到某个串口（例如 `/dev/ttyUSB0`）
-  * DVL（Hover H1000）接到某个串口（例如 `/dev/ttyUSB1`）
+---
 
-> 提示：可通过 `ls /dev/ttyUSB*` 或 `ls /dev/ttyS*` 查设备号。
+## 3. 环境与编译
 
-### 2.2 获取代码
+### 3.1 环境要求
+
+**硬件**
+
+* 香橙派 / Orange Pi 或其他 ARM Linux 开发板
+
+**软件**
+
+* Linux 系统环境（推荐 Debian/Ubuntu 系）
+* CMake ≥ 3.14
+* g++ 支持 C++17
+* Git（用于拉取代码）
+
+**传感器连接（推荐默认接线）**
+
+* IMU HWT9073-485 → `/dev/ttyUSB0`，波特率 230400，Modbus 从站地址 0x50
+* DVL Hover H1000 → `/dev/ttyUSB1`，波特率 115200
+
+> 可以通过 `ls /dev/ttyUSB*` 和 `ls /dev/ttyS*` 检查具体设备号。
+
+### 3.2 获取代码
 
 在香橙派上执行：
 
@@ -46,7 +105,9 @@ git clone -b feature/IMU-DVL-serial https://github.com/wyswang3/Underwater-robot
 cd Underwater-robot-navigation/nav_core
 ```
 
-### 2.3 编译 nav_core
+如需切换其它分支，可根据实际情况调整 `-b` 参数。
+
+### 3.3 编译 nav_core
 
 ```bash
 cd ~/Underwater-robot-navigation/nav_core
@@ -54,44 +115,41 @@ cd ~/Underwater-robot-navigation/nav_core
 mkdir -p build
 cd build
 
-cmake ..
+cmake ..        # 如需关闭工具构建，可用：cmake .. -DBUILD_NAV_TOOLS=OFF
 make -j4
 ```
 
-生成的导航守护进程可执行文件为：
+编译完成后，`build/` 目录下包含：
 
-```bash
-./uwnav_navd
+```text
+build/
+├── uwnav_navd      ← 导航守护进程（主程序）
+└── dump_imu_bin    ← 二进制日志解析工具（若 BUILD_NAV_TOOLS=ON）
 ```
 
 ---
 
-## 3. 运行导航进程
+## 4. 运行导航守护进程
 
-### 3.1 串口准备
+### 4.1 串口检查
 
-确认 IMU 和 DVL 已正确连接到香橙派串口，例如：
+确认 IMU 和 DVL 对应串口存在，例如：
 
-* IMU：`/dev/ttyUSB0`（默认）
-* DVL：`/dev/ttyUSB1`（默认）
+```bash
+ls /dev/ttyUSB*
+# 预期：/dev/ttyUSB0（IMU）, /dev/ttyUSB1（DVL）
+```
 
-如串口号与默认为不同，可在启动时通过命令行参数指定。
+如串口号不同，后续通过命令行参数修改即可。
 
-### 3.2 基本运行方式
-
-进入 build 目录：
+### 4.2 基本运行方式（默认配置）
 
 ```bash
 cd ~/Underwater-robot-navigation/nav_core/build
-```
-
-最简启动命令（使用默认配置）：
-
-```bash
 ./uwnav_navd
 ```
 
-默认配置为：
+默认参数：
 
 * IMU：
 
@@ -102,9 +160,9 @@ cd ~/Underwater-robot-navigation/nav_core/build
 
   * 端口：`/dev/ttyUSB1`
   * 波特率：`115200`
-* 日志根目录：`./logs`（相对于 `nav_core/build`）
+* 日志根目录：`./logs`（相对 `build/`）
 
-进程启动后，会在终端打印类似信息：
+启动后典型输出如下：
 
 ```text
 [navd] Started navigation daemon
@@ -114,11 +172,11 @@ cd ~/Underwater-robot-navigation/nav_core/build
        log dir : ./logs/2025-11-25
 ```
 
-按 `Ctrl+C` 可优雅退出，进程会自动停止驱动并 flush 日志。
+按 `Ctrl+C` 可以优雅关闭进程，驱动与日志会自动停止与刷新。
 
-### 3.3 命令行参数说明
+### 4.3 命令行参数
 
-`uwnav_navd` 支持以下参数：
+`uwnav_navd` 支持以下命令行参数：
 
 ```text
 Usage: uwnav_navd [options]
@@ -131,20 +189,25 @@ Usage: uwnav_navd [options]
   -h, --help             show this help
 ```
 
-说明：
+参数解释：
 
 * `--imu-port`
-  IMU 串口路径（如 `/dev/ttyUSB0`、`/dev/ttyS1` 等）。
-* `--imu-baud`
-  IMU 串口波特率（HWT9073-485 当前为 230400）。
-* `--imu-addr`
-  Modbus 从站地址，支持十进制或 `0x..` 十六进制。
-* `--dvl-port` / `--dvl-baud`
-  DVL 串口路径与波特率（需与 DVL 内部配置一致）。
-* `--log-dir`
-  日志根路径，程序会在其下自动创建日期子目录，例如传 `--log-dir /data/nav_logs`，实际日志目录为 `/data/nav_logs/2025-11-25/`。
 
-#### 示例 1：串口号不同
+  * IMU 串口路径，例如 `/dev/ttyUSB0`、`/dev/ttyS1` 等。
+* `--imu-baud`
+
+  * IMU 串口波特率，HWT9073-485 当前配置为 230400。
+* `--imu-addr`
+
+  * Modbus 从站地址，支持十进制或 `0x..` 十六进制形式。
+* `--dvl-port` / `--dvl-baud`
+
+  * DVL 串口路径与波特率，需要与 DVL 内部配置一致。
+* `--log-dir`
+
+  * 日志根目录，程序会在其下自动创建日期子目录 `YYYY-MM-DD/`。
+
+#### 示例：修改串口号
 
 ```bash
 ./uwnav_navd \
@@ -152,14 +215,14 @@ Usage: uwnav_navd [options]
     --dvl-port /dev/ttyS4
 ```
 
-#### 示例 2：自定义日志目录
+#### 示例：指定日志目录
 
 ```bash
 ./uwnav_navd \
     --log-dir /data/uwnav_logs
 ```
 
-日志将写入：
+实际日志会写入：
 
 ```text
 /data/uwnav_logs/YYYY-MM-DD/imu.bin
@@ -167,56 +230,55 @@ Usage: uwnav_navd [options]
 /data/uwnav_logs/YYYY-MM-DD/eskf.bin
 ```
 
-#### 示例 3：结合 tmux 长时间运行
+#### 示例：使用 tmux 做长时间实验
 
 ```bash
 tmux new -s navd
+cd ~/Underwater-robot-navigation/nav_core/build
 ./uwnav_navd --log-dir /data/uwnav_logs
-# 实验完成后按 Ctrl+C 停止，再退出 tmux
+# 实验结束后 Ctrl+C 停止，再退出 tmux
 ```
 
 ---
 
-## 4. 日志目录结构
+## 5. 日志目录结构与文件说明
 
-导航进程运行时，会根据当前日期自动创建：
+进程运行时，会按当前日期创建日志目录。以默认 `./logs` 为例：
 
 ```text
-<nav_core>/build/
+nav_core/build/
 └── logs/
     └── YYYY-MM-DD/
-         ├── imu.bin    ← IMU 日志（二进制）
-         ├── dvl.bin    ← DVL 日志（二进制）
-         └── eskf.bin   ← ESKF 状态（二进制）
+         ├── imu.bin    ← IMU 原始数据序列
+         ├── dvl.bin    ← DVL 速度观测序列
+         └── eskf.bin   ← ESKF 状态估计序列
 ```
 
-如果通过 `--log-dir` 指定了其它路径，例如 `/data/uwnav_logs`，结构类似：
+如果通过 `--log-dir` 指定为 `/data/uwnav_logs`，则为：
 
 ```text
-/data/uwnav_logs/
+/ data/uwnav_logs/
 └── YYYY-MM-DD/
      ├── imu.bin
      ├── dvl.bin
      └── eskf.bin
 ```
 
-每个 `.bin` 文件是 **定长结构体序列**，可以用 Python、C++ 等按照结构定义逐条读取，进行离线分析。
+三个 `.bin` 文件均由定长结构体顺序写入，紧凑布局（1 字节对齐），便于用 C++/Python 按结构解析。
 
 ---
 
-## 5. 二进制日志格式说明
+## 6. 二进制日志结构定义
 
-所有日志包均采用 `#pragma pack(push, 1)` 对齐，即 **紧凑布局，无填充**。
+以下为 `uwnav_navd` 代码中使用的日志结构体定义（`#pragma pack(push, 1)` 对齐）。
 
-### 5.1 IMU 日志 imu.bin
-
-对应 C++ 结构体：
+### 6.1 IMU 日志：`imu.bin`
 
 ```cpp
 #pragma pack(push, 1)
 struct ImuLogPacket {
-    int64_t mono_ns;        // 单调时钟时间戳（纳秒）
-    int64_t est_ns;         // 估计的“墙钟”时间（纳秒）
+    int64_t mono_ns;        // 单调时钟时间戳（ns）
+    int64_t est_ns;         // 估计的墙钟时间（ns）
     float   lin_acc[3];     // 线加速度 [ax, ay, az] (m/s^2)
     float   ang_vel[3];     // 角速度   [gx, gy, gz] (rad/s)
     float   euler[3];       // 欧拉角   [roll, pitch, yaw] (rad)
@@ -227,147 +289,149 @@ struct ImuLogPacket {
 #pragma pack(pop)
 ```
 
-字段说明：
+要点：
 
 * `mono_ns`：
-  使用 `timebase::stamp()` 生成的单调时钟时间（不回跳），适合做积分与差值。
+
+  * 单调递增的时间戳，用于积分、插值、对齐 ESKF 内部时间。
 * `est_ns`：
-  同一时刻在“估计墙钟”上的时间戳，用于与其他进程/设备对齐。
-* `lin_acc`：
-  由 IMU 原始寄存器加速度换算而来，单位为 `m/s^2`。
-* `ang_vel`：
-  由 IMU 原始角速度换算而来，单位为 `rad/s`。
-* `euler`：
-  由高精度 Roll/Pitch/Yaw 寄存器解算而来，单位为 `rad`。
-* `temperature`：
-  IMU 内部温度，单位 `°C`。
+
+  * 对外对齐使用的“估计墙钟”时间戳，用于和其他进程 / 设备数据对齐。
+* `lin_acc` / `ang_vel` / `euler`：
+
+  * 已经按物理单位换算。
 * `valid`：
-  传感器数据是否通过滤波与范围检查。
 
-一个典型的 CPU 上，`sizeof(ImuLogPacket)` 为 72 字节（以实际编译为准）。
+  * 来自 IMU 质量过滤结果（`ImuFilterConfig` 控制阈值）。
 
-### 5.2 DVL 日志 dvl.bin
-
-对应 C++ 结构体：
+### 6.2 DVL 日志：`dvl.bin`
 
 ```cpp
 #pragma pack(push, 1)
 struct DvlLogPacket {
-    int64_t mono_ns;    // 单调时钟时间戳（纳秒）
-    int64_t est_ns;     // 估计墙钟时间（纳秒）
-    float   vel[3];     // DVL 三轴速度 [ve, vn, vu] (m/s)
-    int32_t valid;      // 1=有效(A), 0=无效(V), 其它值保留
-    int32_t quality;    // 暂未使用，预留质量指标
+    int64_t mono_ns;    // 单调时钟时间戳（ns）
+    int64_t est_ns;     // 估计墙钟时间（ns）
+    float   vel[3];     // 速度 [vx, vy, vz] (m/s) - 坐标系由 DVL 驱动约定
+    int32_t valid;      // 1=有效(A), 0=无效(V)
+    int32_t quality;    // 预留质量指标（当前版本暂不使用）
 };
 #pragma pack(pop)
 ```
 
-字段说明：
+说明：
 
 * `vel[3]`：
-  由 DVL PD6/EPD6 速度帧解析得到，单位为 `m/s`，坐标系为设备定义的 ENU 或相关约定（后续可在文档中进一步细化）。
+
+  * 源自 PD6/EPD6 解析结果，单位 `m/s`。
+  * 坐标系（ENU / NED 等）在 DVL 驱动文档中约定。
 * `valid`：
-  对应 PD6 帧中的 `A` / `V` 标志，1 表示底跟踪成功，0 表示失锁。
-* `quality`：
-  当前版本暂未使用，预留给后续 DVL 质量字段（如相关系数、波束数量等）。
 
-### 5.3 ESKF 状态日志 eskf.bin
+  * 映射自 DVL 报文中的 `A` / `V` 标志。
 
-对应 C++ 结构体：
+### 6.3 ESKF 状态日志：`eskf.bin`
 
 ```cpp
 #pragma pack(push, 1)
 struct EskfLogPacket {
-    int64_t mono_ns;       // 单调时钟时间戳（纳秒）
-    int64_t est_ns;        // 估计墙钟时间（纳秒）
-    float   pos[3];        // 位置 [x, y, z] (m)，坐标系由 ESKF 配置决定
+    int64_t mono_ns;       // 单调时钟时间戳（ns）
+    int64_t est_ns;        // 估计墙钟时间（ns）
+    float   pos[3];        // 位置 [x, y, z] (m)
     float   vel[3];        // 速度 [vx, vy, vz] (m/s)
     float   euler[3];      // 姿态 [roll, pitch, yaw] (rad)
     float   bias_accel[3]; // 加速度零偏估计 (m/s^2)
     float   bias_gyro[3];  // 陀螺零偏估计 (rad/s)
-    uint8_t valid;         // 1=当前状态有效
-    uint8_t status;        // 状态/故障码，低 8 位
+    uint8_t valid;         // 1=状态有效
+    uint8_t status;        // 状态码（bitmask 用于诊断）
     uint8_t reserved[2];   // 保留对齐
 };
 #pragma pack(pop)
 ```
 
-字段说明：
+说明：
 
-* `pos`：
-  当前估计的位置，单位 `m`，可为 ENU、NED 或机体系积分坐标，取决于 `EskfConfig` 的具体实现。
-* `vel`：
-  当前估计的速度，单位 `m/s`。
-* `euler`：
-  当前估计的姿态（滚转、俯仰、偏航），单位 `rad`。
+* `pos` / `vel` / `euler`：
+
+  * ESKF 时刻对应的状态估计，单位分别为 m / m/s / rad。
 * `bias_accel` / `bias_gyro`：
-  对 IMU 加速度/陀螺零偏的估计，用于后续分析传感器稳定性。
+
+  * 对 IMU 偏置的在线估计，有助于分析传感器长时间漂移。
 * `status`：
-  预留槽位，可用于标记滤波器状态（稳定、初始化、失效等）。
+
+  * 预留状态位（例如：初始化中 / 正常 / 观测缺失 / DVL 失锁等）。
 
 ---
 
-## 6. 离线解析建议
+## 7. 离线解析与工具链
 
-### 6.1 用 Python 解析 `.bin`
+### 7.1 C++ 工具：`dump_imu_bin`（可选）
 
-可以在 `apps/tools/` 下编写 Python 工具，例如 `navcore_log_reader.py`，使用 `struct` 模块按上述结构解包：
+若 CMake 构建时开启了 `BUILD_NAV_TOOLS=ON`（默认），会生成 `dump_imu_bin` 工具：
+
+```bash
+cd ~/Underwater-robot-navigation/nav_core/build
+./dump_imu_bin \
+    --imu logs/2025-11-25/imu.bin \
+    --dvl logs/2025-11-25/dvl.bin \
+    --eskf logs/2025-11-25/eskf.bin \
+    --out imu_dump.csv
+```
+
+具体命令行参数以源码中 `dump_imu_bin.cpp` 为准，可根据需要扩展为输出 CSV / TXT 等格式。
+
+### 7.2 Python 解析示例
+
+使用 Python 的 `struct` 模块也可以快速解析 `.bin`，例如解析 IMU 日志：
 
 ```python
 import struct
 
-IMU_FMT = "<qqffffffffB3x"  # little-endian, 按 ImuLogPacket 顺序
+IMU_FMT = "<qqffffffffB3x"   # 小端，对应 ImuLogPacket
 IMU_SIZE = struct.calcsize(IMU_FMT)
 
 with open("logs/2025-11-25/imu.bin", "rb") as f:
-    data = f.read()
+    idx = 0
+    while True:
+        chunk = f.read(IMU_SIZE)
+        if not chunk:
+            break
+        (mono_ns, est_ns,
+         ax, ay, az,
+         gx, gy, gz,
+         roll, pitch, yaw,
+         temp, valid) = struct.unpack(IMU_FMT, chunk)
 
-n = len(data) // IMU_SIZE
-for i in range(n):
-    chunk = data[i*IMU_SIZE:(i+1)*IMU_SIZE]
-    (mono_ns, est_ns,
-     ax, ay, az,
-     gx, gy, gz,
-     roll, pitch, yaw,
-     temp, valid) = struct.unpack(IMU_FMT, chunk)
-    # 在此处进行绘图或保存到 CSV
+        # 这里可以写入 CSV 或直接画图
+        # ...
+        idx += 1
 ```
 
-DVL 和 ESKF 同理，只需按各自的结构体定义格式串。
-
-### 6.2 与 Python 采集的 CSV 对齐
-
-本 C++ 导航进程产出的 `.bin` 文件主要用于：
-
-* 验证 ESKF 状态估计算法；
-* 与 Python 采集的原始 IMU / DVL CSV 做对比；
-* 为后续 MPC / RL 等算法提供更高质量的状态标签。
-
-推荐做法：
-
-1. 使用 `est_ns` 与 Python 侧的时间戳（例如 UNIX 秒或纳秒）对齐；
-2. 将 `.bin` 转为 CSV 后，与 `data/YYYY-MM-DD/aligned/` 下的对齐数据联合分析。
+DVL 和 ESKF 的解析，只需根据对应结构体调整 format 字符串即可。
 
 ---
 
-## 7. 常见问题与排查
+## 8. 常见问题与排查建议
 
-1. **程序启动后无任何日志文件产生？**
+1. **程序启动后未生成任何日志文件**
 
-   * 检查 `--log-dir` 指定目录是否有写权限；
-   * 确认 `uwnav_navd` 所在工作目录为 `nav_core/build`；
-   * 确认程序是否真的在运行（如使用 `ps`, `htop`）。
+   * 确认当前工作目录为 `nav_core/build`（相对路径的 `./logs` 会受影响）。
+   * 检查指定的 `--log-dir` 是否存在写权限（例如使用 `ls -ld <dir>`）。
+   * 使用 `ps`, `htop` 确认 `uwnav_navd` 是否仍在运行。
 
-2. **日志文件存在，但文件大小为 0？**
+2. **日志文件存在，但文件大小为 0 或极小**
 
-   * 确认 IMU / DVL 串口配置正确（端口、波特率、地址）；
-   * 检查串口是否被其它进程占用（如 Python 采集脚本）；
-   * 增加简单调试输出（可临时在回调中打印计数）。
+   * 检查串口是否配置正确：
 
-3. **IMU / DVL 状态错误 / 噪声异常大？**
+     * `--imu-port` / `--imu-baud`
+     * `--dvl-port` / `--dvl-baud`
+   * 确认没有其他进程占用同一串口（例如 Python 测试脚本）。
+   * 可在 IMU/DVL 回调中临时加计数输出（调试阶段）。
 
-   * 确认滤波配置（`ImuFilterConfig` / `DvlFilterConfig`）是否过于宽松或过紧；
-   * 检查传感器安装方向、接线与供电；
-   * 使用 Python 侧的 `imu_data_verifier.py` / `dvl_data_verifier.py` 对比输出。
+3. **ESKF 输出异常（位置发散、姿态跳变）**
+
+   * 检查 IMU 安装方向与坐标系定义是否与代码约定一致。
+   * 确认 ESKF 配置（噪声标准差、重力方向）合理。
+   * 对照 `imu.bin` / `dvl.bin` 单独画图，先确认原始观测是否正常。
 
 ---
+
+```
