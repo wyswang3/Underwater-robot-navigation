@@ -44,10 +44,17 @@ RM = /usr/bin/cmake -E remove -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
+<<<<<<< HEAD
 CMAKE_SOURCE_DIR = /home/wys/Underwater-robot-navigation/nav_core
 
 # The top-level build directory on which CMake was run.
 CMAKE_BINARY_DIR = /home/wys/Underwater-robot-navigation/nav_core/build
+=======
+CMAKE_SOURCE_DIR = /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core
+
+# The top-level build directory on which CMake was run.
+CMAKE_BINARY_DIR = /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build
+>>>>>>> collaborator_IMU_DVL
 
 #=============================================================================
 # Directory level rules for the build root directory
@@ -76,14 +83,24 @@ clean: CMakeFiles/nav_core.dir/clean
 CMakeFiles/uwnav_navd.dir/all: CMakeFiles/nav_core.dir/all
 	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/depend
 	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/build
+<<<<<<< HEAD
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=8,9 "Built target uwnav_navd"
+=======
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles --progress-num=8,9 "Built target uwnav_navd"
+>>>>>>> collaborator_IMU_DVL
 .PHONY : CMakeFiles/uwnav_navd.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/uwnav_navd.dir/rule: cmake_check_build_system
+<<<<<<< HEAD
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles 9
 	$(MAKE) -f CMakeFiles/Makefile2 CMakeFiles/uwnav_navd.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles 0
+=======
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles 9
+	$(MAKE) -f CMakeFiles/Makefile2 CMakeFiles/uwnav_navd.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles 0
+>>>>>>> collaborator_IMU_DVL
 .PHONY : CMakeFiles/uwnav_navd.dir/rule
 
 # Convenience name for target.
@@ -103,14 +120,24 @@ CMakeFiles/uwnav_navd.dir/clean:
 CMakeFiles/nav_core.dir/all:
 	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/depend
 	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/build
+<<<<<<< HEAD
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=1,2,3,4,5,6,7 "Built target nav_core"
+=======
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles --progress-num=1,2,3,4,5,6,7 "Built target nav_core"
+>>>>>>> collaborator_IMU_DVL
 .PHONY : CMakeFiles/nav_core.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/nav_core.dir/rule: cmake_check_build_system
+<<<<<<< HEAD
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles 7
 	$(MAKE) -f CMakeFiles/Makefile2 CMakeFiles/nav_core.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles 0
+=======
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles 7
+	$(MAKE) -f CMakeFiles/Makefile2 CMakeFiles/nav_core.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles 0
+>>>>>>> collaborator_IMU_DVL
 .PHONY : CMakeFiles/nav_core.dir/rule
 
 # Convenience name for target.

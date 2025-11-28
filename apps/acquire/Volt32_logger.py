@@ -26,6 +26,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List
 
+<<<<<<< HEAD
+=======
+import sys
+from pathlib import Path
+# 获取当前脚本的绝对路径
+# .parents[0] 是当前目录, .parents[1] 是 apps, .parents[2] 是项目根目录
+project_root = Path(__file__).resolve().parents[2]
+sys.path.append(str(project_root))
+
+>>>>>>> collaborator_IMU_DVL
 from uwnav.io.timebase import stamp, SensorKind
 from uwnav.drivers.imu.WitHighModbus.serial_io_tools import SerialReaderThread
 

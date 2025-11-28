@@ -48,10 +48,17 @@ RM = /usr/bin/cmake -E remove -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
+<<<<<<< HEAD
 CMAKE_SOURCE_DIR = /home/wys/Underwater-robot-navigation/nav_core
 
 # The top-level build directory on which CMake was run.
 CMAKE_BINARY_DIR = /home/wys/Underwater-robot-navigation/nav_core/build
+=======
+CMAKE_SOURCE_DIR = /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core
+
+# The top-level build directory on which CMake was run.
+CMAKE_BINARY_DIR = /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build
+>>>>>>> collaborator_IMU_DVL
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -80,9 +87,15 @@ edit_cache/fast: edit_cache
 
 # The main all target
 all: cmake_check_build_system
+<<<<<<< HEAD
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles/progress.marks
 	$(MAKE) -f CMakeFiles/Makefile2 all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles 0
+=======
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles/progress.marks
+	$(MAKE) -f CMakeFiles/Makefile2 all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles 0
+>>>>>>> collaborator_IMU_DVL
 .PHONY : all
 
 # The main clean target

@@ -4,14 +4,15 @@
 """
 apps/tools/imu_data_verifier.py   (timebase 统一版)
 
-更新要点：
-- IMU 采样时间全部改为：
+要点：
+- 所有时间戳来自统一时间基：
       ts = stamp("imu0", SensorKind.IMU)
       mono_ns = ts.host_time_ns
       est_ns  = ts.corrected_time_ns
-- 滤波器 dt 使用 mono_s（稳定、连续、无回拨）
-- CSV 输出格式统一：
-      MonoNS, EstNS, MonoS, EstS, ...
+- 滤波器 RealTimeIMUFilter 的 timestamp 使用 mono_s（单调、不回拨）：
+      mono_s = mono_ns * 1e-9
+- 原始 CSV：记录双时间戳 + 加速度 + 陀螺 + 欧拉角 + 温度
+- 滤波 CSV：记录双时间戳 + 滤波后加速度/陀螺 + 积分得到的 yaw_f(deg)
 """
 
 from __future__ import annotations
@@ -28,61 +29,81 @@ from typing import Optional
 
 import numpy as np
 
-from uwnav.io.timebase import stamp, SensorKind   # ★ 新 API
+from uwnav.io.timebase import stamp, SensorKind
 from uwnav.drivers.imu.WitHighModbus import device_model
 from uwnav.drivers.imu.WitHighModbus.filters import RealTimeIMUFilter
 from uwnav.io.data_paths import get_sensor_outdir
 
 # ---- 默认参数 ----
-DEFAULT_FS = 100.0       # 滤波器参考频率
-DEFAULT_CUTOFF = 6.0
-QUEUE_SIZE = 2000
-WARN_IF_IDLE_SEC = 3.0
-FLUSH_PERIOD_SEC = 0.5
-DEBUG_PRINT_EVERY = 25
+DEFAULT_FS = 100.0       # 期望采样频率 (Hz)，用于滤波器内部 dt 估计
+DEFAULT_CUTOFF = 6.0     # 低通截止频率 (Hz)
+QUEUE_SIZE = 2000        # 回调 → 后台线程 的队列容量
+WARN_IF_IDLE_SEC = 3.0   # N 秒没有新数据则报警
+FLUSH_PERIOD_SEC = 0.5   # CSV 周期性 flush 间隔 (s)
+DEBUG_PRINT_EVERY = 25   # 每 N 帧打印一次原始信息 (0=不打印)
 # -------------------
+
 
 @dataclass
 class IMUSample:
-    mono_ns: int
-    est_ns: int
-    acc: np.ndarray
-    gyr: np.ndarray
+    """
+    一帧 IMU 数据（已带统一时间戳）
+    """
+    mono_ns: int                    # 单调时间 (ns)
+    est_ns: int                     # 估计实时时间 (ns)
+    acc: np.ndarray                 # (3,) 线加速度（原始单位：1g）
+    gyr_dps: np.ndarray             # (3,) 角速度（deg/s）
+    euler_deg: Optional[np.ndarray] # (3,) 欧拉角（deg），若无则为 None
+    temp_c: Optional[float]         # 温度 (℃)，若无则为 None
 
     @property
-    def mono_s(self):
+    def mono_s(self) -> float:
         return self.mono_ns * 1e-9
 
     @property
-    def est_s(self):
+    def est_s(self) -> float:
         return self.est_ns * 1e-9
 
 
 class IMURecorder:
-    def __init__(self, port: str, baud: int, addr: int,
-                 fs: float = DEFAULT_FS, cutoff: float = DEFAULT_CUTOFF,
+    def __init__(self,
+                 port: str,
+                 baud: int,
+                 addr: int,
+                 fs: float = DEFAULT_FS,
+                 cutoff: float = DEFAULT_CUTOFF,
                  outdir: Optional[str] = None):
 
         self.port = port
         self.baud = baud
         self.addr = addr
 
-        # 实时滤波器
-        self.filter = RealTimeIMUFilter(fs=fs, cutoff=cutoff, calibrate=True)
+        # 实时滤波器（你的 filters.py 实现）
+        self.filter = RealTimeIMUFilter(
+            fs=fs,
+            cutoff=cutoff,
+            calibrate=True,       # 启动期 1s 校准
+            calib_seconds=1.0,
+            second_order=False,   # 可按需要改 True
+            clamp_gyro_dps=0.0,   # 有需要可加陀螺幅值夹持
+        )
 
-        # 数据结构
-        self.dev = None
+        # 设备句柄
+        self.dev: Optional[device_model.DeviceModel] = None
+
+        # 回调队列：回调线程只负责塞数据，后台线程做滤波+写盘
         self.q: Queue[IMUSample] = Queue(maxsize=QUEUE_SIZE)
         self.stop_evt = threading.Event()
-        self.worker = None
+        self.worker: Optional[threading.Thread] = None
 
-        self.last_rx_est_s = 0.0
+        # 统计
+        self.last_rx_est_s: float = 0.0
         self.n_recv = 0
         self.n_drop = 0
         self.n_wraw = 0
         self.n_wfilt = 0
 
-        # 输出
+        # CSV 输出
         self.raw_f = None
         self.raw_w = None
         self.flt_f = None
@@ -100,22 +121,28 @@ class IMURecorder:
             self.flt_f = open(flt_path, "a", newline="", encoding="utf-8")
             self.flt_w = csv.writer(self.flt_f)
 
+            # 原始 CSV 头
             if self.raw_f.tell() == 0:
                 self.raw_w.writerow([
-                    "MonoNS","EstNS","MonoS","EstS",
-                    "AccX","AccY","AccZ",
-                    "GyrX(deg/s)","GyrY(deg/s)","GyrZ(deg/s)"
+                    "MonoNS", "EstNS", "MonoS", "EstS",
+                    "AccX(g)", "AccY(g)", "AccZ(g)",
+                    "GyrX(deg/s)", "GyrY(deg/s)", "GyrZ(deg/s)",
+                    "Roll(deg)", "Pitch(deg)", "Yaw(deg)",
+                    "Temp(C)",
                 ])
+
+            # 滤波 CSV 头
             if self.flt_f.tell() == 0:
                 self.flt_w.writerow([
-                    "MonoNS","EstNS","MonoS","EstS",
-                    "AccX_f","AccY_f","AccZ_f",
-                    "GyrX_f","GyrY_f","GyrZ_f",
-                    "Yaw_f(deg)"
+                    "MonoNS", "EstNS", "MonoS", "EstS",
+                    "AccX_f(g)", "AccY_f(g)", "AccZ_f(g)",
+                    "GyrX_f(deg/s)", "GyrY_f(deg/s)", "GyrZ_f(deg/s)",
+                    "Yaw_f(deg)",
                 ])
 
     # ---------- 设备 ----------
-    def open(self):
+
+    def open(self) -> None:
         if self.dev:
             return
 
@@ -124,13 +151,13 @@ class IMURecorder:
             portName=self.port,
             baud=self.baud,
             ADDR=self.addr,
-            callback_method=self._on_sample,
+            callback_method=self._on_sample,  # 底层回调
         )
         self.dev.openDevice()
         self.dev.startLoopRead()
         print(f"[IMU] open {self.port} @ {self.baud}")
 
-    def close(self):
+    def close(self) -> None:
         if self.dev:
             try:
                 self.dev.stopLoopRead()
@@ -139,44 +166,82 @@ class IMURecorder:
                 self.dev = None
 
         if self.raw_f:
-            try: self.raw_f.flush()
-            except: pass
+            try:
+                self.raw_f.flush()
+            except Exception:
+                pass
             self.raw_f.close()
             self.raw_f = None
 
         if self.flt_f:
-            try: self.flt_f.flush()
-            except: pass
+            try:
+                self.flt_f.flush()
+            except Exception:
+                pass
             self.flt_f.close()
             self.flt_f = None
 
-    # ---------- 轻量回调 ----------
-    def _on_sample(self, data: dict):
+    # ---------- 轻量回调：只负责取数 + 入队 ----------
+
+    def _on_sample(self, data: dict) -> None:
         if self.stop_evt.is_set():
             return
 
-        # ★ 新的时间 API
+        # 统一时间基
         ts = stamp("imu0", SensorKind.IMU)
         mono_ns = ts.host_time_ns
-        est_ns  = ts.corrected_time_ns
+        est_ns = ts.corrected_time_ns
 
         try:
-            acc = np.array([data.get("AccX"), data.get("AccY"), data.get("AccZ")], float)
-            gyr = np.array([data.get("AsX"),  data.get("AsY"),  data.get("AsZ")],  float)
+            # 线加速度（原始单位 1g）
+            acc = np.array([
+                data.get("AccX"),
+                data.get("AccY"),
+                data.get("AccZ"),
+            ], dtype=float)
+
+            # 角速度（deg/s）
+            gyr = np.array([
+                data.get("AsX"),
+                data.get("AsY"),
+                data.get("AsZ"),
+            ], dtype=float)
+
+            # 欧拉角（deg），有就记录，无就 None
+            if all(k in data for k in ("AngleX", "AngleY", "AngleZ")):
+                euler = np.array([
+                    data.get("AngleX"),
+                    data.get("AngleY"),
+                    data.get("AngleZ"),
+                ], dtype=float)
+            else:
+                euler = None
+
+            # 温度（°C），可选
+            temp_raw = data.get("Temp")
+            temp_c: Optional[float] = float(temp_raw) if temp_raw is not None else None
+
         except Exception:
             return
 
-        s = IMUSample(mono_ns, est_ns, acc, gyr)
+        s = IMUSample(
+            mono_ns=mono_ns,
+            est_ns=est_ns,
+            acc=acc,
+            gyr_dps=gyr,
+            euler_deg=euler,
+            temp_c=temp_c,
+        )
 
-        # 非阻塞入队（满了丢最老）
+        # 非阻塞入队：满了就丢最老，再放新样本
         try:
             self.q.put_nowait(s)
-        except:
+        except Exception:
             try:
                 _ = self.q.get_nowait()
                 self.n_drop += 1
                 self.q.put_nowait(s)
-            except:
+            except Exception:
                 self.n_drop += 1
                 return
 
@@ -184,63 +249,104 @@ class IMURecorder:
         self.last_rx_est_s = s.est_s
 
         if DEBUG_PRINT_EVERY and (self.n_recv % DEBUG_PRINT_EVERY == 0):
-            print(f"[RECV] n={self.n_recv} acc={np.round(acc,3)} gyr={np.round(gyr,3)} est_s={s.est_s:.6f}")
+            print(
+                f"[RECV] n={self.n_recv} "
+                f"acc={np.round(acc, 3)} "
+                f"gyr={np.round(gyr, 3)} "
+                f"est_s={s.est_s:.6f}"
+            )
 
-    # ---------- 后台处理线程 ----------
-    def start(self):
+    # ---------- 后台线程：滤波 + 写盘 ----------
+
+    def start(self) -> None:
         if self.worker and self.worker.is_alive():
             return
         self.stop_evt.clear()
-        self.worker = threading.Thread(target=self._loop, daemon=True)
+        self.worker = threading.Thread(
+            target=self._loop,
+            name="IMURecorder.worker",
+            daemon=True,
+        )
         self.worker.start()
 
-    def stop(self, timeout=1.0):
+    def stop(self, timeout: float = 1.0) -> None:
         self.stop_evt.set()
         if self.worker and self.worker.is_alive():
             self.worker.join(timeout=timeout)
 
-    def _loop(self):
+    def _loop(self) -> None:
         last_flush = time.time()
+        calib_done_reported = False  # 打印一次“校准完成”提示
 
         while not self.stop_evt.is_set():
             try:
                 s = self.q.get(timeout=0.1)
             except Empty:
                 if self.last_rx_est_s and (time.time() - self.last_rx_est_s > WARN_IF_IDLE_SEC):
-                    print(f"[IMU] idle > {WARN_IF_IDLE_SEC}s — check device.")
+                    print(f"[IMU] idle > {WARN_IF_IDLE_SEC:.1f}s — check device/port/baud.")
                 continue
 
-            # 滤波器使用单调秒 dt
-            out = self.filter.process_sample(s.mono_s, s.acc, s.gyr)
+            # 1) 滤波器：时间轴使用 mono_s（连续、不回拨）
+            out = self.filter.process_sample(
+                timestamp=s.mono_s,
+                accel_sample=s.acc,
+                gyro_sample_dps=s.gyr_dps,
+            )
 
-            # 写 raw
+            # 只要 filter 不再返回 None，认为校准结束
+            if (not calib_done_reported) and (out is not None):
+                print("[IMU] RealTimeIMUFilter calibration done, start outputting filtered data.")
+                calib_done_reported = True
+
+            # 2) 原始数据：无论是否校准完成都写（后处理可自己决定从哪一段开始用）
             if self.raw_w:
+                if s.euler_deg is not None:
+                    roll, pitch, yaw = s.euler_deg.tolist()
+                else:
+                    roll = pitch = yaw = float("nan")
+
+                temp_c = float("nan") if s.temp_c is None else float(s.temp_c)
+
                 self.raw_w.writerow([
-                    s.mono_ns, s.est_ns, s.mono_s, s.est_s,
-                    *s.acc.tolist(), *s.gyr.tolist(),
+                    s.mono_ns,
+                    s.est_ns,
+                    s.mono_s,
+                    s.est_s,
+                    *s.acc.tolist(),
+                    *s.gyr_dps.tolist(),
+                    roll, pitch, yaw,
+                    temp_c,
                 ])
                 self.n_wraw += 1
 
-            # 写 filtered
+            # 3) 滤波数据：只有 out 非 None（校准完成后）才写
             if out is not None and self.flt_w:
-                acc_f, gyr_f, yaw_deg = out
+                acc_f, gyr_f_dps, yaw_deg = out
                 self.flt_w.writerow([
-                    s.mono_ns, s.est_ns, s.mono_s, s.est_s,
-                    *acc_f.tolist(), *gyr_f.tolist(), float(yaw_deg),
+                    s.mono_ns,
+                    s.est_ns,
+                    s.mono_s,
+                    s.est_s,
+                    *acc_f.tolist(),
+                    *gyr_f_dps.tolist(),
+                    float(yaw_deg),
                 ])
                 self.n_wfilt += 1
 
-            # 定期 flush
+            # 4) 定期 flush
             if (time.time() - last_flush) >= FLUSH_PERIOD_SEC:
                 try:
-                    if self.raw_f: self.raw_f.flush()
-                    if self.flt_f: self.flt_f.flush()
-                except:
+                    if self.raw_f:
+                        self.raw_f.flush()
+                    if self.flt_f:
+                        self.flt_f.flush()
+                except Exception:
                     pass
                 last_flush = time.time()
 
     # ---------- 统计 ----------
-    def stats(self):
+
+    def stats(self) -> dict:
         return {
             "recv": self.n_recv,
             "drop": self.n_drop,
@@ -250,26 +356,27 @@ class IMURecorder:
 
 
 # ---------- CLI ----------
-def make_argparser():
+
+def make_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="IMU HWT9073-485 logger (raw + filtered) [timebase unified]"
     )
-    ap.add_argument("--port", default="/dev/ttyUSB1")
-    ap.add_argument("--baud", type=int, default=230400)
-    ap.add_argument("--addr", type=lambda x: int(x, 0), default=0x50)
-    ap.add_argument("--fs", type=float, default=DEFAULT_FS)
-    ap.add_argument("--cutoff", type=float, default=DEFAULT_CUTOFF)
-    ap.add_argument("--outdir", default=None)
-    ap.add_argument("--log-every", type=int, default=DEBUG_PRINT_EVERY)
+    ap.add_argument("--port", default="/dev/ttyUSB1", help="Serial port, e.g. /dev/ttyUSB0 or COM6")
+    ap.add_argument("--baud", type=int, default=230400, help="Baudrate (default 230400)")
+    ap.add_argument("--addr", type=lambda x: int(x, 0), default=0x50, help="Modbus address (hex like 0x50)")
+    ap.add_argument("--fs", type=float, default=DEFAULT_FS, help="Filter sample freq (Hz)")
+    ap.add_argument("--cutoff", type=float, default=DEFAULT_CUTOFF, help="Low-pass cutoff (Hz)")
+    ap.add_argument("--outdir", default=None, help="Data root directory (default=<repo_root>/data)")
+    ap.add_argument("--log-every", type=int, default=DEBUG_PRINT_EVERY, help="Print every N frames (0=off)")
     return ap
 
 
-def main():
+def main() -> None:
     args = make_argparser().parse_args()
     global DEBUG_PRINT_EVERY
     DEBUG_PRINT_EVERY = max(0, int(args.log_every))
 
-    # 保存路径（统一）
+    # data/YYYY-MM-DD/imu/
     sensor_outdir = get_sensor_outdir("imu", args.outdir)
 
     rec = IMURecorder(
@@ -282,9 +389,11 @@ def main():
     )
 
     stop_evt = threading.Event()
+
     def _on_sig(sig, frame):
         print("[SYS] Signal received, exiting...")
         stop_evt.set()
+
     signal.signal(signal.SIGINT, _on_sig)
     signal.signal(signal.SIGTERM, _on_sig)
 
@@ -296,7 +405,13 @@ def main():
             time.sleep(1.0)
             st = rec.stats()
             age = float("inf") if rec.last_rx_est_s == 0 else (time.time() - rec.last_rx_est_s)
-            print(f"[STAT] recv={st['recv']} drop={st['drop']} wraw={st['wraw']} wfilt={st['wfilt']} idle={age:.2f}s")
+            print(
+                f"[STAT] recv={st['recv']} "
+                f"drop={st['drop']} "
+                f"wraw={st['wraw']} "
+                f"wfilt={st['wfilt']} "
+                f"idle={age:.2f}s"
+            )
     finally:
         rec.stop()
         rec.close()

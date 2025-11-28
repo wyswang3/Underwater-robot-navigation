@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # Install script for directory: /home/wys/Underwater-robot-navigation/nav_core
+=======
+# Install script for directory: /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core
+>>>>>>> collaborator_IMU_DVL
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -45,5 +49,9 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
+<<<<<<< HEAD
 file(WRITE "/home/wys/Underwater-robot-navigation/nav_core/build/${CMAKE_INSTALL_MANIFEST}"
+=======
+file(WRITE "/home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/${CMAKE_INSTALL_MANIFEST}"
+>>>>>>> collaborator_IMU_DVL
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")

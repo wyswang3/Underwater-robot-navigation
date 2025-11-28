@@ -54,7 +54,11 @@ inline std::string trim(const std::string& s) {
     return s.substr(b, e - b);
 }
 
+<<<<<<< HEAD
 // 安全 atoi（返回 bool）
+=======
+// 安全 atoi（返回 bool） 
+>>>>>>> collaborator_IMU_DVL
 inline bool safeAtoi(const std::string& tok, double& out) {
     std::string t = trim(tok);
     if (t.empty()) return false;
@@ -458,7 +462,12 @@ bool DvlDriver::parseLine(const std::string& line, DvlRawData& out_raw) {
 }
 
 
+<<<<<<< HEAD
 bool DvlDriver::passFilter(const DvlRawData& raw, DvlFrame& out_frame) {
+=======
+bool DvlDriver::passFilter(const DvlRawData& raw, DvlFrame& out_frame) 
+{
+>>>>>>> collaborator_IMU_DVL
     DvlFilterConfig cfg = filter_cfg_; // 拷贝一份，避免读写竞争
 
     // 1) only_valid_flag: 只接受 valid==A
@@ -511,4 +520,26 @@ bool DvlDriver::passFilter(const DvlRawData& raw, DvlFrame& out_frame) {
     out_frame.quality = 0; // 未来加入 DVL 质量字段时再更新
 
     return true;
+<<<<<<< HEAD
+=======
+}
+
+// >>>>> 在这里插入 handleRawSample 函数 >>>>>
+void DvlDriver::handleRawSample(const DvlRawData& raw) {
+    if (on_raw_) {
+        on_raw_(raw);
+    }
+
+    DvlFrame frame;
+    if (passFilter(raw, frame)) {
+        if (on_frame_) {
+            on_frame_(frame);
+        }
+    } else {
+        n_filtered_out_++;
+    }
+}
+// <<<<< 插入结束 <<<<<
+
+>>>>>>> collaborator_IMU_DVL
 }

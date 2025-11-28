@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <cerrno>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -12,9 +13,14 @@
 
 namespace nav_core {
 
+namespace {
+
 // ========== 小工具：判断目录是否存在 ==========
-static bool dirExists(const std::string& path) {
-    if (path.empty()) return false;
+bool dirExists(const std::string& path)
+{
+    if (path.empty()) {
+        return false;
+    }
 
     struct stat st{};
     if (stat(path.c_str(), &st) != 0) {
@@ -24,18 +30,23 @@ static bool dirExists(const std::string& path) {
 }
 
 // ========== 小工具：创建单层目录 ==========
-static bool makeDir(const std::string& path) {
-    if (path.empty()) return false;
-    if (dirExists(path)) return true;
+bool makeDir(const std::string& path)
+{
+    if (path.empty()) {
+        return false;
+    }
+    if (dirExists(path)) {
+        return true;
+    }
 
 #ifdef _WIN32
-    int ret = _mkdir(path.c_str());
+    const int ret = _mkdir(path.c_str());
 #else
-    int ret = mkdir(path.c_str(), 0755);
+    const int ret = mkdir(path.c_str(), 0755);
 #endif
 
     if (ret != 0 && errno != EEXIST) {
-        std::cerr << "[BinLogger] mkdir(" << path << ") failed: "
+        std::cerr << "[BinLogger] mkdir('" << path << "') failed: "
                   << std::strerror(errno) << "\n";
         return false;
     }
@@ -43,49 +54,67 @@ static bool makeDir(const std::string& path) {
 }
 
 // ========== 小工具：递归创建目录（mkdir -p）==========
-static bool ensureDirForFile(const std::string& filepath) {
-    // 找到最后一个 / 或 \
-    std::size_t pos = filepath.find_last_of("/\\");
-    if (pos == std::string::npos) return true;
+//
+// 例：filepath = "logs/2025-11-25/imu.bin"
+// 将依次尝试创建：
+//   "logs"
+//   "logs/2025-11-25"
+bool ensureDirForFile(const std::string& filepath)
+{
+    // 找到最后一个 '/' 或 '\'
+    const std::size_t pos = filepath.find_last_of("/\\");
+    if (pos == std::string::npos) {
+        return true; // 没有目录成分
+    }
 
-    std::string dir = filepath.substr(0, pos);
-    if (dir.empty()) return true;
+    const std::string dir = filepath.substr(0, pos);
+    if (dir.empty()) {
+        return true;
+    }
 
-    // 逐级创建 logs / 2025-11-25 / subdir
+    // 逐级创建 logs / 2025-11-25 / subdir ...
     std::size_t start = 0;
     while (start < dir.size()) {
-        std::size_t next = dir.find_first_of("/\\", start);
-        std::string sub;
+        const std::size_t next = dir.find_first_of("/\\", start);
+        const std::size_t len  = (next == std::string::npos)
+                               ? dir.size()
+                               : next;
+
+        const std::string sub = dir.substr(0, len);
+        if (!sub.empty() && !dirExists(sub)) {
+            if (!makeDir(sub)) {
+                return false;
+            }
+        }
 
         if (next == std::string::npos) {
-            sub = dir.substr(0, dir.size());
-            start = dir.size();
-        } else {
-            sub = dir.substr(0, next);
-            start = next + 1;
+            break;
         }
-
-        if (!sub.empty() && !dirExists(sub)) {
-            if (!makeDir(sub)) return false;
-        }
+        start = next + 1;
     }
 
     return true;
 }
 
+} // anonymous namespace
+
+
 // ======================================================
 //                    BinLogger
 // ======================================================
 
-BinLogger::BinLogger(const std::string& path) {
+BinLogger::BinLogger(const std::string& path)
+{
     open(path, false);
 }
 
-BinLogger::~BinLogger() {
+BinLogger::~BinLogger()
+{
     close();
 }
 
-bool BinLogger::open(const std::string& path, bool append) {
+bool BinLogger::open(const std::string& path, bool append)
+{
     std::lock_guard<std::mutex> lock(mtx_);
 
     // 关闭已有文件
@@ -94,9 +123,9 @@ bool BinLogger::open(const std::string& path, bool append) {
         fp_ = nullptr;
     }
 
-    // 自动创建路径：logs/2025-11-25/*
+    // 自动创建路径：例如 logs/2025-11-25/*
     if (!ensureDirForFile(path)) {
-        std::cerr << "[BinLogger] ensureDirForFile(" << path << ") failed\n";
+        std::cerr << "[BinLogger] ensureDirForFile('" << path << "') failed\n";
         return false;
     }
 
@@ -104,15 +133,16 @@ bool BinLogger::open(const std::string& path, bool append) {
     fp_ = std::fopen(path.c_str(), mode);
 
     if (!fp_) {
-        std::cerr << "[BinLogger] fopen(" << path << ", " << mode << ") failed: "
-                  << std::strerror(errno) << "\n";
+        std::cerr << "[BinLogger] fopen('" << path << "', '" << mode
+                  << "') failed: " << std::strerror(errno) << "\n";
         return false;
     }
 
     return true;
 }
 
-void BinLogger::close() {
+void BinLogger::close()
+{
     std::lock_guard<std::mutex> lock(mtx_);
 
     if (fp_) {
@@ -121,14 +151,20 @@ void BinLogger::close() {
     }
 }
 
-bool BinLogger::write(const void* data, std::size_t size) {
-    if (!data || size == 0) return true;
+bool BinLogger::write(const void* data, std::size_t size)
+{
+    if (!data || size == 0) {
+        return true;
+    }
 
     std::lock_guard<std::mutex> lock(mtx_);
-    if (!fp_) return false;
+    if (!fp_) {
+        return false;
+    }
 
-    std::size_t written = std::fwrite(data, 1, size, fp_);
+    const std::size_t written = std::fwrite(data, 1, size, fp_);
     if (written != size) {
+        // 出现短写，先尝试 flush，再让调用方感知失败
         std::fflush(fp_);
         return false;
     }
@@ -136,9 +172,12 @@ bool BinLogger::write(const void* data, std::size_t size) {
     return true;
 }
 
-void BinLogger::flush() {
+void BinLogger::flush()
+{
     std::lock_guard<std::mutex> lock(mtx_);
-    if (fp_) std::fflush(fp_);
+    if (fp_) {
+        std::fflush(fp_);
+    }
 }
 
 } // namespace nav_core

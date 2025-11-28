@@ -6,6 +6,7 @@
 
 #IncludeRegexTransform: 
 
+<<<<<<< HEAD
 /home/wys/Underwater-robot-navigation/nav_core/third_party/witmotion/REG.h
 
 /home/wys/Underwater-robot-navigation/nav_core/third_party/witmotion/wit_c_sdk.c
@@ -22,3 +23,5 @@ string.h
 REG.h
 /home/wys/Underwater-robot-navigation/nav_core/third_party/witmotion/REG.h
 
+=======
+>>>>>>> collaborator_IMU_DVL

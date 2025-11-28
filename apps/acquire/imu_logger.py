@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+<<<<<<< HEAD
 apps/acquire/IMU_logger.py
+=======
+apps/acquire/imu_logger.py
+>>>>>>> collaborator_IMU_DVL
 
 面向“长期运行 / 实时导航定位”的 IMU 记录器：
 - 使用统一时间基 (MonoNS + EstNS)
@@ -10,9 +14,15 @@ apps/acquire/IMU_logger.py
     1) raw_imu_log_*.csv        → 原始 IMU 报文（易排障）
     2) min_imu_tb_*.csv         → 双时间戳 + Acc + Gyro（用于 ESKF / 后处理）
 
+<<<<<<< HEAD
 特点：
 - 与 DVL_logger.py 完全一致的工程结构
 - 适合 tmux/systemd 后台长期运行
+=======
+适配说明：
+- 底层驱动已切换至 uwnav.sensors.imu.IMUReader
+- 数据源使用 acc_raw/gyr_raw 以保持原始观测特性
+>>>>>>> collaborator_IMU_DVL
 """
 
 from __future__ import annotations
@@ -24,11 +34,23 @@ import time
 import csv
 import os
 from pathlib import Path
+<<<<<<< HEAD
 from queue import Queue, Empty
 from typing import Optional
 
 from uwnav.io.timebase import SensorKind, stamp
 from uwnav.sensors.imu import IMUDevice, IMUData
+=======
+from typing import Optional
+
+# 确保能找到 uwnav (如果未设置 PYTHONPATH)
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[2]))
+
+from uwnav.io.timebase import SensorKind, stamp
+# [修改 1] 导入新的类名
+from uwnav.sensors.imu import IMUReader, IMUResult
+>>>>>>> collaborator_IMU_DVL
 
 
 # =====================================================================
@@ -164,14 +186,21 @@ def main():
     # 统计
     stats = {"raw": 0, "min": 0, "start_t": time.time()}
 
+<<<<<<< HEAD
     # ========== 回调 ==========
     def imu_callback(frame: IMUData):
+=======
+    # ========== [修改 2] 回调适配 ==========
+    # 参数类型改为 IMUResult
+    def imu_callback(res: IMUResult):
+>>>>>>> collaborator_IMU_DVL
         ts = stamp("imu0", SensorKind.IMU)
         
         mono_ns = ts.host_time_ns
         est_ns  = ts.corrected_time_ns
         est_s   = est_ns / 1e9
 
+<<<<<<< HEAD
         # 写原始 log
         raw_w.writerow([
             est_s,
@@ -179,10 +208,30 @@ def main():
             frame.gyr[0], frame.gyr[1], frame.gyr[2],
             frame.temp,
             frame.frame_type
+=======
+        # [修改 3] 字段映射
+        # IMUResult 包含 acc_raw(原始) 和 acc_filt(滤波)
+        # 对于 logger，通常记录 raw 数据供后续处理
+        acc = res.acc_raw
+        gyr = res.gyr_raw
+        
+        # 新驱动暂未提供温度和帧类型，填默认值保持 CSV 格式兼容
+        temp = 0.0 
+        frame_type = "N/A"
+
+        # 写原始 log
+        raw_w.writerow([
+            est_s,
+            acc[0], acc[1], acc[2],
+            gyr[0], gyr[1], gyr[2],
+            temp,
+            frame_type
+>>>>>>> collaborator_IMU_DVL
         ])
         stats["raw"] += 1
 
         # 写最小表
+<<<<<<< HEAD
         min_writer.write(mono_ns, est_ns, frame.acc, frame.gyr)
         stats["min"] += 1
 
@@ -195,6 +244,23 @@ def main():
     )
 
     imu.open_device()
+=======
+        min_writer.write(mono_ns, est_ns, acc, gyr)
+        stats["min"] += 1
+
+    # ========== [修改 4] 初始化 IMUReader ==========
+    logging.info(f"[IMU] 初始化串口 {args.port} @ {args.baud}, Addr={hex(args.addr)}")
+    imu = IMUReader(
+        port=args.port,
+        baud=args.baud,
+        addr=args.addr,          # 参数名变更为 addr
+        on_result=imu_callback,  # 参数名变更为 on_result
+        csv_dir=None             # 关闭驱动自带的 CSV 落盘，使用本脚本的逻辑
+    )
+
+    # [修改 5] 方法名变更 open_device -> open
+    imu.open()
+>>>>>>> collaborator_IMU_DVL
     imu.start()
     logging.info("[IMU] 启动采集")
 
@@ -226,10 +292,19 @@ def main():
                     last_stat_t = now
     except KeyboardInterrupt:
         pass
+<<<<<<< HEAD
     finally:
         logging.info("[IMU] 关闭设备…")
         imu.stop()
         imu.close_device()
+=======
+    except Exception as e:
+        logging.error(f"[IMU] 运行时异常: {e}", exc_info=True)
+    finally:
+        logging.info("[IMU] 关闭设备…")
+        # [修改 6] 方法名变更 close_device -> close
+        imu.stop() # stop 内部会调用 close
+>>>>>>> collaborator_IMU_DVL
         raw_f.close()
         min_writer.close()
         logging.info("[IMU] logger 完整退出。")

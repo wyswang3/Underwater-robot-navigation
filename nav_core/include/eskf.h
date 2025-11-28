@@ -40,9 +40,9 @@ struct EskfState {
     int64_t mono_ns = 0;   ///< 单调时钟时间戳
     int64_t est_ns  = 0;   ///< 估算时间基（可与日志等对齐）
 
-    float pos[3]  = {0.f, 0.f, 0.f}; ///< 位置（m），NED 或 ENU 由上层定义
-    float vel[3]  = {0.f, 0.f, 0.f}; ///< 速度（m/s）
-    float euler[3]= {0.f, 0.f, 0.f}; ///< 姿态（rad），(roll, pitch, yaw)
+    float pos[3]   = {0.f, 0.f, 0.f}; ///< 位置（m），NED 或 ENU 由上层定义
+    float vel[3]   = {0.f, 0.f, 0.f}; ///< 速度（m/s）
+    float euler[3] = {0.f, 0.f, 0.f}; ///< 姿态（rad），(roll, pitch, yaw)
 
     float bias_accel[3] = {0.f, 0.f, 0.f}; ///< 加速度偏置估计
     float bias_gyro[3]  = {0.f, 0.f, 0.f}; ///< 角速度偏置估计
@@ -56,9 +56,9 @@ struct EskfState {
  *
  * 设计原则：
  *  - 不负责多线程，所有函数假定在同一线程内调用
- *  - handleImu() 频率较高（典型 100Hz）
- *  - handleDvl() 频率较低（典型 10Hz）
- *  - latestState() 可在控制周期（例如 50Hz）调用
+ *  - handleImu() 频率较高（典型 100 Hz）
+ *  - handleDvl() 频率较低（典型 10 Hz）
+ *  - latestState() 可在控制周期（例如 50 Hz）调用
  */
 class Eskf {
 public:
@@ -74,6 +74,17 @@ public:
     /// 处理一帧 DVL 速度观测（更新步）
     void handleDvl(const DvlFrame& dvl);
 
+    /**
+     * @brief 处理一帧低频航向观测（更新步）
+     *
+     * @param mono_ns 单调时钟时间戳（ns）
+     * @param yaw_rad 航向角观测，单位 rad，已解缠/平滑
+     * @param R_yaw   航向观测方差（rad^2），用于观测噪声矩阵
+     *
+     * 典型用法：由实时 IMU 滤波器输出平滑的 yaw，低频调用本函数
+     */
+    void handleYawObservation(int64_t mono_ns, double yaw_rad, double R_yaw);
+
     /// 获取最新状态（拷贝一份）
     EskfState latestState() const;
 
@@ -87,9 +98,10 @@ private:
     // 内部预测 / 更新实现（eskf.cpp 中实现）
     void predictFromImu(const ImuFrame& imu, double dt);
     void updateWithDvl(const DvlFrame& dvl);
+    void updateWithYaw(int64_t mono_ns, double yaw_rad, double R_yaw);
 
 private:
-    EskfConfig cfg_;
+    EskfConfig cfg_{};
 
     EskfState state_{};
     bool      has_state_    = false;   ///< 是否已有任何状态

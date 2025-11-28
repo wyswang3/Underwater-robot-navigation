@@ -7,4 +7,8 @@ CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.o
  ../include/eskf.h
  ../include/imu_driver_wit.h
  ../include/imu_types.h
+<<<<<<< HEAD
  /home/wys/Underwater-robot-navigation/nav_core/src/nav_daemon.cpp
+=======
+ /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/src/nav_daemon.cpp
+>>>>>>> collaborator_IMU_DVL

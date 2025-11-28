@@ -36,3 +36,17 @@ python .\apps\tools\dvl_data_verifier.py `
 # Windows 例子： --port COM5
 # 指定输出目录（可选）
 python apps/tools/dvl_serial_logger.py --outdir ./data
+<<<<<<< HEAD
+=======
+
+
+# 单独测试传感器读取程序
+# 1. 进入项目根目录
+cd ~/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial
+
+# 2. 将当前目录加入 Python 搜索路径 (这一步解决了 "No module named uwnav")
+export PYTHONPATH=$PWD
+
+# 3. 进入脚本所在目录
+cd apps/acquire
+>>>>>>> collaborator_IMU_DVL
