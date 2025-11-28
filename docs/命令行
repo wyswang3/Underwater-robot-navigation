@@ -43,4 +43,4 @@ ping -c 4 192.168.2.250
 增加了一个新脚本：
 git add .
 git commit -m "保存本地改动"
-python git_auto.py -m "IMU角度归零以及波特率调整"
+python git_auto.py -m "传感器数据保存的python脚本文档说明更新" 
