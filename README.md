@@ -1,9 +1,3 @@
----
-
-# Underwater Robot Navigation System
-
-**多传感器水下定位导航系统（IMU + DVL + ESKF + Python/C++ 运行框架）**
-**分支：`feature/IMU-DVL-serial`**
 
 ---
 
