@@ -1,0 +1,4 @@
+[console_scripts]
+imu-pipeline = apps.imu_realtime_pipeline:main
+tmux-manager = apps.tmux_telemetry_manager:main
+volt32-logger = apps.volt32_logger:main

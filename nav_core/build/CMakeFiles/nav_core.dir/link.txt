@@ -1,0 +1,2 @@
+/usr/bin/ar qc libnav_core.a  CMakeFiles/nav_core.dir/src/timebase.cpp.o CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.o CMakeFiles/nav_core.dir/src/dvl_driver.cpp.o CMakeFiles/nav_core.dir/src/eskf.cpp.o CMakeFiles/nav_core.dir/src/bin_logger.cpp.o CMakeFiles/nav_core.dir/third_party/witmotion/wit_c_sdk.c.o
+/usr/bin/ranlib libnav_core.a

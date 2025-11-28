@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uwnav"
+version = "0.1.0"
+description = "Underwater navigation & data acquisition stack"
+readme = "README.md"
+requires-python = ">=3.8"
+
+# 基础依赖（尽量给出合理的下限）
+dependencies = [
+    "numpy>=1.22",
+    "pyserial>=3.5",
+    "pyyaml>=6.0",
+]
+
+# 可选依赖（例如开发/调试工具）
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "mypy",
+    "black",
+]
+
+[project.urls]
+Homepage = "https://github.com/wyswang3/Underwater-robot-navigation"
+Repository = "https://github.com/wyswang3/Underwater-robot-navigation"
+
+# 安装 uwnav 与 apps 作为包
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["uwnav*", "apps*"]
+exclude = [
+    "data*",
+    "docs*",
+    "config*",
+    "nav_core*",
+    "tests*",
+]
+
+# 如果未来需要打包非 .py 文件，可以在这里配置
+# [tool.setuptools.package-data]
+# uwnav = ["resources/*"]
+
+# ======================
+# Entry point 脚本设置
+# ======================
+[project.scripts]
+# ---- Acquire 采集脚本 ----
+imu-logger    = "apps.acquire.imu_logger:main"
+dvl-logger    = "apps.acquire.DVL_logger:main"        # 注意：模块名大小写需与文件一致
+volt32-logger = "apps.acquire.Volt32_logger:main"
+
+# ---- Tools 工具脚本 ----
+dvl-data-verifier = "apps.tools.dvl_data_verifier:main"
+imu-data-verifier = "apps.tools.imu_data_verifier:main"
+multi-postproc    = "apps.tools.multisensor_postproc:main"
+tmux-manager      = "apps.tools.tmux_telemetry_manager:main"
+volt32-tool       = "apps.tools.volt32_logger:main"
+
+# ---- Pipelines（如果有 main 再打开）----
+# imu-pipeline      = "apps.pipelines.imu_realtime_pipeline:main"

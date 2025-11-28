@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: uwnav
+Version: 0.0.1
+Summary: Underwater navigation stack
+Requires-Python: >=3.8
+Requires-Dist: numpy
+Requires-Dist: pyserial
+Requires-Dist: pyyaml

@@ -1,0 +1,20 @@
+imu:
+  # 串口配置
+  port: "/dev/ttyUSB0"  # 香橙派上的第一个USB串口
+  baudrate: 230400     # 波特率
+
+  # 安装角配置
+  installation_angle: 0.0  # 安装角（度）
+
+  # 单位设置
+  units:
+    angles: "radians"  # 角度单位：弧度
+    acceleration: "g"  # 加速度单位：重力加速度 (g)
+
+  # 传感器范围设置
+  range:
+    acceleration_max: 4.0  # 最大加速度范围 4g
+    angular_velocity_max: "not exceeded during operation"  # 角速度范围不会超量程
+
+  # 采样频率（可选）
+  sample_frequency: 50  # 默认50Hz，可根据实际需求调整

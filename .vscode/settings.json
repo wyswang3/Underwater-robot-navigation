@@ -1,0 +1,13 @@
+{
+    "dotnet.preferCSharpExtension": true,
+    "files.associations": {
+        "*.cpp": "cpp",
+        "*.h": "cpp",
+        "*.py": "python",
+        "*.sln": "csharp",
+        "xlocinfo": "cpp",
+        "xstring": "cpp",
+        "atomic": "cpp"
+    },
+    "cmake.sourceDirectory": "D:/Underwater-robot-navigation/nav_core"
+}
