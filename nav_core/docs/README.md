@@ -76,31 +76,35 @@ uwnav_navd
 
 ```
 nav_core/
-├─ include/
-│   ├─ timebase.h        # 时间基准（mono_ns / est_ns）
-│   ├─ imu_types.h       # IMU 数据结构与过滤配置
-│   ├─ imu_driver_wit.h  # WitMotion IMU 驱动（HWT9073-485）
-│   ├─ dvl_driver.h      # Hover H1000 DVL 驱动
-│   ├─ volt_driver.h     # 电压电流驱动
-│   ├─ eskf.h            # 扩展卡尔曼滤波入口
-│   └─ bin_logger.h      # 二进制日志记录
-│
-├─ src/
-│   ├─ timebase.cpp
-│   ├─ imu_driver_wit.cpp    # 当前核心 IMU 驱动（Modbus 230400）
-│   ├─ dvl_driver.cpp
-│   ├─ volt_driver.cpp
-│   ├─ eskf.cpp
-│   ├─ bin_logger.cpp
-│   └─ nav_daemon.cpp        # 主程序：uwnav_navd
-│
-├─ third_party/
-│   └─ witmotion/
-│       ├─ REG.h             # WitMotion IMU 寄存器表
-│       ├─ wit_c_sdk.h       # SDK 头文件
-│       └─ wit_c_sdk.c       # Modbus 协议解析核心（厂家提供）
-│
-└─ CMakeLists.txt
+    ├── CMakeLists.txt                       # nav_core 构建脚本
+    │
+    ├── include/
+    │   └── nav_core/                        # 对外暴露的头文件（对外 API 只从这里 include）
+    │       ├── imu_types.h                  # IMU / DVL / ESKF 用到的基础类型（ImuFrame 等，若已有）
+    │       ├── imu_driver_wit.h             # Wit IMU 驱动
+    │       ├── dvl_driver.h                 # DVL 驱动
+    │       ├── eskf.h                       # ESKF 状态估计
+    │       ├── imu_rt_filter.h              # 实时 IMU 滤波 / 航向积分
+    │       ├── bin_logger.h                 # 二进制日志读写工具
+    │       ├── timebase.h                   # 导航时间基 / 时间戳工具
+    │       ├── log_packets.h                # ★ IMU / DVL / ESKF 日志包结构（共享给写入/解析）
+    │       └── nav_state_publisher.h        # ★ 导航状态发布接口（对控制进程/其它模块暴露的出口）
+    │
+    ├── src/
+    │   ├── nav_daemon.cpp                   # 主程序 uwnav_navd（导航守护进程）
+    │   ├── timebase.cpp                     # 时间基实现
+    │   ├── imu_driver_wit.cpp               # IMU 驱动实现
+    │   ├── dvl_driver.cpp                   # DVL 驱动实现
+    │   ├── eskf.cpp                         # ESKF 实现
+    │   ├── bin_logger.cpp                   # 二进制日志实现
+    │   ├── imu_rt_filter.cpp                # 实时 IMU 滤波 / 航向积分实现
+    │   ├── nav_state_publisher.cpp          # ★ 导航状态发布实现（写共享内存 / UDP / ZeroMQ 等）
+    │   └── dump_nav_logs.cpp                # ★ 导航日志解析工具（原 dump_imu_bin.cpp 升级版，使用 log_packets.h）
+    │
+    └── third_party/
+        └── witmotion/                       # WitMotion 官方 SDK
+            ├── wit_c_sdk.c
+            └── *.h
 ```
 
 ---

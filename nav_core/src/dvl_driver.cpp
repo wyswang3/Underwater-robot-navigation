@@ -1,6 +1,6 @@
-#include "dvl_driver.h"
+#include "nav_core/dvl_driver.h"        // DVL 驱动 + DvlFrame 定义
+#include "nav_core/timebase.h"
 
-#include "timebase.h"
 #include <cerrno>
 #include <cmath>
 #include <cstring>

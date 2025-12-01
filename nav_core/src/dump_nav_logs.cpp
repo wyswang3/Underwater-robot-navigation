@@ -2,8 +2,8 @@
 #include <string>
 #include <iomanip>
 
-#include "bin_logger.h"       // BinLogger
-#include "log_packets.h"      // ImuLogPacket / DvlLogPacket / EskfLogPacket
+#include "nav_core/bin_logger.h"        // 二进制日志写入
+#include "nav_core/log_packets.h"    // ImuLogPacket / DvlLogPacket / EskfLogPacket
 
 using namespace nav_core;
 

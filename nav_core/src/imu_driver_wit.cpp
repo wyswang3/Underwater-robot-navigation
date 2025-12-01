@@ -1,5 +1,5 @@
-#include "imu_driver_wit.h"
-#include "timebase.h"
+#include "nav_core/imu_driver_wit.h"    // IMU 驱动（维特 HWT9073-485）
+#include "nav_core/timebase.h"
 
 #include <cerrno>
 #include <cmath>

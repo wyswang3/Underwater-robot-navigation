@@ -1,4 +1,4 @@
-#include "bin_logger.h"
+#include "nav_core/bin_logger.h"        // 二进制日志写入
 
 #include <cstdio>
 #include <cstring>
