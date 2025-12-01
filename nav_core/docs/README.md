@@ -5,119 +5,188 @@
 
 # nav_core – Underwater Navigation Core (C++)
 
-`nav_core` 是整个 **Underwater-robot-navigation** 项目中最核心的 **实时导航内核（Real-Time Navigation Core）**。
-它运行在 Orange Pi 等嵌入式平台上，通过 C++ 高性能读取 IMU、DVL、电压传感器数据，并进行实时 ESKF 状态估计，生成高频导航状态输出。
+`nav_core` 是 **Underwater-robot-navigation** 项目的实时导航核心模块。
+它运行在 Orange Pi 等嵌入式平台上，以 C++ 实现 **高频传感器读取、时间同步、多传感器融合（ESKF）、实时状态输出**，并提供给机器人控制系统稳定、低延迟、结构化的导航状态。
 
-相比 Python 侧的 `uwnav`（数据采集、可视化、算法原型），`nav_core` 是真正用于 **部署、上船、实时控制** 的部分。
+与 Python 侧的 `uwnav`（采集、可视化、离线处理、算法验证）不同，`nav_core` 负责：
+
+* 上船运行
+* 与控制器并行工作
+* 提供高可靠、高实时性的导航解算
+
+它是整套水下机器人系统的导航“发动机”。
 
 ---
 
-## 1. 功能总览（核心价值）
+# 1. 功能总览
 
-`nav_core` 在系统中的角色：
+`nav_core` 的数据流：
 
 ```
-传感器  →  nav_core (C++)  →  导航状态  →  控制器 (MPC/RL/PID/…)
-
-IMU (Modbus-RTU)
-DVL (PD6 / E/D ベロシティ)
-Volt/Current Sensor
+           +-----------------------------+
+Sensors →  |   nav_core (C++ real-time)  | → Navigation State → Controller
+(IMU/DVL)  +-----------------------------+
 ```
 
-nav_core 的主要职责：
+核心功能：
 
-### ✔ 1) 实时读写传感器
+### ✔ 1) 高性能传感器驱动
 
-* IMU (WitMotion HWT9073-485, Modbus/RS485)
-* DVL (Hover H1000, PD6/EPD6 协议)
-* Volt driver（用于记录系统电气状态）
+* **IMU (WitMotion HWT9073-485)**
+  Modbus-RTU，230400bps，100Hz
+* **DVL (Hover H1000 PD6/EPD6)**
+  行协议解析，自动识别 velocity frame
+* 可扩展电压/电流传感器
 
-### ✔ 2) 时间同步
-
-统一使用 `nav_core/timebase.h` 提供的：
-
-* 单调时间戳（monotonic ns）
-* 系统估计时间（est ns）
-
-### ✔ 3) 数据预处理 & 过滤
-
-各驱动内部提供基础过滤：
+均提供：
 
 * 异常尖刺过滤
-* 有效位（IMU raw）
-* 速度有效性（DVL A/V）
-* 阈值保护（避免对 ESKF 造成污染）
-
-### ✔ 4) 扩展卡尔曼滤波器（ESKF）
-
-* 目前已包含 ESKF 基础结构（待进一步完善）
-* 负责融合 IMU + DVL + 深度计（未来）
-* 输出：位置、速度、姿态、偏置等
-
-### ✔ 5) 导航守护进程（nav_daemon）
-
-编译后生成可执行程序：
-
-```
-uwnav_navd
-```
-
-负责：
-
-* 加载配置
-* 启动各驱动
-* 运行 ESKF
-* 输出导航数据
-* 写入二进制日志（bin_logger）
+* 有效性检查（IMU valid flag / DVL A/V 标志）
+* 基于配置的阈值保护
 
 ---
 
-## 2. 目录结构
+### ✔ 2) 时间同步（Timebase）
+
+所有模块统一使用：
+
+* `mono_ns`（单调时钟，纳秒）
+* `est_ns`（融合后时间戳，用于 IMU-DVL 对齐）
+
+由 `timebase.h/.cpp` 管理。
+
+---
+
+### ✔ 3) 数据预处理（Real-Time Filters）
+
+IMU 侧提供：
+
+* 滤波、限幅
+* Yaw 低频观测
+* 重力系加速度转换
+* 与 ESKF 的同步接口
+
+DVL 侧提供：
+
+* A/V 标志过滤
+* 速度限幅
+* 质控过滤规则
+
+---
+
+### ✔ 4) 扩展卡尔曼滤波（ESKF）
+
+模块 `eskf.*` 提供基础的 15/18 维状态：
+
+* 位置
+* 速度
+* 姿态（Euler or quaternion）
+* 陀螺 / 加速度偏置（bias）
+
+融合：
+
+* IMU 高频预测
+* DVL 速度更新
+* 后续可加入深度计、USBL、磁力计等
+
+这是整个导航系统的核心算法部分。
+
+---
+
+### ✔ 5) 二进制日志系统（bin_logger）
+
+写入高频数据：
+
+```
+imu.bin   → ImuLogPacket
+dvl.bin   → DvlLogPacket
+eskf.bin  → EskfLogPacket
+```
+
+结构统一由 `log_packets.h` 定义，Python 与 C++ 完全可读。
+
+后处理工具 `dump_nav_logs` 支持解析三类数据。
+
+---
+
+### ✔ 6) 导航状态发布器（nav_state_publisher）
+
+所有导航结果结构化为：
+
+```
+shared/msg/nav_state.hpp
+```
+
+发布模块：
+
+```
+nav_state_publisher.h
+nav_state_publisher.cpp
+```
+
+当前实现为 NullPublisher（不输出），后续可无缝替换：
+
+* UDP 广播
+* ZeroMQ PUB
+* POSIX 共享内存
+* pipes / IPC
+
+用于控制器（PID / MPC / RL）实时读取导航状态。
+
+---
+
+# 2. 目录结构
 
 ```
 nav_core/
-    ├── CMakeLists.txt                       # nav_core 构建脚本
+    ├── CMakeLists.txt
     │
     ├── include/
-    │   └── nav_core/                        # 对外暴露的头文件（对外 API 只从这里 include）
-    │       ├── imu_types.h                  # IMU / DVL / ESKF 用到的基础类型（ImuFrame 等，若已有）
-    │       ├── imu_driver_wit.h             # Wit IMU 驱动
-    │       ├── dvl_driver.h                 # DVL 驱动
-    │       ├── eskf.h                       # ESKF 状态估计
-    │       ├── imu_rt_filter.h              # 实时 IMU 滤波 / 航向积分
-    │       ├── bin_logger.h                 # 二进制日志读写工具
-    │       ├── timebase.h                   # 导航时间基 / 时间戳工具
-    │       ├── log_packets.h                # ★ IMU / DVL / ESKF 日志包结构（共享给写入/解析）
-    │       └── nav_state_publisher.h        # ★ 导航状态发布接口（对控制进程/其它模块暴露的出口）
+    │   └── nav_core/
+    │       ├── imu_types.h
+    │       ├── imu_driver_wit.h
+    │       ├── dvl_driver.h
+    │       ├── eskf.h
+    │       ├── imu_rt_filter.h
+    │       ├── bin_logger.h
+    │       ├── timebase.h
+    │       ├── log_packets.h
+    │       └── nav_state_publisher.h
     │
     ├── src/
-    │   ├── nav_daemon.cpp                   # 主程序 uwnav_navd（导航守护进程）
-    │   ├── timebase.cpp                     # 时间基实现
-    │   ├── imu_driver_wit.cpp               # IMU 驱动实现
-    │   ├── dvl_driver.cpp                   # DVL 驱动实现
-    │   ├── eskf.cpp                         # ESKF 实现
-    │   ├── bin_logger.cpp                   # 二进制日志实现
-    │   ├── imu_rt_filter.cpp                # 实时 IMU 滤波 / 航向积分实现
-    │   ├── nav_state_publisher.cpp          # ★ 导航状态发布实现（写共享内存 / UDP / ZeroMQ 等）
-    │   └── dump_nav_logs.cpp                # ★ 导航日志解析工具（原 dump_imu_bin.cpp 升级版，使用 log_packets.h）
+    │   ├── nav_daemon.cpp
+    │   ├── timebase.cpp
+    │   ├── imu_driver_wit.cpp
+    │   ├── dvl_driver.cpp
+    │   ├── eskf.cpp
+    │   ├── bin_logger.cpp
+    │   ├── imu_rt_filter.cpp
+    │   ├── nav_state_publisher.cpp
+    │   └── dump_nav_logs.cpp
     │
     └── third_party/
-        └── witmotion/                       # WitMotion 官方 SDK
+        └── witmotion/
             ├── wit_c_sdk.c
             └── *.h
 ```
 
+特点：
+
+* **所有 API 都在 `include/nav_core` 下**
+* shared 消息类型位于项目根目录 `shared/msg`
+* `dump_nav_logs.cpp` 是日志解析工具的新版入口
+
 ---
 
-## 3. 构建方法（Linux / Orange Pi）
+# 3. 编译方式（Linux/Orange Pi）
 
-### 3.1 安装依赖
+### 安装依赖
 
-```
+```bash
 sudo apt-get install build-essential cmake
 ```
 
-### 3.2 编译 nav_core
+### 编译
 
 ```bash
 cd nav_core
@@ -126,111 +195,129 @@ cmake ..
 make -j
 ```
 
-编译成功后生成：
+生成：
 
 ```
-uwnav_navd
-libnav_core.a
+uwnav_navd       → 导航守护进程
+dump_nav_logs    → 日志解析工具
+libnav_core.a    → 可供集成的静态库
 ```
 
 ---
 
-## 4. 驱动说明
+# 4. 驱动说明
 
-### 4.1 IMU（HWT9073-485，Modbus/RS485）
+## 4.1 IMU 驱动（HWT9073-485）
 
-* 串口读取：230400 波特率
-* 每 10ms 轮询一次（100Hz）
-* 读取寄存器：`WitReadReg(AX, 16)`
-* 寄存器解析：`wit_c_sdk.c`
-* 输出：角速度、线加速度、欧拉角、温度
-
----
-
-### 4.2 DVL（Hover H1000，PD6/EPD6 协议）
-
-* 行协议解析
-* 自动识别 BE / WI / SI 等速度帧类别
-* 有效位（A/V）过滤
-* 输出：ve, vn, vu (m/s)
+* 串口 RS485（230400bps）
+* 100Hz
+* 使用 WitMotion SDK（`wit_c_sdk.c`）
+* 包含必要过滤与校验
+* 输出：加速度、角速度、姿态、温度、valid
 
 ---
 
-### 4.3 Volt Driver (ADC/Modbus/自定义协议)
+## 4.2 DVL 驱动（Hover H1000）
 
-* 读取系统电压、电流
-* 用于日志记录与后续功率消耗分析
-
----
-
-## 5. 配置文件（由 nav_daemon 读取）
-
-未来将在：
-
-```
-config/devices/imu.yaml
-config/devices/dvl_hover_h1000.yaml
-config/fusion/eskf.yaml
-config/lever_arm.yaml
-```
-
-统一管理 IMU/DVL/ESKF 的参数。
+* 解析 PD6 行协议
+* 自动识别 BE/WI/SI 等 velocity frame
+* 支持有效性过滤（A/V）
+* 输出：vel_x, vel_y, vel_z（北东地或机体坐标）
 
 ---
 
-## 6. nav_daemon（核心入口）
+## 4.3 Volt Driver（未来扩展）
 
-编译后运行：
+用于电池监控、功率估计、能耗模型训练。
+
+---
+
+# 5. 导航守护进程 nav_daemon
+
+执行：
 
 ```bash
 ./uwnav_navd
 ```
 
-负责：
+功能：
 
-1. 打开 IMU、DVL、Volt 设备
-2. 读取配置
-3. 启动 ESKF
-4. 输出导航状态
-5. 写入日志（CSV / 二进制）
+1. 加载设备配置
+2. 打开 IMU / DVL 驱动
+3. 运行 ESKF（预测+更新）
+4. 写入二进制日志
+5. 调用 nav_state_publisher 发布当前导航状态
 
-未来会加入：
+核心特点：
 
-* UDP 广播
-* ZeroMQ
-* pipes / shared-memory
-  以供上层控制器（MPC/RL）读取。
+* 多线程 + 回调架构
+* 低延迟（IMU 处理路径通常 sub-ms）
+* 无锁状态读取（通过 ESKF 快照）
 
 ---
 
-## 7. Python 与 nav_core 的关系
+# 6. 日志系统 dump_nav_logs
+
+运行示例：
+
+```bash
+./dump_nav_logs imu.bin --imu
+./dump_nav_logs dvl.bin --dvl
+./dump_nav_logs eskf.bin --eskf
+```
+
+输出 CSV 兼容 Python、MATLAB、Pandas 处理。
+
+所有结构来自：
 
 ```
-Python(uwnav) → 采集、可视化、原型算法
-C++(nav_core) → 实船实时导航
+include/nav_core/log_packets.h
 ```
 
-Python 侧可以读取 C++ 输出的 `.bin` 或 `.csv` 数据文件进行可视化、训练神经网络、调试 ESKF 参数。
+保证长期兼容性。
 
 ---
 
-## 8. 下一步计划（Roadmap）
+# 7. Python 与 nav_core 的关系
 
-* [ ] 完成 ESKF 状态向量结构
-* [ ] 增加深度计（Depth Sensor）驱动
-* [ ] 增加 USBL 驱动
-* [ ] 增加 DVL + IMU 同步对齐逻辑
-* [ ] 增加 nav_daemon → 控制器的实时数据管道（UDP/ZMQ）
-* [ ] 增加 bin_logger 高性能写盘（环形 buffer）
+```
+Python / uwnav     → 数据采集、预处理、可视化、算法验证
+C++ / nav_core     → 实时运行、融合、状态发布（实际部署）
+```
+
+Python 侧可以读取 nav_core 生成的 `.bin` 数据进行：
+
+* ESKF 参数调优
+* 神经网络训练
+* 时序对齐分析
+* 轨迹可视化
 
 ---
 
-# Conclusion
+# 8. Roadmap（演进计划）
 
-这个 README 的作用：
+| 项目                           | 状态            |
+| ---------------------------- | ------------- |
+| 深度计驱动融合                      | planned       |
+| USBL 驱动与定位融合                 | planned       |
+| 更完整 ESKF（DVL 质量建模、外点剔除）      | in progress   |
+| ZeroMQ / UDP / SHM 输出        | planned       |
+| 高性能 logger（环形 buffer + 异步写盘） | planned       |
+| 机体系→惯性系坐标变换与杆臂补偿             | upcoming      |
+| 与控制器（MPC/RL）实时闭环             | ultimate goal |
 
-* 让新成员能快速理解 nav_core 在整个系统中的定位
-* 掌握驱动/目录/构建方式
-* 理解 IMU 与 DVL 的 C++ 实现
-* 为未来的导航融合（ESKF）奠定结构基础
+---
 
+# 总结
+
+`nav_core` 是整个水下机器人系统中的关键组件，其定位是：
+
+* 高实时性
+* 高可靠性
+* 面向实际部署
+* 完整的传感器输入 → 状态输出链路
+
+本 README 旨在帮助新开发者快速理解：
+模块组成、代码位置、编译方法、运行方式、与 Python 与控制器的耦合方式。
+
+---
