@@ -1,12 +1,8 @@
-
----
-
 # `nav_core/README.md`
 
-# nav_core – Underwater Navigation Core (C++)
+# `nav_core` – Underwater Navigation Core (C++)
 
-`nav_core` 是 **Underwater-robot-navigation** 项目的实时导航核心模块。
-它运行在 Orange Pi 等嵌入式平台上，以 C++ 实现 **高频传感器读取、时间同步、多传感器融合（ESKF）、实时状态输出**，并提供给机器人控制系统稳定、低延迟、结构化的导航状态。
+`nav_core` 是 **Underwater-robot-navigation** 项目的实时导航核心模块，负责运行在 **Orange Pi** 等嵌入式平台上，提供 **高频传感器读取、时间同步、多传感器融合（ESKF）、实时状态输出**。它向机器人控制系统提供稳定、低延迟、结构化的导航状态。
 
 与 Python 侧的 `uwnav`（采集、可视化、离线处理、算法验证）不同，`nav_core` 负责：
 
@@ -14,7 +10,7 @@
 * 与控制器并行工作
 * 提供高可靠、高实时性的导航解算
 
-它是整套水下机器人系统的导航“发动机”。
+`nav_core` 是整套水下机器人系统的导航“发动机”。
 
 ---
 
@@ -33,12 +29,14 @@ Sensors →  |   nav_core (C++ real-time)  | → Navigation State → Controller
 ### ✔ 1) 高性能传感器驱动
 
 * **IMU (WitMotion HWT9073-485)**
-  Modbus-RTU，230400bps，100Hz
+
+  * Modbus-RTU，230400bps，100Hz
 * **DVL (Hover H1000 PD6/EPD6)**
-  行协议解析，自动识别 velocity frame
+
+  * 行协议解析，自动识别 velocity frame
 * 可扩展电压/电流传感器
 
-均提供：
+提供：
 
 * 异常尖刺过滤
 * 有效性检查（IMU valid flag / DVL A/V 标志）
@@ -139,42 +137,35 @@ nav_state_publisher.cpp
 
 ```
 nav_core/
-    ├── CMakeLists.txt
-    │
-    ├── include/
-    │   └── nav_core/
-    │       ├── imu_types.h
-    │       ├── imu_driver_wit.h
-    │       ├── dvl_driver.h
-    │       ├── eskf.h
-    │       ├── imu_rt_filter.h
-    │       ├── bin_logger.h
-    │       ├── timebase.h
-    │       ├── log_packets.h
-    │       └── nav_state_publisher.h
-    │
-    ├── src/
-    │   ├── nav_daemon.cpp
-    │   ├── timebase.cpp
-    │   ├── imu_driver_wit.cpp
-    │   ├── dvl_driver.cpp
-    │   ├── eskf.cpp
-    │   ├── bin_logger.cpp
-    │   ├── imu_rt_filter.cpp
-    │   ├── nav_state_publisher.cpp
-    │   └── dump_nav_logs.cpp
-    │
-    └── third_party/
-        └── witmotion/
-            ├── wit_c_sdk.c
-            └── *.h
+├── CMakeLists.txt
+├── include/
+│   └── nav_core/
+│       ├── status.hpp          ← 统一 Status 类型 / 错误码
+│       ├── types.hpp           ← 基本类型、别名（时间戳、向量等）
+│       ├── logging.hpp         ← 日志接口（宏/函数）
+│       ├── timebase.hpp        ← 时间源工具
+│       ├── imu_driver_wit.hpp  ← IMU 驱动接口
+│       ├── dvl_driver.hpp      ← DVL 驱动接口
+│       ├── eskf.hpp            ← ESKF 接口
+│       ├── bin_logger.hpp      ← 二进制日志接口
+│       ├── imu_rt_filter.hpp   ← 实时 IMU 滤波接口
+│       └── nav_daemon.hpp      ← 导航主进程封装（可选）
+└── src/
+    ├── timebase.cpp
+    ├── imu_driver_wit.cpp
+    ├── dvl_driver.cpp
+    ├── eskf.cpp
+    ├── bin_logger.cpp
+    ├── imu_rt_filter.cpp
+    ├── nav_daemon.cpp          ← 真正的 main 在 apps/ 里时，这里可以是封装类实现
+    └── logging.cpp             ← 如需复杂日志实现
 ```
 
 特点：
 
 * **所有 API 都在 `include/nav_core` 下**
 * shared 消息类型位于项目根目录 `shared/msg`
-* `dump_nav_logs.cpp` 是日志解析工具的新版入口
+* `dump_nav_logs.cpp` 是日志解析工具的新版入口（待开发）
 
 ---
 
@@ -199,7 +190,7 @@ make -j
 
 ```
 uwnav_navd       → 导航守护进程
-dump_nav_logs    → 日志解析工具
+dump_nav_logs    → 日志解析工具（待开发）
 libnav_core.a    → 可供集成的静态库
 ```
 
@@ -256,7 +247,7 @@ libnav_core.a    → 可供集成的静态库
 
 ---
 
-# 6. 日志系统 dump_nav_logs
+# 6. 日志系统 dump_nav_logs(待开发)
 
 运行示例：
 
@@ -319,5 +310,3 @@ Python 侧可以读取 nav_core 生成的 `.bin` 数据进行：
 
 本 README 旨在帮助新开发者快速理解：
 模块组成、代码位置、编译方法、运行方式、与 Python 与控制器的耦合方式。
-
----

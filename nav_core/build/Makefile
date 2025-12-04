@@ -48,17 +48,10 @@ RM = /usr/bin/cmake -E remove -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-<<<<<<< HEAD
-CMAKE_SOURCE_DIR = /home/wys/Underwater-robot-navigation/nav_core
+CMAKE_SOURCE_DIR = /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/wys/Underwater-robot-navigation/nav_core/build
-=======
-CMAKE_SOURCE_DIR = /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core
-
-# The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build
->>>>>>> collaborator_IMU_DVL
+CMAKE_BINARY_DIR = /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -87,15 +80,9 @@ edit_cache/fast: edit_cache
 
 # The main all target
 all: cmake_check_build_system
-<<<<<<< HEAD
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles/progress.marks
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/progress.marks
 	$(MAKE) -f CMakeFiles/Makefile2 all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles 0
-=======
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles/progress.marks
-	$(MAKE) -f CMakeFiles/Makefile2 all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles 0
->>>>>>> collaborator_IMU_DVL
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles 0
 .PHONY : all
 
 # The main clean target
@@ -257,6 +244,33 @@ src/imu_driver_wit.cpp.s:
 	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.s
 .PHONY : src/imu_driver_wit.cpp.s
 
+src/imu_rt_filter.o: src/imu_rt_filter.cpp.o
+
+.PHONY : src/imu_rt_filter.o
+
+# target to build an object file
+src/imu_rt_filter.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.o
+.PHONY : src/imu_rt_filter.cpp.o
+
+src/imu_rt_filter.i: src/imu_rt_filter.cpp.i
+
+.PHONY : src/imu_rt_filter.i
+
+# target to preprocess a source file
+src/imu_rt_filter.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.i
+.PHONY : src/imu_rt_filter.cpp.i
+
+src/imu_rt_filter.s: src/imu_rt_filter.cpp.s
+
+.PHONY : src/imu_rt_filter.s
+
+# target to generate assembly for a file
+src/imu_rt_filter.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.s
+.PHONY : src/imu_rt_filter.cpp.s
+
 src/nav_daemon.o: src/nav_daemon.cpp.o
 
 .PHONY : src/nav_daemon.o
@@ -283,6 +297,33 @@ src/nav_daemon.s: src/nav_daemon.cpp.s
 src/nav_daemon.cpp.s:
 	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.s
 .PHONY : src/nav_daemon.cpp.s
+
+src/nav_state_publisher.o: src/nav_state_publisher.cpp.o
+
+.PHONY : src/nav_state_publisher.o
+
+# target to build an object file
+src/nav_state_publisher.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.o
+.PHONY : src/nav_state_publisher.cpp.o
+
+src/nav_state_publisher.i: src/nav_state_publisher.cpp.i
+
+.PHONY : src/nav_state_publisher.i
+
+# target to preprocess a source file
+src/nav_state_publisher.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.i
+.PHONY : src/nav_state_publisher.cpp.i
+
+src/nav_state_publisher.s: src/nav_state_publisher.cpp.s
+
+.PHONY : src/nav_state_publisher.s
+
+# target to generate assembly for a file
+src/nav_state_publisher.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.s
+.PHONY : src/nav_state_publisher.cpp.s
 
 src/timebase.o: src/timebase.cpp.o
 
@@ -360,9 +401,15 @@ help:
 	@echo "... src/imu_driver_wit.o"
 	@echo "... src/imu_driver_wit.i"
 	@echo "... src/imu_driver_wit.s"
+	@echo "... src/imu_rt_filter.o"
+	@echo "... src/imu_rt_filter.i"
+	@echo "... src/imu_rt_filter.s"
 	@echo "... src/nav_daemon.o"
 	@echo "... src/nav_daemon.i"
 	@echo "... src/nav_daemon.s"
+	@echo "... src/nav_state_publisher.o"
+	@echo "... src/nav_state_publisher.i"
+	@echo "... src/nav_state_publisher.s"
 	@echo "... src/timebase.o"
 	@echo "... src/timebase.i"
 	@echo "... src/timebase.s"

@@ -3,6 +3,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/nav_core.dir/src/dvl_driver.cpp.o"
   "CMakeFiles/nav_core.dir/src/eskf.cpp.o"
   "CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.o"
+  "CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.o"
+  "CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.o"
   "CMakeFiles/nav_core.dir/src/timebase.cpp.o"
   "CMakeFiles/nav_core.dir/third_party/witmotion/wit_c_sdk.c.o"
   "libnav_core.a"

@@ -1,11 +1,4 @@
-<<<<<<< HEAD
-/home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles/rebuild_cache.dir
-/home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles/edit_cache.dir
-/home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles/uwnav_navd.dir
-/home/wys/Underwater-robot-navigation/nav_core/build/CMakeFiles/nav_core.dir
-=======
-/home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles/rebuild_cache.dir
-/home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles/edit_cache.dir
-/home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles/uwnav_navd.dir
-/home/orangepi/ROV/Underwater-robot-navigation-feature-IMU-DVL-serial/nav_core/build/CMakeFiles/nav_core.dir
->>>>>>> collaborator_IMU_DVL
+/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/rebuild_cache.dir
+/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/edit_cache.dir
+/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/uwnav_navd.dir
+/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/nav_core.dir

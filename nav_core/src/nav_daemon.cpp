@@ -16,25 +16,22 @@
 #include <direct.h>
 #endif
 
-// 业务相关头文件（都通过 nav_core 前缀暴露）
-#include "nav_core/imu_driver_wit.h"    // IMU 驱动（维特 HWT9073-485）
-#include "nav_core/imu_types.h"         // ImuFrame 定义
-#include "nav_core/dvl_driver.h"        // DVL 驱动 + DvlFrame 定义
-#include "nav_core/eskf.h"              // ESKF 状态估计
-#include "nav_core/bin_logger.h"        // 二进制日志写入
-#include "nav_core/imu_rt_filter.h"     // 实时 IMU 滤波 / 航向积分
-#include "nav_core/log_packets.h"       // ImuLogPacket / DvlLogPacket / EskfLogPacket
+// 业务相关头文件（通过 nav_core 前缀暴露，封装了 IMU、DVL、ESKF 等功能）
+#include "nav_core/imu_driver_wit.hpp"      // IMU 驱动（维特 HWT9073-485）
+#include "nav_core/types.hpp"               // 包含 ImuFrame / ImuFilterConfig / DvlFilterConfig 等结构体定义
+#include "nav_core/dvl_driver.hpp"          // DVL 驱动及 DvlFrame 定义
+#include "nav_core/eskf.hpp"                // ESKF 状态估计类
+#include "nav_core/bin_logger.hpp"          // 二进制日志写入类
+#include "nav_core/imu_rt_filter.hpp"       // 实时 IMU 滤波器类，包含航向积分功能
+#include <nav_core/log_packets.hpp>         // 定义日志包格式，如 ImuLogPacket / DvlLogPacket / EskfLogPacket
 
 // 导航状态消息与发布接口
-#include "shared/msg/nav_state.hpp"
-#include "nav_core/nav_state_publisher.h"
-
-// =====================================================
-//         匿名命名空间：全局状态 & 工具函数
-// =====================================================
+#include <shared/msg/nav_state.hpp>  // 导航状态消息定义（命名空间 shared::msg）
+#include "nav_core/nav_state_publisher.hpp" // 共享内存发布器类
 
 namespace {
 
+// 导航核心类的别名，简化代码中引用
 using nav_core::Eskf;
 using nav_core::EskfConfig;
 using nav_core::EskfState;
@@ -45,31 +42,31 @@ using nav_core::ImuFilterConfig;
 using nav_core::DvlFilterConfig;
 using nav_core::RealTimeImuFilterCpp;
 
-using uwsys::msg::NavState;
-using uwsys::msg::NavHealth;
-using uwsys::msg::NavStatusFlags;
+// 导航共享消息的命名空间，确保使用正确的命名空间
+using shared::msg::NavState;
+using shared::msg::NavHealth;
+using shared::msg::NavStatusFlags;
 
-constexpr double G_STD      = 9.80665;
-constexpr double PI_STD     = 3.14159265358979323846;
-constexpr double RAD2DEG    = 180.0 / PI_STD;
-constexpr double DEG2RAD    = PI_STD / 180.0;
-constexpr double YAW_STD_DEG = 5.0;
-constexpr double YAW_STD_RAD = YAW_STD_DEG * DEG2RAD;
+constexpr double G_STD       = 9.80665;         // 标准重力加速度（m/s²）
+constexpr double PI_STD      = 3.14159265358979323846; // 圆周率
+constexpr double RAD2DEG     = 180.0 / PI_STD;  // 弧度转角度系数
+constexpr double DEG2RAD     = PI_STD / 180.0;  // 角度转弧度系数
+constexpr double YAW_STD_DEG = 5.0;              // 航向标准偏差（角度）
+constexpr double YAW_STD_RAD = YAW_STD_DEG * DEG2RAD; // 航向标准偏差（弧度）
 
-/// Ctrl+C / SIGTERM 停止标志
+// Ctrl+C / SIGTERM 停止标志
 std::atomic<bool> g_stop{false};
 
-/// 最近一次 DVL 是否有效（用于 NavState 标志位）
+// 最近一次 DVL 是否有效（用于 NavState 标志位）
 std::atomic<bool> g_last_dvl_valid{false};
 
-/// 信号处理函数：设置停止标志
+// 信号处理函数：在接收到 Ctrl+C 或 SIGTERM 信号时设置停止标志
 void signal_handler(int)
 {
     g_stop.store(true);
 }
 
-/// 简单确保目录存在（只管单级目录，例如 "./logs"、"./data"）
-/// 子目录的递归创建由 BinLogger 在 open() 时处理。
+// 简单确保目录存在（只管单级目录，例如 "./logs"、"./data"）
 bool ensure_dir(const std::string& path)
 {
     if (path.empty()) {
@@ -78,8 +75,7 @@ bool ensure_dir(const std::string& path)
 
     struct stat st{};
     if (stat(path.c_str(), &st) == 0) {
-        // 已存在：检查是不是目录
-        return (st.st_mode & S_IFDIR) != 0;
+        return (st.st_mode & S_IFDIR) != 0;  // 已存在且是目录
     }
 
 #ifdef _WIN32
@@ -96,7 +92,7 @@ bool ensure_dir(const std::string& path)
     return true;
 }
 
-/// 去掉路径末尾的 '/' 或 '\'
+// 去掉路径末尾的 '/' 或 '\'
 std::string rstrip_slash(const std::string& path)
 {
     if (path.empty()) {
@@ -109,7 +105,7 @@ std::string rstrip_slash(const std::string& path)
     return p;
 }
 
-/// 获取今天日期字符串：YYYY-MM-DD，用于日志目录分卷
+// 获取今天日期字符串：YYYY-MM-DD，用于日志目录分卷
 std::string today_date()
 {
     using namespace std::chrono;
@@ -127,7 +123,7 @@ std::string today_date()
     return std::string(buf);
 }
 
-/// 命令行使用说明
+// 命令行使用说明
 void print_usage(const char* prog)
 {
     std::cout << "Usage: " << prog << " [options]\n"
@@ -140,9 +136,7 @@ void print_usage(const char* prog)
               << "  -h, --help             show this help\n";
 }
 
-/// 将 ESKF 状态转换为 NavState（未来控制进程订阅的核心消息）
-/// 说明：
-///   - 这里选用 est_ns 作为主时间基（传感器对齐后的时间）；若为 0 则回退到 mono_ns
+// 将 ESKF 状态转换为 NavState（控制进程订阅的核心消息）
 NavState make_nav_state_from_eskf(const EskfState& st,
                                   std::uint16_t status_flags)
 {
@@ -151,18 +145,19 @@ NavState make_nav_state_from_eskf(const EskfState& st,
     const std::int64_t t_ns = (st.est_ns != 0) ? st.est_ns : st.mono_ns;
     s.t_ns = t_ns;
 
-    // 位置 / 速度 / 姿态 / 角速度
+    // 位置 / 速度 / 姿态
     for (int i = 0; i < 3; ++i) {
-        s.pos[i]     = st.pos[i];
-        s.vel[i]     = st.vel[i];
-        s.rpy[i]     = st.euler[i];
-        s.ang_vel[i] = st.ang_vel[i];
+        s.pos[i] = st.pos[i];
+        s.vel[i] = st.vel[i];
+        s.rpy[i] = st.euler[i];
     }
 
-    // 深度：占位逻辑，后续可改为“专用 depth 状态”
-    s.depth = -st.pos[2];
+    s.ang_vel[0] = 0.0f;
+    s.ang_vel[1] = 0.0f;
+    s.ang_vel[2] = 0.0f;
 
-    // 健康与标志位
+    s.depth = -st.pos[2];  // 假定 z 向上，depth = -z
+
     s.health   = st.valid ? NavHealth::OK : NavHealth::DEGRADED;
     s.status   = status_flags;
     s.reserved = 0;
@@ -170,7 +165,7 @@ NavState make_nav_state_from_eskf(const EskfState& st,
     return s;
 }
 
-/// 根据当前传感器状态生成 NavStatusFlags bitmask
+// 根据当前传感器状态生成 NavStatusFlags bitmask
 std::uint16_t compute_status_flags(bool imu_valid,
                                    bool dvl_valid,
                                    const EskfState& st)
@@ -178,24 +173,19 @@ std::uint16_t compute_status_flags(bool imu_valid,
     std::uint16_t flags = 0;
 
     if (imu_valid) {
-        flags |= static_cast<std::uint16_t>(NavStatusFlags::IMU_OK);
+        flags |= shared::msg::NAV_FLAG_IMU_OK;
     }
     if (dvl_valid) {
-        flags |= static_cast<std::uint16_t>(NavStatusFlags::DVL_OK);
+        flags |= shared::msg::NAV_FLAG_DVL_OK;
     }
     if (st.valid) {
-        flags |= static_cast<std::uint16_t>(NavStatusFlags::ESKF_OK);
+        flags |= shared::msg::NAV_FLAG_ESKF_OK;
     }
 
     return flags;
 }
 
 } // anonymous namespace
-
-
-// =====================================================
-//                         主程序
-// =====================================================
 
 int main(int argc, char** argv)
 {
@@ -348,21 +338,24 @@ int main(int argc, char** argv)
     int yaw_decim_counter = 0;
 
     // -------------------------------------------------
-    // 9. 导航状态发布器：当前用 Null 实现，后续可替换 ZeroMQ / SHM / UDP
+    // 9. 导航状态发布器（共享内存）
     // -------------------------------------------------
-    uwnav::nav_core::NullNavStatePublisher nav_pub;
-    if (!nav_pub.init()) {
-        std::cerr << "[navd] NavStatePublisher init failed, continue without IPC.\n";
+    nav_core::NavStatePublisher nav_pub;
+    nav_core::NavStatePublisherConfig pub_cfg;
+    pub_cfg.enable   = true;
+    pub_cfg.shm_name = "/rov_nav_state_v1"; // 控制进程需使用相同名称
+    pub_cfg.shm_size = 0;                   // 使用默认 sizeof(ShmLayout)
+
+    if (!nav_pub.init(pub_cfg)) {
+        std::cerr << "[navd] NavStatePublisher init failed; continue without IPC.\n";
     }
 
     // -------------------------------------------------
     // 10. 回调：IMU 数据处理（EKF 预测 + yaw 观测 + 日志 + NavState 发布）
     // -------------------------------------------------
     auto on_imu_frame = [&](const ImuFrame& f) {
-        // 1) 高频预测步：IMU → ESKF
         eskf.handleImu(f);
 
-        // 2) 利用实时 IMU 滤波器，积分并平滑 yaw，低频作为航向观测
         {
             const double t_sec = static_cast<double>(f.mono_ns) * 1e-9;
 
@@ -380,11 +373,9 @@ int main(int argc, char** argv)
 
             auto opt_out = imu_rt_filter.process(t_sec, acc_g, gyro_dps);
 
-            // 校准期内（前 calib_seconds 秒），process 返回 std::nullopt，不做观测更新
             if (opt_out.has_value()) {
                 const nav_core::ImuFiltOutput& filt = opt_out.value();
 
-                // 下采样：例如每 10 帧 IMU 做一次航向观测（约 10 Hz）
                 if (++yaw_decim_counter >= 10) {
                     yaw_decim_counter = 0;
 
@@ -396,8 +387,7 @@ int main(int argc, char** argv)
             }
         }
 
-        // 3) 记录 IMU 原始数据到 imu.bin
-        ImuLogPacket pkt{};
+        nav_core::ImuLogPacket pkt{};
         pkt.mono_ns = f.mono_ns;
         pkt.est_ns  = f.est_ns;
         for (int i = 0; i < 3; ++i) {
@@ -409,10 +399,9 @@ int main(int argc, char** argv)
         pkt.valid       = static_cast<std::uint8_t>(f.valid ? 1 : 0);
         imu_logger.writePod(pkt);
 
-        // 4) 记录当前 ESKF 状态到 eskf.bin，并构造 NavState 发布
         EskfState st;
         if (eskf.latestState(st) && st.valid) {
-            EskfLogPacket sp{};
+            nav_core::EskfLogPacket sp{};
             sp.mono_ns = st.mono_ns;
             sp.est_ns  = st.est_ns;
             for (int i = 0; i < 3; ++i) {
@@ -426,24 +415,21 @@ int main(int argc, char** argv)
             sp.status = static_cast<std::uint8_t>(st.status & 0xFF);
             state_logger.writePod(sp);
 
-            // === 新增：构造 NavState 并通过 nav_pub 发布 ===
             const bool imu_ok  = f.valid;
             const bool dvl_ok  = g_last_dvl_valid.load();
             const std::uint16_t flags = compute_status_flags(imu_ok, dvl_ok, st);
             const NavState nav_state  = make_nav_state_from_eskf(st, flags);
-            (void)nav_pub.publish(nav_state); // 当前 Null 实现，总是返回 true
+
+            if (nav_pub.ok()) {
+                (void)nav_pub.publish(nav_state);
+            }
         }
     };
 
-    // -------------------------------------------------
-    // 11. 回调：DVL 数据处理（EKF 速度更新 + 日志 + 状态标记）
-    // -------------------------------------------------
     auto on_dvl_frame = [&](const DvlFrame& f) {
-        // 1) DVL 更新 ESKF（速度校正）
         eskf.handleDvl(f);
 
-        // 2) 记录 DVL 帧到 dvl.bin
-        DvlLogPacket pkt{};
+        nav_core::DvlLogPacket pkt{};
         pkt.mono_ns = f.mono_ns;
         pkt.est_ns  = f.est_ns;
         pkt.vel[0]  = f.vel[0];
@@ -453,17 +439,12 @@ int main(int argc, char** argv)
         pkt.quality = static_cast<std::int32_t>(f.quality);
         dvl_logger.writePod(pkt);
 
-        // 3) 更新 DVL 状态标志（供 NavStatusFlags 使用）
         g_last_dvl_valid.store(f.valid);
     };
 
-    // 原始回调目前不做处理，可以在需要时用于串口抓包调试
-    nav_core::ImuDriverWit::RawCallback imu_raw_cb; // 空
-    nav_core::DvlDriver::RawCallback    dvl_raw_cb; // 空
+    nav_core::ImuDriverWit::RawCallback imu_raw_cb;
+    nav_core::DvlDriver::RawCallback    dvl_raw_cb;
 
-    // -------------------------------------------------
-    // 12. 启动 IMU / DVL 驱动
-    // -------------------------------------------------
     nav_core::ImuDriverWit imu_driver(
         imu_port,
         imu_baud,
@@ -492,9 +473,6 @@ int main(int argc, char** argv)
                   << " (continue with IMU only)\n";
     }
 
-    // -------------------------------------------------
-    // 13. 启动信息打印
-    // -------------------------------------------------
     std::cout << "[navd] Started navigation daemon\n"
               << "       IMU: " << imu_port << " @" << imu_baud
               << " addr=0x" << std::hex << static_cast<int>(imu_addr) << std::dec << "\n"
@@ -503,29 +481,13 @@ int main(int argc, char** argv)
               << "       log root: " << log_root << "\n"
               << "       log dir : " << log_dir  << "\n";
 
-    // -------------------------------------------------
-    // 14. 主循环：保持进程存活，直到收到停止信号
-    //       （核心工作都在 IMU/DVL 回调线程中完成）
-    // -------------------------------------------------
     using namespace std::chrono_literals;
     while (!g_stop.load()) {
         std::this_thread::sleep_for(1s);
-
-        // 如有需要，可在此周期性打印当前状态（默认关）
-        // EskfState st;
-        // if (eskf.latestState(st) && st.valid) {
-        //     std::cout << "[navd] pos=("
-        //               << st.pos[0] << ", "
-        //               << st.pos[1] << ", "
-        //               << st.pos[2] << ")\n";
-        // }
     }
 
     std::cout << "[navd] Stopping...\n";
 
-    // -------------------------------------------------
-    // 15. 清理资源：停止驱动、刷新并关闭日志
-    // -------------------------------------------------
     if (dvl_started) {
         dvl_driver.stop();
     }

@@ -11,7 +11,6 @@ set(CMAKE_MAKEFILE_DEPENDS
   "CMakeFiles/3.16.3/CMakeCCompiler.cmake"
   "CMakeFiles/3.16.3/CMakeCXXCompiler.cmake"
   "CMakeFiles/3.16.3/CMakeSystem.cmake"
-<<<<<<< HEAD
   "/usr/share/cmake-3.16/Modules/CMakeCCompiler.cmake.in"
   "/usr/share/cmake-3.16/Modules/CMakeCCompilerABI.c"
   "/usr/share/cmake-3.16/Modules/CMakeCInformation.cmake"
@@ -94,33 +93,12 @@ set(CMAKE_MAKEFILE_DEPENDS
   "/usr/share/cmake-3.16/Modules/Compiler/XLClang-CXX-DetermineCompiler.cmake"
   "/usr/share/cmake-3.16/Modules/Compiler/zOS-C-DetermineCompiler.cmake"
   "/usr/share/cmake-3.16/Modules/Compiler/zOS-CXX-DetermineCompiler.cmake"
-=======
-  "/usr/share/cmake-3.16/Modules/CMakeCInformation.cmake"
-  "/usr/share/cmake-3.16/Modules/CMakeCXXInformation.cmake"
-  "/usr/share/cmake-3.16/Modules/CMakeCheckCompilerFlagCommonPatterns.cmake"
-  "/usr/share/cmake-3.16/Modules/CMakeCommonLanguageInclude.cmake"
-  "/usr/share/cmake-3.16/Modules/CMakeGenericSystem.cmake"
-  "/usr/share/cmake-3.16/Modules/CMakeInitializeConfigs.cmake"
-  "/usr/share/cmake-3.16/Modules/CMakeLanguageInformation.cmake"
-  "/usr/share/cmake-3.16/Modules/CMakeSystemSpecificInformation.cmake"
-  "/usr/share/cmake-3.16/Modules/CMakeSystemSpecificInitialize.cmake"
-  "/usr/share/cmake-3.16/Modules/CheckCSourceCompiles.cmake"
-  "/usr/share/cmake-3.16/Modules/CheckIncludeFile.cmake"
-  "/usr/share/cmake-3.16/Modules/CheckLibraryExists.cmake"
-  "/usr/share/cmake-3.16/Modules/Compiler/CMakeCommonCompilerMacros.cmake"
-  "/usr/share/cmake-3.16/Modules/Compiler/GNU-C.cmake"
-  "/usr/share/cmake-3.16/Modules/Compiler/GNU-CXX.cmake"
-  "/usr/share/cmake-3.16/Modules/Compiler/GNU.cmake"
->>>>>>> collaborator_IMU_DVL
   "/usr/share/cmake-3.16/Modules/FindPackageHandleStandardArgs.cmake"
   "/usr/share/cmake-3.16/Modules/FindPackageMessage.cmake"
   "/usr/share/cmake-3.16/Modules/FindThreads.cmake"
   "/usr/share/cmake-3.16/Modules/Internal/CMakeCheckCompilerFlag.cmake"
-<<<<<<< HEAD
   "/usr/share/cmake-3.16/Modules/Internal/FeatureTesting.cmake"
   "/usr/share/cmake-3.16/Modules/Platform/Linux-Determine-CXX.cmake"
-=======
->>>>>>> collaborator_IMU_DVL
   "/usr/share/cmake-3.16/Modules/Platform/Linux-GNU-C.cmake"
   "/usr/share/cmake-3.16/Modules/Platform/Linux-GNU-CXX.cmake"
   "/usr/share/cmake-3.16/Modules/Platform/Linux-GNU.cmake"
@@ -136,14 +114,11 @@ set(CMAKE_MAKEFILE_OUTPUTS
 
 # Byproducts of CMake generate step:
 set(CMAKE_MAKEFILE_PRODUCTS
-<<<<<<< HEAD
   "CMakeFiles/3.16.3/CMakeSystem.cmake"
   "CMakeFiles/3.16.3/CMakeCCompiler.cmake"
   "CMakeFiles/3.16.3/CMakeCXXCompiler.cmake"
   "CMakeFiles/3.16.3/CMakeCCompiler.cmake"
   "CMakeFiles/3.16.3/CMakeCXXCompiler.cmake"
-=======
->>>>>>> collaborator_IMU_DVL
   "CMakeFiles/CMakeDirectoryInformation.cmake"
   )
 

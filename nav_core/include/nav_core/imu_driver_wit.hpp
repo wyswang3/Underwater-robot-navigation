@@ -1,0 +1,141 @@
+// Underwater-robot-navigation/nav_core/include/nav_core/imu_driver_wit.hpp
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <thread>
+
+#include <nav_core/types.hpp>
+
+namespace nav_core {
+
+/**
+ * @brief IMU 驱动配置
+ */
+struct ImuConfig {
+    std::string port;             ///< 串口设备路径，例如 "/dev/ttyUSB0"
+    int         baud{230400};     ///< 波特率
+    std::uint8_t slave_addr{0x50};///< Modbus 从机地址
+
+    ImuFilterConfig filter{};     ///< IMU 过滤配置
+};
+
+/**
+ * @brief 基于 WitMotion HWT9073-485 (Modbus-RTU) 的 IMU 驱动
+ *
+ * 设计思路：
+ *  - 串口与线程模型由 nav_core 自己管理（POSIX + C++11 线程）
+ *  - Modbus 协议解析、寄存器更新逻辑复用厂家 wit_c_sdk
+ *  - 通过 WitSerialWriteRegister / WitRegisterCallBack 做桥接
+ *  - 输出统一的 ImuFrame 结构，方便与 DvlFrame 一起做导航融合
+ *
+ * 限制：
+ *  - Wit SDK 使用全局寄存器数组 sReg[]，因此当前实现只支持单实例
+ *    （在一个进程中只创建一个 ImuDriverWit 对象）
+ */
+class ImuDriverWit {
+public:
+    using FrameCallback = std::function<void(const ImuFrame&)>;
+    using RawCallback   = std::function<void(const ImuRawRegs&)>;
+
+    /// 默认构造（需要后续调用 init()）
+    ImuDriverWit();
+
+    /// 使用配置 + 回调构造（内部会调用 init，但不会自动 start）
+    ImuDriverWit(const ImuConfig& cfg,
+                 FrameCallback on_frame,
+                 RawCallback   on_raw = nullptr);
+
+    /// 兼容旧接口的构造函数（内部转换为 ImuConfig 并调用 init）
+    ImuDriverWit(const std::string& port,
+                 int baud,
+                 std::uint8_t slave_addr,
+                 const ImuFilterConfig& filter,
+                 FrameCallback on_frame,
+                 RawCallback   on_raw = nullptr);
+
+    ~ImuDriverWit();
+
+    /**
+     * @brief 初始化驱动（打开前的配置，不启动线程）
+     *
+     * @param cfg       串口与过滤配置
+     * @param on_frame  解析并过滤后的 IMU 帧回调
+     * @param on_raw    可选：原始寄存器更新信息回调（用于调试/统计）
+     * @return true     初始化成功
+     * @return false    初始化失败（串口/SDK 等问题）
+     */
+    bool init(const ImuConfig& cfg,
+              FrameCallback on_frame,
+              RawCallback   on_raw = nullptr);
+
+    /// 启动 IMU 驱动线程（打开串口，初始化 Wit SDK）
+    bool start();
+
+    /// 停止 IMU 驱动线程（关闭串口，释放 Wit SDK）
+    void stop();
+
+    /// 设置过滤配置（线程安全：内部按值拷贝）
+    void setFilterConfig(const ImuFilterConfig& cfg);
+
+    /// 获取当前过滤配置（按值返回）
+    ImuFilterConfig filterConfig() const;
+
+private:
+    // 串口管理
+    bool openPort();
+    void closePort();
+
+    // 线程主循环：周期性发起 WitReadReg + 从串口接收数据喂给 WitSerialDataIn
+    void threadFunc();
+
+    // ---- Wit SDK 回调桥接（C → C++） ----
+    // Wit SDK 只支持全局回调，因此这里用静态指针指向当前实例
+    static ImuDriverWit* s_instance_;
+
+    // 提供给 WitSerialWriteRegister 的静态回调
+    static void serialWriteBridge(std::uint8_t* data, std::uint32_t len);
+
+    // 提供给 WitRegisterCallBack 的静态回调
+    static void regUpdateBridge(std::uint32_t start_reg, std::uint32_t num);
+
+    // 实际成员实现
+    void onSerialWrite(std::uint8_t* data, std::uint32_t len);
+    void onRegUpdate(std::uint32_t start_reg, std::uint32_t num);
+
+    // 根据 sReg[] + start_reg/num 解析出 ImuFrame，并做简单过滤
+    void makeFrameFromRegs(std::uint32_t start_reg,
+                           std::uint32_t num,
+                           ImuFrame& out);
+
+private:
+    // 配置（保留原有结构，兼容老代码）
+    ImuConfig cfg_{};
+
+    // === 新增：与 .cpp 中使用保持一致的展开字段 ===
+    // 这样现有实现里用的 port_ / baud_ / slave_addr_ / filter_cfg_ 都有定义，
+    // 同时我们可以在 init(...) 里把 cfg_ 同步过去（在 .cpp 里改一两行即可）。
+    std::string     port_{};
+    int             baud_{230400};
+    std::uint8_t    slave_addr_{0x50};
+    ImuFilterConfig filter_cfg_{};
+
+    // 串口 fd
+    int fd_{-1};
+
+    // Wit SDK 状态
+    bool sdk_inited_{false};
+
+    // 回调
+    FrameCallback on_frame_{};
+    RawCallback   on_raw_{};
+
+    // 线程控制
+    std::thread       th_;
+    std::atomic<bool> running_{false};
+    std::atomic<bool> stop_requested_{false};
+};
+
+} // namespace nav_core

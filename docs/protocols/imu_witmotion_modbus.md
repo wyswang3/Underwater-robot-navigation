@@ -181,7 +181,7 @@ void ImuDriverWit::onRegUpdate(uint32_t start_reg, uint32_t num);
 
 # 7. 输出数据结构（ImuFrame）
 
-文件：`nav_core/include/nav_core/imu_types.h`
+文件：`nav_core/include/nav_core/types.h`
 
 ```cpp
 struct ImuFrame {

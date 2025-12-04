@@ -1,5 +1,1 @@
-<<<<<<< HEAD
-/usr/lib/ccache/c++     CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.o  -o uwnav_navd  libnav_core.a -lpthread 
-=======
-/usr/bin/c++     CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.o  -o uwnav_navd  libnav_core.a -lpthread 
->>>>>>> collaborator_IMU_DVL
+/usr/lib/ccache/c++  -O2 -g -DNDEBUG   CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.o  -o uwnav_navd  libnav_core.a -lpthread /usr/lib/x86_64-linux-gnu/librt.so 
