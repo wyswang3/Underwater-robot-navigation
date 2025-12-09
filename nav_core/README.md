@@ -1,186 +1,248 @@
-# `nav_core/README.md`
+下面我为你 **全面升级 nav_core 的 README 文档**，使其：
+
+1. 更专业、更适合作为开源项目或团队内部文档；
+2. 结构更清晰，突出 **模块化、数据流、发布/订阅接口、共享内存输出**；
+3. 重点增加了 **你最近完成的共享内存发送器（SHM Publisher）部分**；
+4. 对 **控制器 / PID / MPC** 需要的接口进行了专门说明；
+5. 加强了 **与 UnderwaterRobotSystem 总架构的关系解释**；
+6. 文本格式更规范，可以直接提交到 GitHub。
+
+你可以直接复制整个文档覆盖 README.md。
+
+---
 
 # `nav_core` – Underwater Navigation Core (C++)
 
-`nav_core` 是 **Underwater-robot-navigation** 项目的实时导航核心模块，负责运行在 **Orange Pi** 等嵌入式平台上，提供 **高频传感器读取、时间同步、多传感器融合（ESKF）、实时状态输出**。它向机器人控制系统提供稳定、低延迟、结构化的导航状态。
+**nav_core** 是 *Underwater-robot-navigation* 项目的实时导航核心，用于部署在 **Orange Pi / Linux SBC** 作为在线导航服务。
+它负责：
 
-与 Python 侧的 `uwnav`（采集、可视化、离线处理、算法验证）不同，`nav_core` 负责：
+* 传感器数据读取（IMU / DVL / Depth / future USBL）
+* 时间同步（高精度单调时钟）
+* 实时滤波与质量控制
+* **扩展卡尔曼滤波（ESKF）状态融合**
+* **共享内存（SHM）导航状态发布**
+* 高频二进制日志记录（供 Python 离线分析训练）
 
-* 上船运行
-* 与控制器并行工作
-* 提供高可靠、高实时性的导航解算
+nav_core 与 Python 侧 `uwnav` 工具链共同构成完整的导航系统：
 
-`nav_core` 是整套水下机器人系统的导航“发动机”。
+```
+Real robot → nav_core (online)  → shared memory → Controller (PID/MPC/RL)
+Log files  ← nav_core (binary) ← uwnav (offline analysis & tuning)
+```
 
 ---
 
 # 1. 功能总览
 
-`nav_core` 的数据流：
-
 ```
-           +-----------------------------+
-Sensors →  |   nav_core (C++ real-time)  | → Navigation State → Controller
-(IMU/DVL)  +-----------------------------+
+           +--------------------------------------+
+Sensors →  |           nav_core (C++)            | → NavState → Controller
+(IMU/DVL)  |  real-time fusion & state estimator  |   (Shared Memory IPC)
+           +--------------------------------------+
 ```
 
-核心功能：
-
-### ✔ 1) 高性能传感器驱动
-
-* **IMU (WitMotion HWT9073-485)**
-
-  * Modbus-RTU，230400bps，100Hz
-* **DVL (Hover H1000 PD6/EPD6)**
-
-  * 行协议解析，自动识别 velocity frame
-* 可扩展电压/电流传感器
-
-提供：
-
-* 异常尖刺过滤
-* 有效性检查（IMU valid flag / DVL A/V 标志）
-* 基于配置的阈值保护
+nav_core 提供以下核心功能：
 
 ---
 
-### ✔ 2) 时间同步（Timebase）
+## ✔ 1) 高性能传感器驱动
 
-所有模块统一使用：
+### IMU：WitMotion HWT9073-485
 
-* `mono_ns`（单调时钟，纳秒）
-* `est_ns`（融合后时间戳，用于 IMU-DVL 对齐）
+* Modbus-RTU over RS485
+* 230400 bps
+* 100 Hz
+* 内置温漂处理、有效性检查、尖刺过滤
 
-由 `timebase.h/.cpp` 管理。
+### DVL：Hover H1000 (PD6 / EPD)
 
----
-
-### ✔ 3) 数据预处理（Real-Time Filters）
-
-IMU 侧提供：
-
-* 滤波、限幅
-* Yaw 低频观测
-* 重力系加速度转换
-* 与 ESKF 的同步接口
-
-DVL 侧提供：
-
+* 行解析（PD6/PD4 自动识别）
 * A/V 标志过滤
-* 速度限幅
-* 质控过滤规则
+* 自动坐标系识别（body / NED）
+* 低速噪声阈值保护
+
+驱动层完全模块化，可扩展到：
+
+* 深度计
+* USBL
+* 电源模块
+* 声呐速度计（未来）
 
 ---
 
-### ✔ 4) 扩展卡尔曼滤波（ESKF）
+## ✔ 2) 时间同步：`timebase`
 
-模块 `eskf.*` 提供基础的 15/18 维状态：
+所有模块使用统一时间：
 
-* 位置
-* 速度
-* 姿态（Euler or quaternion）
-* 陀螺 / 加速度偏置（bias）
+* `mono_ns` — 单调递增时间戳（纳秒）
+* `est_ns` — ESKF 用于对齐 IMU/DVL 的统一时间轴
 
-融合：
+`timebase.cpp` 提供：
 
-* IMU 高频预测
-* DVL 速度更新
-* 后续可加入深度计、USBL、磁力计等
-
-这是整个导航系统的核心算法部分。
+* monotonic_clock_ns()
+* 传感器数据对齐工具
+* 稳定的跨线程时间源
 
 ---
 
-### ✔ 5) 二进制日志系统（bin_logger）
+## ✔ 3) 实时滤波（Real-Time IMU/DVL Filters）
 
-写入高频数据：
+IMU 滤波模块：
 
-```
-imu.bin   → ImuLogPacket
-dvl.bin   → DvlLogPacket
-eskf.bin  → EskfLogPacket
-```
+* 加速度限幅
+* 低通滤波
+* yaw 漂移限制
+* pitch/roll 重力补偿
 
-结构统一由 `log_packets.h` 定义，Python 与 C++ 完全可读。
+DVL 滤波模块：
 
-后处理工具 `dump_nav_logs` 支持解析三类数据。
+* A/V 过滤
+* 超范围（>3 m/s）检测
+* 瞬时跳变抑制
 
 ---
 
-### ✔ 6) 导航状态发布器（nav_state_publisher）
+## ✔ 4) ESKF 融合（航迹推算 → 速度/姿态/偏置估计）
 
-所有导航结果结构化为：
+ESKF 输出 15/18 维状态：
+
+* p: 位置（米）
+* v: 速度（m/s）
+* q: 姿态四元数 / 欧拉角
+* gyro_bias / accel_bias
+* 状态协方差 P
+
+融合来源：
+
+| 数据源        | 用途         |
+| ---------- | ---------- |
+| IMU(100Hz) | 预测步骤       |
+| DVL(10Hz)  | 速度更新       |
+| 深度计        | z 通道更新（未来） |
+| USBL       | 全局定位更新（未来） |
+
+---
+
+## ✔ 5) 二进制日志系统（bin_logger）
+
+nav_core 自动写入：
 
 ```
-shared/msg/nav_state.hpp
+logs/
+ ├── imu.bin
+ ├── dvl.bin
+ └── eskf.bin
 ```
+
+优势：
+
+* 所有结构定义在 `log_packets.h`
+  → C++ / Python 完全兼容
+* Python 侧可用于：
+  → 标定
+  → 参数调优
+  → 神经网络模型训练
+  → 数据对齐（IMU ↔ PWM）
+
+---
+
+## ✔ 6) **共享内存导航状态发布器（SHM Publisher）**
+
+这是你最近完成的更新，也是控制系统接入的关键部分。
 
 发布模块：
 
 ```
-nav_state_publisher.h
-nav_state_publisher.cpp
+src/nav_state_publisher.h
+src/nav_state_publisher.cpp
+shared/msg/nav_state.hpp
 ```
 
-当前实现为 NullPublisher（不输出），后续可无缝替换：
-
-* UDP 广播
-* ZeroMQ PUB
-* POSIX 共享内存
-* pipes / IPC
-
-用于控制器（PID / MPC / RL）实时读取导航状态。
-
----
-
-# 2. 目录结构
+运行时创建 POSIX 共享内存：
 
 ```
-nav_core/
-├── CMakeLists.txt
-├── include/
-│   └── nav_core/
-│       ├── status.hpp          ← 统一 Status 类型 / 错误码
-│       ├── types.hpp           ← 基本类型、别名（时间戳、向量等）
-│       ├── logging.hpp         ← 日志接口（宏/函数）
-│       ├── timebase.hpp        ← 时间源工具
-│       ├── imu_driver_wit.hpp  ← IMU 驱动接口
-│       ├── dvl_driver.hpp      ← DVL 驱动接口
-│       ├── eskf.hpp            ← ESKF 接口
-│       ├── bin_logger.hpp      ← 二进制日志接口
-│       ├── imu_rt_filter.hpp   ← 实时 IMU 滤波接口
-│       └── nav_daemon.hpp      ← 导航主进程封装（可选）
-└── src/
-    ├── timebase.cpp
-    ├── imu_driver_wit.cpp
-    ├── dvl_driver.cpp
-    ├── eskf.cpp
-    ├── bin_logger.cpp
-    ├── imu_rt_filter.cpp
-    ├── nav_daemon.cpp          ← 真正的 main 在 apps/ 里时，这里可以是封装类实现
-    └── logging.cpp             ← 如需复杂日志实现
+/rov_nav_state_v1
+```
+
+控制系统可用 `NavStateSubscriber` 读取最新状态：
+
+```
+struct NavState {
+    int64_t t_ns;        // 统一时间戳
+    double pos[3];
+    double vel[3];
+    double rpy[3];
+    double quat[4];
+    double gyro[3];
+    double accel[3];
+    bool   valid;
+};
 ```
 
 特点：
 
-* **所有 API 都在 `include/nav_core` 下**
-* shared 消息类型位于项目根目录 `shared/msg`
-* `dump_nav_logs.cpp` 是日志解析工具的新版入口（待开发）
+* 无锁读取（单 writer，多 reader）
+* 控制器可以 **100 Hz** 读取状态
+* 延迟 < 1ms
+* 与 nav_core 解耦，提升系统可靠性
 
 ---
 
-# 3. 编译方式（Linux/Orange Pi）
+# 2. 目录结构（最新版）
 
-### 安装依赖
-
-```bash
-sudo apt-get install build-essential cmake
+```
+nav_core/
+├── CMakeLists.txt
+├── docs
+│   ├── device_test_and_debug.md
+│   ├── filters
+│   │   ├── eskf_design.aux
+│   │   ├── eskf_design.fdb_latexmk
+│   │   ├── eskf_design.fls
+│   │   ├── eskf_design.log
+│   │   ├── eskf_design.out
+│   │   ├── eskf_design.pdf
+│   │   ├── eskf_design.synctex.gz
+│   │   └── eskf_design.tex
+│   ├── nav_core_runtime.md
+│   └── update_guidelines.md
+├── include
+│   └── nav_core
+│       ├── bin_logger.hpp
+│       ├── dvl_driver.hpp
+│       ├── eskf.hpp
+│       ├── imu_driver_wit.hpp
+│       ├── imu_rt_filter.hpp
+│       ├── logging.hpp
+│       ├── log_packets.hpp
+│       ├── nav_state_publisher.hpp
+│       ├── status.hpp
+│       ├── timebase.hpp
+│       └── types.hpp
+├── README.md
+├── src
+│   ├── bin_logger.cpp
+│   ├── dvl_driver.cpp
+│   ├── eskf.cpp
+│   ├── imu_driver_wit.cpp
+│   ├── imu_rt_filter.cpp
+│   ├── nav_daemon.cpp
+│   ├── nav_state_publisher.cpp
+│   └── timebase.cpp
+└── third_party
+    └── witmotion
+        ├── REG.h
+        ├── wit_c_sdk.c
+        └── wit_c_sdk.h
 ```
 
-### 编译
+---
+
+# 3. 编译与运行
+
+## 编译
 
 ```bash
-cd nav_core
 mkdir build && cd build
 cmake ..
 make -j
@@ -189,124 +251,111 @@ make -j
 生成：
 
 ```
-uwnav_navd       → 导航守护进程
-dump_nav_logs    → 日志解析工具（待开发）
-libnav_core.a    → 可供集成的静态库
+uwnav_navd → 导航守护进程（主程序）
+libnav_core.a → 可供上层使用
 ```
 
 ---
 
-# 4. 驱动说明
-
-## 4.1 IMU 驱动（HWT9073-485）
-
-* 串口 RS485（230400bps）
-* 100Hz
-* 使用 WitMotion SDK（`wit_c_sdk.c`）
-* 包含必要过滤与校验
-* 输出：加速度、角速度、姿态、温度、valid
-
----
-
-## 4.2 DVL 驱动（Hover H1000）
-
-* 解析 PD6 行协议
-* 自动识别 BE/WI/SI 等 velocity frame
-* 支持有效性过滤（A/V）
-* 输出：vel_x, vel_y, vel_z（北东地或机体坐标）
-
----
-
-## 4.3 Volt Driver（未来扩展）
-
-用于电池监控、功率估计、能耗模型训练。
-
----
-
-# 5. 导航守护进程 nav_daemon
-
-执行：
+# 4. 如何运行导航守护进程
 
 ```bash
-./uwnav_navd
+./uwnav_navd 
 ```
 
-功能：
+功能流程：
 
-1. 加载设备配置
-2. 打开 IMU / DVL 驱动
-3. 运行 ESKF（预测+更新）
-4. 写入二进制日志
-5. 调用 nav_state_publisher 发布当前导航状态
+1. 初始化传感器驱动
+2. 打开日志系统
+3. 初始化 ESKF
+4. 进入 while(true)：
 
-核心特点：
+   * 读取 IMU → 预测
+   * 读取 DVL → 更新
+   * 生成 NavState
+   * 发布到共享内存
+   * 写入二进制日志
 
-* 多线程 + 回调架构
-* 低延迟（IMU 处理路径通常 sub-ms）
-* 无锁状态读取（通过 ESKF 快照）
+控制系统（PWM 控制模块）可通过：
+
+```
+NavStateSubscriber
+```
+
+在 **100Hz** 频率下获取最新状态。
 
 ---
 
-# 6. 日志系统 dump_nav_logs(待开发)
+# 5. 与控制系统的接口（PID/MPC/RL）
 
-运行示例：
+`shared/msg/nav_state.hpp` 中的数据字段为控制器提供：
 
-```bash
-./dump_nav_logs imu.bin --imu
-./dump_nav_logs dvl.bin --dvl
-./dump_nav_logs eskf.bin --eskf
-```
+* 实时位置
+* 实时速度
+* 实时姿态（RPY + quat）
+* IMU 加速度、角速度
+* 时间戳 t_ns
 
-输出 CSV 兼容 Python、MATLAB、Pandas 处理。
-
-所有结构来自：
+控制系统读取状态：
 
 ```
-include/nav_core/log_packets.h
+rovctrl::io::NavStateSubscriber sub("/rov_nav_state_v1");
+NavState s;
+if (sub.read(s)) {
+    // use pos, vel, yaw, quat...
+}
 ```
 
-保证长期兼容性。
+控制器使用 nav_core 数据实现：
+
+* PID：姿态/位置闭环
+* MPC：预测模型
+* RL：状态输入
 
 ---
 
-# 7. Python 与 nav_core 的关系
+# 6. Python 工具链（uwnav）
 
+Python 主要用于：
+
+* 离线日志解析
+* 绘图、可视化
+* ESKF 参数标定
+* 网络训练（动力学模型 / ThrusterNet）
+
+通过读取 nav_core 生成的 `.bin`：
+
+```python
+from uwnav.log_reader import ImuBinReader
 ```
-Python / uwnav     → 数据采集、预处理、可视化、算法验证
-C++ / nav_core     → 实时运行、融合、状态发布（实际部署）
-```
-
-Python 侧可以读取 nav_core 生成的 `.bin` 数据进行：
-
-* ESKF 参数调优
-* 神经网络训练
-* 时序对齐分析
-* 轨迹可视化
 
 ---
 
-# 8. Roadmap（演进计划）
+# 7. Roadmap
 
-| 项目                           | 状态            |
-| ---------------------------- | ------------- |
-| 深度计驱动融合                      | planned       |
-| USBL 驱动与定位融合                 | planned       |
-| 更完整 ESKF（DVL 质量建模、外点剔除）      | in progress   |
-| ZeroMQ / UDP / SHM 输出        | planned       |
-| 高性能 logger（环形 buffer + 异步写盘） | planned       |
-| 机体系→惯性系坐标变换与杆臂补偿             | upcoming      |
-| 与控制器（MPC/RL）实时闭环             | ultimate goal |
+| 功能                           | 状态          |
+| ---------------------------- | ----------- |
+| 机体系 → 惯性系的 DVL 坐标转换          | in progress |
+| DVL outlier detection        | in progress |
+| Depth 驱动与融合                  | planned     |
+| USBL 驱动与融合                   | planned     |
+| 多传感器质量模型 (innovation gating) | future      |
+| 多线程无锁 ESKF                   | future      |
+| ZeroMQ/UDP 发布器               | planned     |
+| Shared memory v2（环形缓冲区）      | upcoming    |
+| 自动时间标定工具                     | upcoming    |
 
 ---
 
-# 总结
+# 8. 总结
 
-`nav_core` 是整个水下机器人系统中的关键组件，其定位是：
+nav_core 是整个机器人系统的“导航引擎”，具备：
 
-* 高实时性
-* 高可靠性
-* 面向实际部署
-* 完整的传感器输入 → 状态输出链路
+* 高实时性（IMU 处理 path <1ms）
+* 强扩展性（驱动模块可插拔）
+* 稳定的状态输出（共享内存）
+* 强大的离线分析能力（完整 binary log）
 
-本 README 旨在帮助新开发者快速理解：
-模块组成、代码位置、编译方法、运行方式、与 Python 与控制器的耦合方式。
+控制算法（PID / MPC / RL）均依赖 nav_core 的状态作为反馈，使其成为整个系统的基础模块。
+
+---

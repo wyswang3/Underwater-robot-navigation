@@ -8,7 +8,7 @@
  *
  * 设计目标：
  *   - 仅依赖标准头文件，可在任意 C++17 项目中直接 include；
- *   - POD / 平凡布局，便于通过 ZeroMQ / UDP 直接按字节发送；
+ *   - POD / 平凡布局，便于通过共享内存 / ZeroMQ / UDP 直接按字节发送；
  *   - 字段语义清晰，既能满足 PID，也能满足后续 MPC / 轨迹控制需求；
  *   - 导航项目（Underwater-robot-navigation）和控制项目
  *     （OrangePi_STM32_for_ROV）统一使用此定义，避免结构漂移。
@@ -24,9 +24,7 @@
 namespace shared::msg {
 
 /**
- * @brief 导航状态整体健康状况（粗粒度）
- *
- * 只做“好 / 差 / 坏”级别的判断，避免过早设计复杂状态机。
+ * @brief 导航整体健康状况（粗粒度）
  */
 enum class NavHealth : std::uint8_t {
     UNINITIALIZED = 0,   ///< 尚未完成初始化 / 尚无有效状态
@@ -48,7 +46,7 @@ enum NavStatusFlags : std::uint16_t {
     NAV_FLAG_IMU_OK      = 1u << 0,   ///< IMU 数据正常
     NAV_FLAG_DVL_OK      = 1u << 1,   ///< DVL 速度有效
     NAV_FLAG_DEPTH_OK    = 1u << 2,   ///< 深度传感器正常
-    NAV_FLAG_USBL_OK     = 1u << 3,   ///< USBL/外部定位正常
+    NAV_FLAG_USBL_OK     = 1u << 3,   ///< USBL / 外部定位正常
 
     NAV_FLAG_ESKF_OK     = 1u << 4,   ///< ESKF / 状态估计算法正常
     NAV_FLAG_ALIGN_DONE  = 1u << 5,   ///< 完成初始对准 / 零偏估计
@@ -69,42 +67,40 @@ enum NavStatusFlags : std::uint16_t {
  * @brief 导航状态主结构（跨进程共享的“语言”）
  *
  * 坐标系约定（建议，具体可在文档中明确）：
- *   - pos: NED or ENU 局部坐标系（由导航侧统一定义）
+ *   - pos: NED 或 ENU 局部坐标系（由导航侧统一定义）
  *   - vel: 同 pos 坐标系的线速度
  *   - rpy: 机体系相对于导航坐标系的欧拉角 [rad]，顺序 (roll, pitch, yaw)
- *   - ang_vel: 机体系角速度 [rad/s]
+ *
+ * 高频动力学量：
+ *   - omega_b: 机体系角速度 [rad/s]，对应 IMU / ESKF 输出的 ω_body
+ *   - acc_b:   机体系线加速度 [m/s^2]，重力是否剔除在导航文档中说明
  *
  * 深度：
  *   - depth: 一般为“水面向下为正”的深度，单位 [m]；
- *   - 如果暂无有效深度，可填 NaN 或特定约定值，并在 status_flags 中取消 DEPTH_OK。
+ *   - 如果暂无有效深度，可填 NaN 或约定值，并在 status_flags 中取消 DEPTH_OK。
  */
 struct NavState
 {
-    // 1. 时间戳（统一时间基）
-    std::int64_t t_ns;       ///< 单调时间（steady_clock）纳秒
+    std::uint64_t t_ns;      ///< 单调时间戳 (ns)
 
-    // 2. 位置与速度（导航坐标系）
-    float pos[3];            ///< 位置 [m] : {x, y, z}
-    float vel[3];            ///< 线速度 [m/s] : {vx, vy, vz}
+    // ---- 1. 导航层基础输出 (NED/ENU) ----
+    double pos[3];           ///< 位置: [x, y, z]
+    double vel[3];           ///< 速度: [vx, vy, vz]
+    double rpy[3];           ///< 姿态: roll, pitch, yaw (rad)
 
-    // 3. 姿态与角速度
-    float rpy[3];            ///< 欧拉角 [rad] : {roll, pitch, yaw}
-    float ang_vel[3];        ///< 角速度 [rad/s] : {wx, wy, wz}
+    double depth;            ///< 深度 [m]，下为正
 
-    // 4. 标量深度（可选，便于控制侧做深度环）
-    float depth;             ///< 深度 [m]，下为正；未知时可填 NaN 或 0
+    // ---- 2. 高频动力学量（body 坐标系）----
+    double omega_b[3];       ///< 机体系角速度 [wx, wy, wz], rad/s
+    double acc_b[3];         ///< 机体系线加速度 [ax, ay, az], m/s^2
 
-    // 5. 状态标志
-    NavHealth      health;   ///< 整体健康状态（粗粒度）
-    std::uint8_t   reserved; ///< 对齐用 / 未来扩展（例如：导航模式编号）
-    std::uint16_t  status;   ///< bitmask（NavStatusFlags）
-
-    // 将来如需扩展，可在末尾追加字段，保持旧版二进制兼容：
-    // float cov_pos[3];   // 位置协方差对角线
-    // float cov_vel[3];
-    // ...
+    // ---- 3. 状态标志 ----
+    NavHealth     health;        ///< 整体健康状态（粗粒度）
+    std::uint8_t  reserved;      ///< 对齐 / 未来扩展（例如导航模式编号）
+    std::uint16_t status_flags;  ///< bitmask（NavStatusFlags 的组合）
 };
 
+// 对齐检查：保证结构至少是 4 字节对齐，便于跨语言/跨进程传输
 static_assert(sizeof(NavState) % 4 == 0,
               "NavState size should be 4-byte aligned for efficient transport");
 

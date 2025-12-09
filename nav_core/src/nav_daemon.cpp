@@ -7,10 +7,10 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <cerrno>
 
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <cerrno>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -26,7 +26,7 @@
 #include <nav_core/log_packets.hpp>         // 定义日志包格式，如 ImuLogPacket / DvlLogPacket / EskfLogPacket
 
 // 导航状态消息与发布接口
-#include <shared/msg/nav_state.hpp>  // 导航状态消息定义（命名空间 shared::msg）
+#include <shared/msg/nav_state.hpp>         // 导航状态消息定义（命名空间 shared::msg）
 #include "nav_core/nav_state_publisher.hpp" // 共享内存发布器类
 
 namespace {
@@ -47,12 +47,12 @@ using shared::msg::NavState;
 using shared::msg::NavHealth;
 using shared::msg::NavStatusFlags;
 
-constexpr double G_STD       = 9.80665;         // 标准重力加速度（m/s²）
-constexpr double PI_STD      = 3.14159265358979323846; // 圆周率
-constexpr double RAD2DEG     = 180.0 / PI_STD;  // 弧度转角度系数
-constexpr double DEG2RAD     = PI_STD / 180.0;  // 角度转弧度系数
-constexpr double YAW_STD_DEG = 5.0;              // 航向标准偏差（角度）
-constexpr double YAW_STD_RAD = YAW_STD_DEG * DEG2RAD; // 航向标准偏差（弧度）
+constexpr double G_STD       = 9.80665;                     // 标准重力加速度（m/s²）
+constexpr double PI_STD      = 3.14159265358979323846;      // 圆周率
+constexpr double RAD2DEG     = 180.0 / PI_STD;              // 弧度转角度系数
+constexpr double DEG2RAD     = PI_STD / 180.0;              // 角度转弧度系数
+constexpr double YAW_STD_DEG = 5.0;                         // 航向标准偏差（角度）
+constexpr double YAW_STD_RAD = YAW_STD_DEG * DEG2RAD;       // 航向标准偏差（弧度）
 
 // Ctrl+C / SIGTERM 停止标志
 std::atomic<bool> g_stop{false};
@@ -142,25 +142,33 @@ NavState make_nav_state_from_eskf(const EskfState& st,
 {
     NavState s{};
 
+    // 1) 时间戳：优先 est_ns，否则回退 mono_ns
     const std::int64_t t_ns = (st.est_ns != 0) ? st.est_ns : st.mono_ns;
-    s.t_ns = t_ns;
+    s.t_ns = static_cast<std::uint64_t>(t_ns);
 
-    // 位置 / 速度 / 姿态
-    for (int i = 0; i < 3; ++i) {
+    // 2) 位置 / 速度 / 姿态（NED/ENU + RPY）
+    for (std::size_t i = 0; i < 3; ++i) {
         s.pos[i] = st.pos[i];
         s.vel[i] = st.vel[i];
         s.rpy[i] = st.euler[i];
     }
 
-    s.ang_vel[0] = 0.0f;
-    s.ang_vel[1] = 0.0f;
-    s.ang_vel[2] = 0.0f;
+    // 3) 深度：假定 z 向上 -> depth = -z
+    s.depth = -st.pos[2];
 
-    s.depth = -st.pos[2];  // 假定 z 向上，depth = -z
+    // 4) body 坐标系角速度 / 线加速度
+    //
+    // 当前版本：先全部置 0，确保字段合法；
+    // 后续如需使用，可从 ESKF 或最近 IMU 样本填入真实值。
+    for (std::size_t i = 0; i < 3; ++i) {
+        s.omega_b[i] = 0.0;
+        s.acc_b[i]   = 0.0;
+    }
 
-    s.health   = st.valid ? NavHealth::OK : NavHealth::DEGRADED;
-    s.status   = status_flags;
-    s.reserved = 0;
+    // 5) 状态标志
+    s.health       = st.valid ? NavHealth::OK : NavHealth::DEGRADED;
+    s.reserved     = 0;
+    s.status_flags = status_flags;
 
     return s;
 }
@@ -426,6 +434,9 @@ int main(int argc, char** argv)
         }
     };
 
+    // -------------------------------------------------
+    // 11. 回调：DVL 数据处理（EKF 更新 + 日志）
+    // -------------------------------------------------
     auto on_dvl_frame = [&](const DvlFrame& f) {
         eskf.handleDvl(f);
 
@@ -442,6 +453,9 @@ int main(int argc, char** argv)
         g_last_dvl_valid.store(f.valid);
     };
 
+    // -------------------------------------------------
+    // 12. 启动驱动
+    // -------------------------------------------------
     nav_core::ImuDriverWit::RawCallback imu_raw_cb;
     nav_core::DvlDriver::RawCallback    dvl_raw_cb;
 
