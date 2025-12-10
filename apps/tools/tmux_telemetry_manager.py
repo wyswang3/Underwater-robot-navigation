@@ -10,9 +10,9 @@ tmux telemetry manager (IMU + DVL + Volt)
 
 示例：
   python3 tmux_telemetry_manager.py \
-    --imu-port /dev/ttyUSB1 --imu-baud 230400 \
+    --imu-port /dev/ttyUSB0 --imu-baud 230400 \
     --dvl-port /dev/ttyUSB2 --dvl-baud 115200 \
-    --volt-port /dev/ttyUSB0 --volt-baud 115200 \
+    --volt-port /dev/ttyUSB1 --volt-baud 115200 \
     --attach
 
 查看串口：
@@ -189,11 +189,11 @@ def main():
     ap.add_argument("--dvl-script",  default=default_dvl,  help="DVL 采集脚本路径")
     ap.add_argument("--volt-script", default=default_volt, help="电压采集脚本路径")
 
-    ap.add_argument("--imu-port",  default="/dev/ttyUSB1", help="IMU 串口")
+    ap.add_argument("--imu-port",  default="/dev/ttyUSB0", help="IMU 串口")
     ap.add_argument("--imu-baud",  default="230400",       help="IMU 波特率")
     ap.add_argument("--dvl-port",  default="/dev/ttyUSB2", help="DVL 串口")
     ap.add_argument("--dvl-baud",  default="115200",       help="DVL 波特率")
-    ap.add_argument("--volt-port", default="/dev/ttyUSB0", help="电压卡串口")
+    ap.add_argument("--volt-port", default="/dev/ttyUSB1", help="电压卡串口")
     ap.add_argument("--volt-baud", default="115200",       help="电压卡波特率")
 
     ap.add_argument("--list-ports", action="store_true", help="仅列出串口后退出")

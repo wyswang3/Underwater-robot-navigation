@@ -94,8 +94,8 @@ def parse_args():
     # 串口
     ap.add_argument(
         "--port",
-        default="/dev/ttyUSB1",
-        help="Serial port (e.g., /dev/ttyUSB0 or COM6)",
+        default="/dev/ttyUSB2",
+        help="Serial port (e.g., /dev/ttyUSB2 or COM6)",
     )
     ap.add_argument("--baud", type=int, default=115200, help="Baudrate")
     ap.add_argument(
