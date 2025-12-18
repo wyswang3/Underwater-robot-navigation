@@ -1,7 +1,7 @@
 // nav_core/src/nav_state_publisher.cpp
 
 #include <nav_core/nav_state_publisher.hpp>
-#include <shared/msg/nav_state.hpp>   // 完整定义 NavState，只在实现文件里用
+#include "shared/msg/nav_state.hpp"  // 完整定义 NavState，只在实现文件里用
 
 #include <chrono>
 #include <cstring>
@@ -125,22 +125,16 @@ void NavStatePublisher::shutdown() noexcept
 
 bool NavStatePublisher::publish(const shared::msg::NavState& state)
 {
-    if (!enabled_) {
-        return true;
-    }
-    if (!initialized_ || error_flag_ || !shm_ptr_) {
-        return false;
-    }
+    if (!enabled_) return true;
+    if (!initialized_ || error_flag_ || !shm_ptr_) return false;
 
     ShmLayout* layout = shm_ptr_;
+    auto& seq = layout->hdr.seq;
 
-    // 事务：奇数写入中，偶数稳定
-    std::uint64_t old_seq = layout->hdr.seq;
-    if ((old_seq & 1u) == 0u) {
-        layout->hdr.seq = old_seq + 1u;  // 奇数：写入开始
-    } else {
-        layout->hdr.seq = old_seq + 2u;  // 跳到下一个奇数
-    }
+    // 置为奇数：写入开始
+    std::uint64_t old = seq.load(std::memory_order_relaxed);
+    std::uint64_t start = (old & 1u) ? (old + 2u) : (old + 1u);
+    seq.store(start, std::memory_order_relaxed);
 
     layout->hdr.mono_ns = now_mono_ns();
     layout->hdr.wall_ns = now_wall_ns();
@@ -149,10 +143,11 @@ bool NavStatePublisher::publish(const shared::msg::NavState& state)
 
     std::memcpy(&layout->state, &state, sizeof(shared::msg::NavState));
 
-    layout->hdr.seq += 1u;  // 变为偶数：写入完成
-
+    // 发布完成：release，保证 state/header 对读端可见
+    seq.store(start + 1u, std::memory_order_release);
     return true;
 }
+
 
 // ============================================================================
 //                         内部：共享内存初始化

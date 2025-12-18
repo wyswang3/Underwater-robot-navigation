@@ -204,7 +204,7 @@ int main(int argc, char** argv)
     int         imu_baud  = 230400;
     uint8_t     imu_addr  = 0x50;        // HWT9073-485 默认从站地址
 
-    std::string dvl_port  = "/dev/ttyUSB1";
+    std::string dvl_port  = "/dev/ttyUSB2";
     int         dvl_baud  = 115200;
 
     // log_root 作为“根目录”，实际写入会在 log_root/DATE/ 下

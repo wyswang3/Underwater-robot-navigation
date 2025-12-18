@@ -33,51 +33,108 @@
 # 2. 项目目录结构（超清晰解说版）
 
 ```
-Underwater-robot-navigation/
-│
-├── config/                     # YAML 配置文件（传感器、ESKF、杆臂）
-│   ├── devices/                # 串口/波特率/安装角
-│   ├── fusion/                 # ESKF 参数（噪声、门控）
-│   └── lever_arm.yaml          # IMU/DVL/USBL 的机体系杆臂
-│
-├── data/                       # 所有数据写入此目录（自动按日期分类）
-│   └── YYYY-MM-DD/
-│        ├── imu/               # IMU 100Hz 原始数据
-│        ├── dvl/               # DVL 10Hz 原始数据
-│        ├── volt/              # 电流/电压数据
-│        └── aligned/           # 多传感器对齐、融合后的CSV
-│
-├── apps/                       # Python 工具链（最常用）
-│   ├── acquire/                # 采集脚本 IMU/DVL/Volt（落盘）
-│   │    ├── imu_logger.py
-│   │    ├── DVL_logger.py
-│   │    └── Volt32_logger.py
-│   ├── tools/                  # 后处理/校验/可视化/多传感器融合
-│   │    ├── dvl_data_verifier.py
-│   │    ├── imu_data_verifier.py
-│   │    ├── multisensor_postproc.py
-│   │    └── tmux_telemetry_manager.py
-│   ├── pipelines/              # 多传感器自动流水线（可扩展）
-│   └── examples/               # 示例
-│
-├── uwnav/                      # Python 版导航库（数据结构、融合、预处理）
-│   ├── drivers/                # Python版 IMU/DVL 驱动
-│   ├── sensors/                # IMUData / DVLData
-│   ├── fusion/                 # Python版ESKF
-│   ├── preprocess/             # 滤波/时间对齐
-│   └── io/                     # CSV 读写
-│
-├── nav_core/                   # ★ C++ 实时导航核心（运行在 Orange Pi）
-│   ├── include/       # 头文件（API）
-│   ├── src/                    # 所有 CPP 实现文件
-│   ├── third_party/witmotion/  # WitMotion 官方 SDK
-│   └── CMakeLists.txt
-│
-└── docs/                       # 官方文档
-    ├── device_test_and_debug.md   # 上电测试与排错（非常重要）
-    ├── protocols/                 # 传感器协议（DVL/IMU）
-    ├── sensors/                   # 安装说明
-    └── design/                    # 导航架构说明
+.
+├── apps
+│   ├── acquire
+│   │   ├── DVL_logger.py
+│   │   ├── imu_logger.py
+│   │   └── Volt32_logger.py
+│   ├── __init__.py
+│   └── tools
+│       ├── dvl_data_verifier.py
+│       ├── imu_baud_switch.py
+│       ├── imu_data_verifier.py
+│       ├── imu_xy_zero.py
+│       ├── multisensor_postproc.py
+│       ├── tmux_telemetry_manager.py
+│       └── volt32_data_verifier.py
+├── config
+│   └── devices
+│       ├── DVL.yaml
+│       └── imu.yaml
+├── data
+├── docs
+│   ├── 传感器读取程序
+│   ├── 命令行
+│   ├── design
+│   │   ├── architecture.md
+│   │   ├── dataset_spec.md
+│   │   └── eskf_design.md
+│   ├── protocols
+│   │   ├── HoverH1000_PD6.md
+│   │   └── imu_witmotion_modbus.md
+│   ├── sensors
+│   │   ├── dvl_hover_h1000_setup.md
+│   │   └── imu_hwt9073_notes.md
+│   ├── timebase_spec.md
+│   └── tools_overview.md
+├── git_auto.py
+├── git-auto.sh
+├── nav_core
+│   ├── CMakeLists.txt
+│   ├── docs
+│   │   ├── device_test_and_debug.md
+│   │   ├── filters
+│   │   ├── nav_core_runtime.md
+│   │   └── update_guidelines.md
+│   ├── include
+│   │   └── nav_core
+│   ├── README.md
+│   ├── src
+│   │   ├── bin_logger.cpp
+│   │   ├── dvl_driver.cpp
+│   │   ├── eskf.cpp
+│   │   ├── imu_driver_wit.cpp
+│   │   ├── imu_rt_filter.cpp
+│   │   ├── nav_daemon.cpp
+│   │   ├── nav_state_publisher.cpp
+│   │   └── timebase.cpp
+│   └── third_party
+│       └── witmotion
+├── nav_core.zip
+├── pyproject.toml
+├── README.md
+├── requirements.txt
+├── shared
+│   └── msg
+│       └── nav_state.hpp
+├── tools
+│   ├── project_size_report.py
+│   └── project_size_report.txt
+├── uwnav
+│   ├── drivers
+│   │   ├── dvl
+│   │   ├── imu
+│   │   ├── __init__.py
+│   │   └── __pycache__
+│   ├── fusion
+│   │   ├── __init__.py
+│   │   └── meas_models
+│   ├── __init__.py
+│   ├── io
+│   │   ├── data_paths.py
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   └── timebase.py
+│   ├── nav
+│   │   └── __init__.py
+│   ├── preprocess
+│   │   └── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-312.pyc
+│   │   └── __init__.cpython-38.pyc
+│   └── sensors
+│       ├── dvl_hover_h1000.py
+│       ├── imu.py
+│       ├── __init__.py
+│       └── __pycache__
+└── uwnav.egg-info
+    ├── dependency_links.txt
+    ├── entry_points.txt
+    ├── PKG-INFO
+    ├── requires.txt
+    ├── SOURCES.txt
+    └── top_level.txt
 ```
 ---
 

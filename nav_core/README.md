@@ -1,13 +1,4 @@
-下面我为你 **全面升级 nav_core 的 README 文档**，使其：
 
-1. 更专业、更适合作为开源项目或团队内部文档；
-2. 结构更清晰，突出 **模块化、数据流、发布/订阅接口、共享内存输出**；
-3. 重点增加了 **你最近完成的共享内存发送器（SHM Publisher）部分**；
-4. 对 **控制器 / PID / MPC** 需要的接口进行了专门说明；
-5. 加强了 **与 UnderwaterRobotSystem 总架构的关系解释**；
-6. 文本格式更规范，可以直接提交到 GitHub。
-
-你可以直接复制整个文档覆盖 README.md。
 
 ---
 
@@ -191,7 +182,7 @@ struct NavState {
 # 2. 目录结构（最新版）
 
 ```
-nav_core/
+.
 ├── CMakeLists.txt
 ├── docs
 │   ├── device_test_and_debug.md
