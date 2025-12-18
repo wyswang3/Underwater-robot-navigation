@@ -18,20 +18,10 @@ endif()
 
 option(BUILD_NAV_TOOLS "Build nav_core tools (dump_nav_logs etc.)" ON)
 
-# ================== shared_msgs（来自 UnderwaterRobotSystem/shared） ==================
-#
-# 期望目录关系：
-# UnderwaterRobotSystem/
-# ├── shared/
-# └── Underwater-robot-navigation/
-#     └── nav_core/   (本文件)
-#
-# nav_core -> 上三级到 UnderwaterRobotSystem
 # ================== locate UnderwaterRobotSystem root ==================
-# Find the nearest ancestor that contains shared/CMakeLists.txt
 set(_probe_dir "${CMAKE_CURRENT_LIST_DIR}")
 set(UWSYS_ROOT "")
-foreach(_i RANGE 0 6)  # 最多往上找 7 层，足够覆盖你当前结构
+foreach(_i RANGE 0 6)
     if (EXISTS "${_probe_dir}/shared/CMakeLists.txt")
         set(UWSYS_ROOT "${_probe_dir}")
         break()
@@ -51,8 +41,6 @@ set(UWSYS_SHARED_DIR "${UWSYS_ROOT}/shared")
 message(STATUS "[nav_core] UWSYS_ROOT       = ${UWSYS_ROOT}")
 message(STATUS "[nav_core] UWSYS_SHARED_DIR = ${UWSYS_SHARED_DIR}")
 
-
-# 避免重复 add_subdirectory(shared)（例如超级工程/多子项目同时构建）
 if (NOT TARGET shared_msgs)
     if (NOT EXISTS "${UWSYS_SHARED_DIR}/CMakeLists.txt")
         message(FATAL_ERROR
@@ -67,7 +55,34 @@ if (NOT TARGET shared_msgs)
     )
 endif()
 
-# ================== nav_core 静态库 ==================
+# ================== third_party: witmotion SDK（单独 target + 降噪） ==================
+add_library(witmotion_sdk STATIC
+    third_party/witmotion/wit_c_sdk.c
+)
+
+target_include_directories(witmotion_sdk
+    PUBLIC
+        ${CMAKE_CURRENT_LIST_DIR}/third_party/witmotion
+)
+
+# 仅对官方库淡化告警（不影响你们自己的 C/C++）
+if (MSVC)
+    target_compile_options(witmotion_sdk PRIVATE /W0)
+else()
+    # 两种策略二选一：
+    # 1) 极简：彻底静音 third_party
+    # target_compile_options(witmotion_sdk PRIVATE -w)
+    #
+    # 2) 推荐：只关掉你现在遇到的那几类 warning（可控、不过度）
+    target_compile_options(witmotion_sdk PRIVATE
+        -Wno-sign-compare
+        -Wno-implicit-fallthrough
+        -Wno-restrict
+        -Wno-maybe-uninitialized
+    )
+endif()
+
+# ================== nav_core 静态库（自研代码保持严格告警） ==================
 add_library(nav_core STATIC
     src/timebase.cpp
     src/imu_driver_wit.cpp
@@ -76,11 +91,13 @@ add_library(nav_core STATIC
     src/bin_logger.cpp
     src/imu_rt_filter.cpp
     src/nav_state_publisher.cpp
-    third_party/witmotion/wit_c_sdk.c
 )
 
 # shared_msgs：提供 shared/msg/*.hpp include，并作为跨工程一致依赖
 target_link_libraries(nav_core PUBLIC shared_msgs)
+
+# 链接 witmotion 官方 SDK（warning 已隔离）
+target_link_libraries(nav_core PRIVATE witmotion_sdk)
 
 # ================== 仅对 C++ 源码启用更严格告警 ==================
 if (NOT MSVC)
@@ -93,8 +110,6 @@ endif()
 target_include_directories(nav_core
     PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/include
-    PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}/third_party/witmotion
 )
 
 # ================== 链接线程库 &（可选）rt 库 ==================
