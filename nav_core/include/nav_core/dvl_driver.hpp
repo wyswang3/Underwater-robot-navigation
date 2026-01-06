@@ -56,7 +56,7 @@ struct DvlRawData {
  * @brief DVL 驱动配置
  */
 struct DvlConfig {
-    std::string     port;          ///< 串口路径，如 "/dev/ttyUSB2"
+    std::string     port;          ///< 串口路径，如 "/dev/ttyACM0"
     int             baud{115200};  ///< 波特率
     DvlFilterConfig filter{};      ///< 过滤配置（来自 types.hpp）
 };

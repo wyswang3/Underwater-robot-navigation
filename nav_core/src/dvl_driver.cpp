@@ -18,7 +18,7 @@
 //   cfg.require_all_axes = true;
 //   cfg.max_abs_vel_mps  = 5.0;
 //
-//   nav_core::DvlDriver dvl("/dev/ttyUSB1", 115200, cfg,
+//   nav_core::DvlDriver dvl("/dev/ttyACM0", 115200, cfg,
 //       [](const nav_core::DvlFrame& f) { /* 用于 ESKF / 控制 */ },
 //       [](const nav_core::DvlRawData& r) { /* 可选：原始日志 */ });
 //

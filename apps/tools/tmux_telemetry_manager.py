@@ -191,7 +191,7 @@ def main():
 
     ap.add_argument("--imu-port",  default="/dev/ttyUSB0", help="IMU 串口")
     ap.add_argument("--imu-baud",  default="230400",       help="IMU 波特率")
-    ap.add_argument("--dvl-port",  default="/dev/ttyUSB2", help="DVL 串口")
+    ap.add_argument("--dvl-port",  default="/dev/ttyACM0", help="DVL 串口")
     ap.add_argument("--dvl-baud",  default="115200",       help="DVL 波特率")
     ap.add_argument("--volt-port", default="/dev/ttyUSB1", help="电压卡串口")
     ap.add_argument("--volt-baud", default="115200",       help="电压卡波特率")

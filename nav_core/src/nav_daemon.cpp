@@ -130,7 +130,7 @@ void print_usage(const char* prog)
               << "  --imu-port <path>      default: /dev/ttyUSB0\n"
               << "  --imu-baud <baud>      default: 230400\n"
               << "  --imu-addr <hex>       default: 0x50\n"
-              << "  --dvl-port <path>      default: /dev/ttyUSB1\n"
+              << "  --dvl-port <path>      default: /dev/ttyACM0\n"
               << "  --dvl-baud <baud>      default: 115200\n"
               << "  --log-dir <dir>        default: ./logs\n"
               << "  -h, --help             show this help\n";
@@ -204,7 +204,7 @@ int main(int argc, char** argv)
     int         imu_baud  = 230400;
     uint8_t     imu_addr  = 0x50;        // HWT9073-485 默认从站地址
 
-    std::string dvl_port  = "/dev/ttyUSB2";
+    std::string dvl_port  = "/dev/ttyACM0";
     int         dvl_baud  = 115200;
 
     // log_root 作为“根目录”，实际写入会在 log_root/DATE/ 下

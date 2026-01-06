@@ -99,7 +99,7 @@ Underwater-robot-navigation/
 **传感器连接（推荐默认接线）**
 
 * IMU HWT9073-485 → `/dev/ttyUSB0`，波特率 230400，Modbus 从站地址 0x50
-* DVL Hover H1000 → `/dev/ttyUSB1`，波特率 115200
+* DVL Hover H1000 → `/dev/ttyACM0`，波特率 115200
 
 > 可以通过 `ls /dev/ttyUSB*` 和 `ls /dev/ttyS*` 检查具体设备号。
 
