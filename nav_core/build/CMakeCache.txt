@@ -14,7 +14,7 @@
 # EXTERNAL cache entries
 ########################
 
-//Build nav_core tools (dump_nav_logs etc.)
+//Build nav_core tools (DVL_selftest etc.)
 BUILD_NAV_TOOLS:BOOL=ON
 
 //Path to a program.
@@ -219,6 +219,9 @@ nav_core_BINARY_DIR:STATIC=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-r
 
 //Value Computed by CMake
 nav_core_SOURCE_DIR:STATIC=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core
+
+//The directory containing a CMake configuration file for yaml-cpp.
+yaml-cpp_DIR:PATH=/usr/lib/x86_64-linux-gnu/cmake/yaml-cpp
 
 
 ########################

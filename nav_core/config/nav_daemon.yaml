@@ -1,0 +1,225 @@
+# ============================================================
+# nav_daemon.yaml
+# 在线导航守护进程 nav_daemon 的主配置文件
+#
+# 说明：
+#   - 所有字段对应 nav_core::app::NavDaemonConfig 及其子结构；
+#   - 数值是“保守的默认值 + 你当前硬件”的建议初始参数；
+#   - 真正上线前建议根据水池 / 海试数据做一次调参。
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. 主循环 & 时间相关
+# ------------------------------------------------------------
+loop:
+  # 导航主循环频率（Hz）
+  # - 每个周期做：从 IMU/DVL 缓冲取最新样本 → OnlineEstimator 更新 → 发布 NavState
+  nav_loop_hz: 50.0
+
+  # 若“最新 IMU 样本时间”距离当前 mono 时刻超过该阈值，视为 IMU 掉线 / 失效
+  max_imu_age_s: 0.2
+
+  # 若“最新 DVL 样本时间”距离当前 mono 时刻超过该阈值，视为 DVL 不在线
+  max_dvl_age_s: 3.0
+
+  # 离线因子图平滑窗口长度（s），例如最近 10 分钟
+  smoother_window_s: 600.0
+
+
+# ------------------------------------------------------------
+# 2. IMU 子系统
+#   - 驱动：香橙派 + HWT9073-485 (Modbus)
+#   - 实时滤波：静止窗 bias + deadzone
+# ------------------------------------------------------------
+imu:
+  # 是否启用 IMU 链路（一般为 true；调试 DVL-only 可以临时关掉）
+  enable: true
+
+  # 2.1 底层驱动配置（对应 nav_core::ImuConfig）
+  driver:
+    # 串口设备路径
+    # - 香橙派上通常是 /dev/ttyUSB0 或 /dev/ttyUSB1（根据你实际 udev 规则）
+    port: "/dev/ttyUSB0"
+
+    # 波特率（你当前 IMU 配置为 230400）
+    baud: 230400
+
+    # Modbus 从机地址（HWT9073 默认 0x50，如你前面配置）
+    slave_addr: 0x50
+
+    # IMU 过滤（types.hpp 中 ImuFilterConfig）
+    filter:
+      enable_accel: true      # 是否检查加速度幅值
+      enable_gyro:  true      # 是否检查角速度幅值
+      enable_euler: false     # 是否检查欧拉角（如只用 yaw，可先关掉）
+
+      max_abs_accel: 50.0     # 单轴最大 |a| (m/s^2)，约 5g
+      max_abs_gyro:  10.0     # 单轴最大 |ω| (rad/s)
+      max_euler_abs: 3.5      # 单轴最大 |姿态| (rad)
+
+  # 2.2 实时滤波配置（对应 nav_core::filters::ImuRtFilterConfig）
+  rt_filter:
+    # 静止窗长度（秒），用于估计 gyro / accel bias
+    static_window_s: 2.0
+
+    # 判定“静止窗”的阈值：
+    # - gyro 静止阈值（rad/s），例如 < 0.01 认为无明显旋转
+    static_gyro_thresh_rad_s: 0.01
+
+    # - accel 静止阈值（m/s^2），例如 |a - g| 很小认为近似静止
+    static_accel_thresh_mps2: 0.05
+
+    # bias 估计的允许范围（防止异常数据把 bias 拉得太离谱）
+    gyro_bias_max_abs_rad_s:  0.1      # 单轴最大 bias
+    accel_bias_max_abs_mps2:  1.0      # 单轴最大 bias
+
+    # 静止补偿之后的 deadzone（抑制残余噪声积分）
+    gyro_deadzone_rad_s:  0.001        # < 0.001 rad/s 视为 0
+    accel_deadzone_mps2:  0.01         # < 0.01 m/s^2 视为 0
+
+    # yaw 解缠（unwrap）相关
+    enable_yaw_unwrap: true
+    yaw_unwrap_trust_s: 0.5           # 最近 0.5s 内有有效 IMU 即信任 yaw 连续性
+
+    # 是否对 accel 做重力补偿（静止窗估计出重力方向后减去）
+    enable_gravity_compensation: false  # 你当前流程是 DVL+yaw，先留 false
+
+
+# ------------------------------------------------------------
+# 3. DVL 子系统
+#   - Hover H1000, PD6/EPD6 文本协议
+# ------------------------------------------------------------
+dvl:
+  # 是否启用 DVL 链路
+  enable: true
+
+  driver:
+    # 串口路径（根据你现在的接线习惯：一般 /dev/ttyACM0）
+    port: "/dev/ttyACM0"
+
+    # 波特率（Hover H1000 常见为 115200，如有改动按实际填写）
+    baud: 115200
+
+    # 协议级过滤配置（nav_core::DvlFilterConfig）
+    filter:
+      enable_velocity: true      # 检查速度幅值
+      enable_altitude: true      # 检查高度范围
+
+      # 若 only_valid_flag = true，则只接受 valid == A 的帧
+      only_valid_flag:  true
+      require_all_axes: true     # 三轴速度都须为有限数
+
+      max_abs_vel_mps: 5.0       # 单轴最大 |v| (m/s)，超出直接丢掉
+      max_altitude_m:  100.0     # 最大高度（超过可能是异常）
+      min_altitude_m:  0.3       # 最小高度（太近可能不准）
+
+      min_quality:     0         # 暂不启用质量等级门限（等有数据再调）
+
+
+# ------------------------------------------------------------
+# 4. 估计器部分：在线导航 + 因子图平滑 + 健康监测
+# ------------------------------------------------------------
+estimator:
+  # 是否启用各子模块
+  enable_online:   true
+  enable_smoother: false       # 若只跑在线导航，可临时关掉
+  enable_health:   true
+
+  # 4.1 在线导航估计器（nav_core::estimator::OnlineEstimatorConfig）
+  online:
+    # ZUPT 判定阈值（ENU 速度模长 < 该值视为零速）
+    zupt_threshold_mps: 0.08
+
+    # 是否对 DVL 速度应用噪声地板（< 0.08m/s 硬置零）
+    use_dvl_noise_floor: true
+
+    # IMU / DVL 最大允许无更新时间（秒）
+    max_imu_gap_s: 0.2
+    max_dvl_gap_s: 3.0
+
+    # yaw 来源（示意：和 OnlineEstimatorConfig 中的枚举对应）
+    # 例如：imu_euler_z / eskf / external_yaw
+    yaw_source: "imu_euler_z"
+
+    # DVL 使用的体速来源（例如 "ship_frame" → BS, "instrument_frame" → BI）
+    body_velocity_source: "ship_frame"
+
+    # 是否使用 DVL 深度辅助 z 轴（否则只用压力深度）
+    use_dvl_depth: false
+
+    # 重力加速度，用于 IMU 整体标定/重力估计（与前期 9.78 m/s^2 约定一致）
+    gravity_mps2: 9.78
+
+  # 4.2 2D 因子图平滑（nav_core::estimator::GraphSmoother2DConfig）
+  smoother:
+    # 因子图节点之间的 nominal 时间间隔（秒）
+    node_dt_s: 1.0
+
+    # 位置观测噪声标准差（m）
+    sigma_pos_m: 0.05
+
+    # 速度观测噪声标准差（m/s）
+    sigma_vel_mps: 0.02
+
+    # 动力学先验的平滑权重（越大 → 轨迹越平滑，但对数据不敏感）
+    lambda_smooth: 1.0
+
+    # 先验约束权重（初始位姿固定程度）
+    lambda_prior: 10.0
+
+    # 对轨迹两端是否增加“软固定”约束
+    use_endpoint_prior: true
+
+  # 4.3 导航健康监测（nav_core::estimator::NavHealthMonitorConfig）
+  health:
+    # 位置 RMS 阈值（在线轨迹 vs 平滑因子图）
+    pos_rms_warn_m:   0.3    # 超过该值进入“降级”
+    pos_rms_fault_m:  0.8    # 超过该值认为“不可用”
+
+    # 速度 RMS 阈值
+    vel_rms_warn_mps: 0.05
+    vel_rms_fault_mps: 0.15
+
+    # 最大延迟（秒）：平滑轨迹相对于在线轨迹的延迟上限
+    max_allowed_delay_s: 5.0
+
+    # 进入 BAD/FAULT 状态前，需要连续多少秒不达标才触发
+    min_bad_duration_s: 3.0
+
+    # 回到 OK 状态前，至少需要多少秒连续达标
+    min_recover_duration_s: 5.0
+
+
+# ------------------------------------------------------------
+# 5. 二进制日志配置
+# ------------------------------------------------------------
+logging:
+  # 总开关
+  enable: true
+
+  # 日志根目录（nav_daemon 会在这里按日期/session 再建子目录）
+  base_dir: "/home/wys/data/nav"
+
+  # 是否按日期分子目录：data/YYYY-MM-DD/...
+  split_by_date: true
+
+  # 各类 packet 开关
+  log_imu:       true   # ImuLogPacket
+  log_dvl:       true   # DvlLogPacket
+  log_nav_state: true   # NavState（若 bin_logger 有对应 packet）
+  log_eskf:      false  # 如暂未启用 ESKF，可先关掉
+
+
+# ------------------------------------------------------------
+# 6. NavState 发布（共享内存）
+# ------------------------------------------------------------
+publisher:
+  shm:
+    enable: true
+
+    # SHM 名称（与控制侧读取 nav_state 的配置一致）
+    shm_name: "/rov_nav_state_v1"
+
+    # SHM 大小（字节），包含 header + NavState + 预留
+    # 4096 远够放一帧 NavState + header
+    shm_size: 4096

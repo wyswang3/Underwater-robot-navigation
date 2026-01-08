@@ -16,7 +16,7 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic -Wshadow -Wformat=2 -Wundef)
 endif()
 
-option(BUILD_NAV_TOOLS "Build nav_core tools (dump_nav_logs etc.)" ON)
+option(BUILD_NAV_TOOLS "Build nav_core tools (DVL_selftest etc.)" ON)
 
 # ================== locate UnderwaterRobotSystem root ==================
 set(_probe_dir "${CMAKE_CURRENT_LIST_DIR}")
@@ -69,11 +69,6 @@ target_include_directories(witmotion_sdk
 if (MSVC)
     target_compile_options(witmotion_sdk PRIVATE /W0)
 else()
-    # 两种策略二选一：
-    # 1) 极简：彻底静音 third_party
-    # target_compile_options(witmotion_sdk PRIVATE -w)
-    #
-    # 2) 推荐：只关掉你现在遇到的那几类 warning（可控、不过度）
     target_compile_options(witmotion_sdk PRIVATE
         -Wno-sign-compare
         -Wno-implicit-fallthrough
@@ -82,15 +77,33 @@ else()
     )
 endif()
 
-# ================== nav_core 静态库（自研代码保持严格告警） ==================
+# ================== nav_core 静态库（按当前 src/ 目录结构） ==================
 add_library(nav_core STATIC
-    src/timebase.cpp
-    src/imu_driver_wit.cpp
-    src/dvl_driver.cpp
-    src/eskf.cpp
-    src/bin_logger.cpp
-    src/imu_rt_filter.cpp
-    src/nav_state_publisher.cpp
+    # ---- core ----
+    src/nav_core/core/logging.cpp
+    src/nav_core/core/timebase.cpp
+
+    # ---- drivers ----
+    src/nav_core/drivers/imu_driver_wit.cpp
+    src/nav_core/drivers/dvl_driver.cpp
+    src/nav_core/drivers/dvl_protocol.cpp
+
+    # ---- filters ----
+    src/nav_core/filters/imu_rt_filter.cpp
+    src/nav_core/filters/eskf.cpp
+
+    # ---- estimator ----
+    src/nav_core/estimator/online_estimator.cpp
+    src/nav_core/estimator/graph_smoother_2d.cpp
+    src/nav_core/estimator/nav_health_monitor.cpp
+
+    # ---- io ----
+    src/nav_core/io/bin_logger.cpp
+    src/nav_core/io/nav_state_publisher.cpp
+
+    # 如后续增加 nav_daemon_config.cpp 等，可以在这里继续补充
+    # ---- app ----
+    src/nav_core/app/nav_daemon_config.cpp
 )
 
 # shared_msgs：提供 shared/msg/*.hpp include，并作为跨工程一致依赖
@@ -115,6 +128,9 @@ target_include_directories(nav_core
 # ================== 链接线程库 &（可选）rt 库 ==================
 find_package(Threads REQUIRED)
 target_link_libraries(nav_core PUBLIC Threads::Threads)
+find_package(yaml-cpp REQUIRED)
+target_link_libraries(nav_core PUBLIC yaml-cpp)
+
 
 if (UNIX AND NOT APPLE)
     find_library(RT_LIB rt)
@@ -124,5 +140,15 @@ if (UNIX AND NOT APPLE)
 endif()
 
 # ================== 导航守护进程 uwnav_navd ==================
-add_executable(uwnav_navd src/nav_daemon.cpp)
+add_executable(uwnav_navd
+    src/nav_core/app/nav_daemon.cpp
+)
 target_link_libraries(uwnav_navd PRIVATE nav_core)
+
+# ================== 工具：DVL_selftest ==================
+if (BUILD_NAV_TOOLS)
+    add_executable(uwnav_dvl_selftest
+        src/nav_core/app/tools/DVL_selftest.cpp
+    )
+    target_link_libraries(uwnav_dvl_selftest PRIVATE nav_core)
+endif()

@@ -1,1 +1,1 @@
-/usr/lib/ccache/c++  -O2 -g -DNDEBUG   CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.o  -o uwnav_navd  libnav_core.a libwitmotion_sdk.a -lpthread /usr/lib/x86_64-linux-gnu/librt.so 
+/usr/lib/ccache/c++  -O2 -g -DNDEBUG   CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon.cpp.o  -o uwnav_navd  libnav_core.a libwitmotion_sdk.a -lpthread /usr/lib/x86_64-linux-gnu/libyaml-cpp.so.0.6.2 /usr/lib/x86_64-linux-gnu/librt.so 

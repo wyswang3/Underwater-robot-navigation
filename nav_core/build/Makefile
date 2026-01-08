@@ -111,6 +111,19 @@ depend:
 .PHONY : depend
 
 #=============================================================================
+# Target rules for targets named uwnav_dvl_selftest
+
+# Build rule for target.
+uwnav_dvl_selftest: cmake_check_build_system
+	$(MAKE) -f CMakeFiles/Makefile2 uwnav_dvl_selftest
+.PHONY : uwnav_dvl_selftest
+
+# fast build rule for target.
+uwnav_dvl_selftest/fast:
+	$(MAKE) -f CMakeFiles/uwnav_dvl_selftest.dir/build.make CMakeFiles/uwnav_dvl_selftest.dir/build
+.PHONY : uwnav_dvl_selftest/fast
+
+#=============================================================================
 # Target rules for targets named uwnav_navd
 
 # Build rule for target.
@@ -149,221 +162,410 @@ witmotion_sdk/fast:
 	$(MAKE) -f CMakeFiles/witmotion_sdk.dir/build.make CMakeFiles/witmotion_sdk.dir/build
 .PHONY : witmotion_sdk/fast
 
-src/bin_logger.o: src/bin_logger.cpp.o
+src/nav_core/app/nav_daemon.o: src/nav_core/app/nav_daemon.cpp.o
 
-.PHONY : src/bin_logger.o
-
-# target to build an object file
-src/bin_logger.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/bin_logger.cpp.o
-.PHONY : src/bin_logger.cpp.o
-
-src/bin_logger.i: src/bin_logger.cpp.i
-
-.PHONY : src/bin_logger.i
-
-# target to preprocess a source file
-src/bin_logger.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/bin_logger.cpp.i
-.PHONY : src/bin_logger.cpp.i
-
-src/bin_logger.s: src/bin_logger.cpp.s
-
-.PHONY : src/bin_logger.s
-
-# target to generate assembly for a file
-src/bin_logger.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/bin_logger.cpp.s
-.PHONY : src/bin_logger.cpp.s
-
-src/dvl_driver.o: src/dvl_driver.cpp.o
-
-.PHONY : src/dvl_driver.o
+.PHONY : src/nav_core/app/nav_daemon.o
 
 # target to build an object file
-src/dvl_driver.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/dvl_driver.cpp.o
-.PHONY : src/dvl_driver.cpp.o
+src/nav_core/app/nav_daemon.cpp.o:
+	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon.cpp.o
+.PHONY : src/nav_core/app/nav_daemon.cpp.o
 
-src/dvl_driver.i: src/dvl_driver.cpp.i
+src/nav_core/app/nav_daemon.i: src/nav_core/app/nav_daemon.cpp.i
 
-.PHONY : src/dvl_driver.i
+.PHONY : src/nav_core/app/nav_daemon.i
 
 # target to preprocess a source file
-src/dvl_driver.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/dvl_driver.cpp.i
-.PHONY : src/dvl_driver.cpp.i
+src/nav_core/app/nav_daemon.cpp.i:
+	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon.cpp.i
+.PHONY : src/nav_core/app/nav_daemon.cpp.i
 
-src/dvl_driver.s: src/dvl_driver.cpp.s
+src/nav_core/app/nav_daemon.s: src/nav_core/app/nav_daemon.cpp.s
 
-.PHONY : src/dvl_driver.s
+.PHONY : src/nav_core/app/nav_daemon.s
 
 # target to generate assembly for a file
-src/dvl_driver.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/dvl_driver.cpp.s
-.PHONY : src/dvl_driver.cpp.s
+src/nav_core/app/nav_daemon.cpp.s:
+	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon.cpp.s
+.PHONY : src/nav_core/app/nav_daemon.cpp.s
 
-src/eskf.o: src/eskf.cpp.o
+src/nav_core/app/nav_daemon_config.o: src/nav_core/app/nav_daemon_config.cpp.o
 
-.PHONY : src/eskf.o
+.PHONY : src/nav_core/app/nav_daemon_config.o
 
 # target to build an object file
-src/eskf.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/eskf.cpp.o
-.PHONY : src/eskf.cpp.o
+src/nav_core/app/nav_daemon_config.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.o
+.PHONY : src/nav_core/app/nav_daemon_config.cpp.o
 
-src/eskf.i: src/eskf.cpp.i
+src/nav_core/app/nav_daemon_config.i: src/nav_core/app/nav_daemon_config.cpp.i
 
-.PHONY : src/eskf.i
+.PHONY : src/nav_core/app/nav_daemon_config.i
 
 # target to preprocess a source file
-src/eskf.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/eskf.cpp.i
-.PHONY : src/eskf.cpp.i
+src/nav_core/app/nav_daemon_config.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.i
+.PHONY : src/nav_core/app/nav_daemon_config.cpp.i
 
-src/eskf.s: src/eskf.cpp.s
+src/nav_core/app/nav_daemon_config.s: src/nav_core/app/nav_daemon_config.cpp.s
 
-.PHONY : src/eskf.s
+.PHONY : src/nav_core/app/nav_daemon_config.s
 
 # target to generate assembly for a file
-src/eskf.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/eskf.cpp.s
-.PHONY : src/eskf.cpp.s
+src/nav_core/app/nav_daemon_config.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.s
+.PHONY : src/nav_core/app/nav_daemon_config.cpp.s
 
-src/imu_driver_wit.o: src/imu_driver_wit.cpp.o
+src/nav_core/app/tools/DVL_selftest.o: src/nav_core/app/tools/DVL_selftest.cpp.o
 
-.PHONY : src/imu_driver_wit.o
+.PHONY : src/nav_core/app/tools/DVL_selftest.o
 
 # target to build an object file
-src/imu_driver_wit.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.o
-.PHONY : src/imu_driver_wit.cpp.o
+src/nav_core/app/tools/DVL_selftest.cpp.o:
+	$(MAKE) -f CMakeFiles/uwnav_dvl_selftest.dir/build.make CMakeFiles/uwnav_dvl_selftest.dir/src/nav_core/app/tools/DVL_selftest.cpp.o
+.PHONY : src/nav_core/app/tools/DVL_selftest.cpp.o
 
-src/imu_driver_wit.i: src/imu_driver_wit.cpp.i
+src/nav_core/app/tools/DVL_selftest.i: src/nav_core/app/tools/DVL_selftest.cpp.i
 
-.PHONY : src/imu_driver_wit.i
+.PHONY : src/nav_core/app/tools/DVL_selftest.i
 
 # target to preprocess a source file
-src/imu_driver_wit.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.i
-.PHONY : src/imu_driver_wit.cpp.i
+src/nav_core/app/tools/DVL_selftest.cpp.i:
+	$(MAKE) -f CMakeFiles/uwnav_dvl_selftest.dir/build.make CMakeFiles/uwnav_dvl_selftest.dir/src/nav_core/app/tools/DVL_selftest.cpp.i
+.PHONY : src/nav_core/app/tools/DVL_selftest.cpp.i
 
-src/imu_driver_wit.s: src/imu_driver_wit.cpp.s
+src/nav_core/app/tools/DVL_selftest.s: src/nav_core/app/tools/DVL_selftest.cpp.s
 
-.PHONY : src/imu_driver_wit.s
+.PHONY : src/nav_core/app/tools/DVL_selftest.s
 
 # target to generate assembly for a file
-src/imu_driver_wit.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.s
-.PHONY : src/imu_driver_wit.cpp.s
+src/nav_core/app/tools/DVL_selftest.cpp.s:
+	$(MAKE) -f CMakeFiles/uwnav_dvl_selftest.dir/build.make CMakeFiles/uwnav_dvl_selftest.dir/src/nav_core/app/tools/DVL_selftest.cpp.s
+.PHONY : src/nav_core/app/tools/DVL_selftest.cpp.s
 
-src/imu_rt_filter.o: src/imu_rt_filter.cpp.o
+src/nav_core/core/logging.o: src/nav_core/core/logging.cpp.o
 
-.PHONY : src/imu_rt_filter.o
+.PHONY : src/nav_core/core/logging.o
 
 # target to build an object file
-src/imu_rt_filter.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.o
-.PHONY : src/imu_rt_filter.cpp.o
+src/nav_core/core/logging.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.o
+.PHONY : src/nav_core/core/logging.cpp.o
 
-src/imu_rt_filter.i: src/imu_rt_filter.cpp.i
+src/nav_core/core/logging.i: src/nav_core/core/logging.cpp.i
 
-.PHONY : src/imu_rt_filter.i
+.PHONY : src/nav_core/core/logging.i
 
 # target to preprocess a source file
-src/imu_rt_filter.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.i
-.PHONY : src/imu_rt_filter.cpp.i
+src/nav_core/core/logging.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.i
+.PHONY : src/nav_core/core/logging.cpp.i
 
-src/imu_rt_filter.s: src/imu_rt_filter.cpp.s
+src/nav_core/core/logging.s: src/nav_core/core/logging.cpp.s
 
-.PHONY : src/imu_rt_filter.s
+.PHONY : src/nav_core/core/logging.s
 
 # target to generate assembly for a file
-src/imu_rt_filter.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.s
-.PHONY : src/imu_rt_filter.cpp.s
+src/nav_core/core/logging.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.s
+.PHONY : src/nav_core/core/logging.cpp.s
 
-src/nav_daemon.o: src/nav_daemon.cpp.o
+src/nav_core/core/timebase.o: src/nav_core/core/timebase.cpp.o
 
-.PHONY : src/nav_daemon.o
+.PHONY : src/nav_core/core/timebase.o
 
 # target to build an object file
-src/nav_daemon.cpp.o:
-	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.o
-.PHONY : src/nav_daemon.cpp.o
+src/nav_core/core/timebase.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.o
+.PHONY : src/nav_core/core/timebase.cpp.o
 
-src/nav_daemon.i: src/nav_daemon.cpp.i
+src/nav_core/core/timebase.i: src/nav_core/core/timebase.cpp.i
 
-.PHONY : src/nav_daemon.i
+.PHONY : src/nav_core/core/timebase.i
 
 # target to preprocess a source file
-src/nav_daemon.cpp.i:
-	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.i
-.PHONY : src/nav_daemon.cpp.i
+src/nav_core/core/timebase.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.i
+.PHONY : src/nav_core/core/timebase.cpp.i
 
-src/nav_daemon.s: src/nav_daemon.cpp.s
+src/nav_core/core/timebase.s: src/nav_core/core/timebase.cpp.s
 
-.PHONY : src/nav_daemon.s
+.PHONY : src/nav_core/core/timebase.s
 
 # target to generate assembly for a file
-src/nav_daemon.cpp.s:
-	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.s
-.PHONY : src/nav_daemon.cpp.s
+src/nav_core/core/timebase.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.s
+.PHONY : src/nav_core/core/timebase.cpp.s
 
-src/nav_state_publisher.o: src/nav_state_publisher.cpp.o
+src/nav_core/drivers/dvl_driver.o: src/nav_core/drivers/dvl_driver.cpp.o
 
-.PHONY : src/nav_state_publisher.o
+.PHONY : src/nav_core/drivers/dvl_driver.o
 
 # target to build an object file
-src/nav_state_publisher.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.o
-.PHONY : src/nav_state_publisher.cpp.o
+src/nav_core/drivers/dvl_driver.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.o
+.PHONY : src/nav_core/drivers/dvl_driver.cpp.o
 
-src/nav_state_publisher.i: src/nav_state_publisher.cpp.i
+src/nav_core/drivers/dvl_driver.i: src/nav_core/drivers/dvl_driver.cpp.i
 
-.PHONY : src/nav_state_publisher.i
+.PHONY : src/nav_core/drivers/dvl_driver.i
 
 # target to preprocess a source file
-src/nav_state_publisher.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.i
-.PHONY : src/nav_state_publisher.cpp.i
+src/nav_core/drivers/dvl_driver.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.i
+.PHONY : src/nav_core/drivers/dvl_driver.cpp.i
 
-src/nav_state_publisher.s: src/nav_state_publisher.cpp.s
+src/nav_core/drivers/dvl_driver.s: src/nav_core/drivers/dvl_driver.cpp.s
 
-.PHONY : src/nav_state_publisher.s
+.PHONY : src/nav_core/drivers/dvl_driver.s
 
 # target to generate assembly for a file
-src/nav_state_publisher.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.s
-.PHONY : src/nav_state_publisher.cpp.s
+src/nav_core/drivers/dvl_driver.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.s
+.PHONY : src/nav_core/drivers/dvl_driver.cpp.s
 
-src/timebase.o: src/timebase.cpp.o
+src/nav_core/drivers/dvl_protocol.o: src/nav_core/drivers/dvl_protocol.cpp.o
 
-.PHONY : src/timebase.o
+.PHONY : src/nav_core/drivers/dvl_protocol.o
 
 # target to build an object file
-src/timebase.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/timebase.cpp.o
-.PHONY : src/timebase.cpp.o
+src/nav_core/drivers/dvl_protocol.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.o
+.PHONY : src/nav_core/drivers/dvl_protocol.cpp.o
 
-src/timebase.i: src/timebase.cpp.i
+src/nav_core/drivers/dvl_protocol.i: src/nav_core/drivers/dvl_protocol.cpp.i
 
-.PHONY : src/timebase.i
+.PHONY : src/nav_core/drivers/dvl_protocol.i
 
 # target to preprocess a source file
-src/timebase.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/timebase.cpp.i
-.PHONY : src/timebase.cpp.i
+src/nav_core/drivers/dvl_protocol.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.i
+.PHONY : src/nav_core/drivers/dvl_protocol.cpp.i
 
-src/timebase.s: src/timebase.cpp.s
+src/nav_core/drivers/dvl_protocol.s: src/nav_core/drivers/dvl_protocol.cpp.s
 
-.PHONY : src/timebase.s
+.PHONY : src/nav_core/drivers/dvl_protocol.s
 
 # target to generate assembly for a file
-src/timebase.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/timebase.cpp.s
-.PHONY : src/timebase.cpp.s
+src/nav_core/drivers/dvl_protocol.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.s
+.PHONY : src/nav_core/drivers/dvl_protocol.cpp.s
+
+src/nav_core/drivers/imu_driver_wit.o: src/nav_core/drivers/imu_driver_wit.cpp.o
+
+.PHONY : src/nav_core/drivers/imu_driver_wit.o
+
+# target to build an object file
+src/nav_core/drivers/imu_driver_wit.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.o
+.PHONY : src/nav_core/drivers/imu_driver_wit.cpp.o
+
+src/nav_core/drivers/imu_driver_wit.i: src/nav_core/drivers/imu_driver_wit.cpp.i
+
+.PHONY : src/nav_core/drivers/imu_driver_wit.i
+
+# target to preprocess a source file
+src/nav_core/drivers/imu_driver_wit.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.i
+.PHONY : src/nav_core/drivers/imu_driver_wit.cpp.i
+
+src/nav_core/drivers/imu_driver_wit.s: src/nav_core/drivers/imu_driver_wit.cpp.s
+
+.PHONY : src/nav_core/drivers/imu_driver_wit.s
+
+# target to generate assembly for a file
+src/nav_core/drivers/imu_driver_wit.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.s
+.PHONY : src/nav_core/drivers/imu_driver_wit.cpp.s
+
+src/nav_core/estimator/graph_smoother_2d.o: src/nav_core/estimator/graph_smoother_2d.cpp.o
+
+.PHONY : src/nav_core/estimator/graph_smoother_2d.o
+
+# target to build an object file
+src/nav_core/estimator/graph_smoother_2d.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.o
+.PHONY : src/nav_core/estimator/graph_smoother_2d.cpp.o
+
+src/nav_core/estimator/graph_smoother_2d.i: src/nav_core/estimator/graph_smoother_2d.cpp.i
+
+.PHONY : src/nav_core/estimator/graph_smoother_2d.i
+
+# target to preprocess a source file
+src/nav_core/estimator/graph_smoother_2d.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.i
+.PHONY : src/nav_core/estimator/graph_smoother_2d.cpp.i
+
+src/nav_core/estimator/graph_smoother_2d.s: src/nav_core/estimator/graph_smoother_2d.cpp.s
+
+.PHONY : src/nav_core/estimator/graph_smoother_2d.s
+
+# target to generate assembly for a file
+src/nav_core/estimator/graph_smoother_2d.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.s
+.PHONY : src/nav_core/estimator/graph_smoother_2d.cpp.s
+
+src/nav_core/estimator/nav_health_monitor.o: src/nav_core/estimator/nav_health_monitor.cpp.o
+
+.PHONY : src/nav_core/estimator/nav_health_monitor.o
+
+# target to build an object file
+src/nav_core/estimator/nav_health_monitor.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.o
+.PHONY : src/nav_core/estimator/nav_health_monitor.cpp.o
+
+src/nav_core/estimator/nav_health_monitor.i: src/nav_core/estimator/nav_health_monitor.cpp.i
+
+.PHONY : src/nav_core/estimator/nav_health_monitor.i
+
+# target to preprocess a source file
+src/nav_core/estimator/nav_health_monitor.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.i
+.PHONY : src/nav_core/estimator/nav_health_monitor.cpp.i
+
+src/nav_core/estimator/nav_health_monitor.s: src/nav_core/estimator/nav_health_monitor.cpp.s
+
+.PHONY : src/nav_core/estimator/nav_health_monitor.s
+
+# target to generate assembly for a file
+src/nav_core/estimator/nav_health_monitor.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.s
+.PHONY : src/nav_core/estimator/nav_health_monitor.cpp.s
+
+src/nav_core/estimator/online_estimator.o: src/nav_core/estimator/online_estimator.cpp.o
+
+.PHONY : src/nav_core/estimator/online_estimator.o
+
+# target to build an object file
+src/nav_core/estimator/online_estimator.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.o
+.PHONY : src/nav_core/estimator/online_estimator.cpp.o
+
+src/nav_core/estimator/online_estimator.i: src/nav_core/estimator/online_estimator.cpp.i
+
+.PHONY : src/nav_core/estimator/online_estimator.i
+
+# target to preprocess a source file
+src/nav_core/estimator/online_estimator.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.i
+.PHONY : src/nav_core/estimator/online_estimator.cpp.i
+
+src/nav_core/estimator/online_estimator.s: src/nav_core/estimator/online_estimator.cpp.s
+
+.PHONY : src/nav_core/estimator/online_estimator.s
+
+# target to generate assembly for a file
+src/nav_core/estimator/online_estimator.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.s
+.PHONY : src/nav_core/estimator/online_estimator.cpp.s
+
+src/nav_core/filters/eskf.o: src/nav_core/filters/eskf.cpp.o
+
+.PHONY : src/nav_core/filters/eskf.o
+
+# target to build an object file
+src/nav_core/filters/eskf.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.o
+.PHONY : src/nav_core/filters/eskf.cpp.o
+
+src/nav_core/filters/eskf.i: src/nav_core/filters/eskf.cpp.i
+
+.PHONY : src/nav_core/filters/eskf.i
+
+# target to preprocess a source file
+src/nav_core/filters/eskf.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.i
+.PHONY : src/nav_core/filters/eskf.cpp.i
+
+src/nav_core/filters/eskf.s: src/nav_core/filters/eskf.cpp.s
+
+.PHONY : src/nav_core/filters/eskf.s
+
+# target to generate assembly for a file
+src/nav_core/filters/eskf.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.s
+.PHONY : src/nav_core/filters/eskf.cpp.s
+
+src/nav_core/filters/imu_rt_filter.o: src/nav_core/filters/imu_rt_filter.cpp.o
+
+.PHONY : src/nav_core/filters/imu_rt_filter.o
+
+# target to build an object file
+src/nav_core/filters/imu_rt_filter.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.o
+.PHONY : src/nav_core/filters/imu_rt_filter.cpp.o
+
+src/nav_core/filters/imu_rt_filter.i: src/nav_core/filters/imu_rt_filter.cpp.i
+
+.PHONY : src/nav_core/filters/imu_rt_filter.i
+
+# target to preprocess a source file
+src/nav_core/filters/imu_rt_filter.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.i
+.PHONY : src/nav_core/filters/imu_rt_filter.cpp.i
+
+src/nav_core/filters/imu_rt_filter.s: src/nav_core/filters/imu_rt_filter.cpp.s
+
+.PHONY : src/nav_core/filters/imu_rt_filter.s
+
+# target to generate assembly for a file
+src/nav_core/filters/imu_rt_filter.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.s
+.PHONY : src/nav_core/filters/imu_rt_filter.cpp.s
+
+src/nav_core/io/bin_logger.o: src/nav_core/io/bin_logger.cpp.o
+
+.PHONY : src/nav_core/io/bin_logger.o
+
+# target to build an object file
+src/nav_core/io/bin_logger.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.o
+.PHONY : src/nav_core/io/bin_logger.cpp.o
+
+src/nav_core/io/bin_logger.i: src/nav_core/io/bin_logger.cpp.i
+
+.PHONY : src/nav_core/io/bin_logger.i
+
+# target to preprocess a source file
+src/nav_core/io/bin_logger.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.i
+.PHONY : src/nav_core/io/bin_logger.cpp.i
+
+src/nav_core/io/bin_logger.s: src/nav_core/io/bin_logger.cpp.s
+
+.PHONY : src/nav_core/io/bin_logger.s
+
+# target to generate assembly for a file
+src/nav_core/io/bin_logger.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.s
+.PHONY : src/nav_core/io/bin_logger.cpp.s
+
+src/nav_core/io/nav_state_publisher.o: src/nav_core/io/nav_state_publisher.cpp.o
+
+.PHONY : src/nav_core/io/nav_state_publisher.o
+
+# target to build an object file
+src/nav_core/io/nav_state_publisher.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.o
+.PHONY : src/nav_core/io/nav_state_publisher.cpp.o
+
+src/nav_core/io/nav_state_publisher.i: src/nav_core/io/nav_state_publisher.cpp.i
+
+.PHONY : src/nav_core/io/nav_state_publisher.i
+
+# target to preprocess a source file
+src/nav_core/io/nav_state_publisher.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.i
+.PHONY : src/nav_core/io/nav_state_publisher.cpp.i
+
+src/nav_core/io/nav_state_publisher.s: src/nav_core/io/nav_state_publisher.cpp.s
+
+.PHONY : src/nav_core/io/nav_state_publisher.s
+
+# target to generate assembly for a file
+src/nav_core/io/nav_state_publisher.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.s
+.PHONY : src/nav_core/io/nav_state_publisher.cpp.s
 
 third_party/witmotion/wit_c_sdk.o: third_party/witmotion/wit_c_sdk.c.o
 
@@ -400,33 +602,55 @@ help:
 	@echo "... depend"
 	@echo "... rebuild_cache"
 	@echo "... edit_cache"
+	@echo "... uwnav_dvl_selftest"
 	@echo "... uwnav_navd"
 	@echo "... nav_core"
 	@echo "... witmotion_sdk"
-	@echo "... src/bin_logger.o"
-	@echo "... src/bin_logger.i"
-	@echo "... src/bin_logger.s"
-	@echo "... src/dvl_driver.o"
-	@echo "... src/dvl_driver.i"
-	@echo "... src/dvl_driver.s"
-	@echo "... src/eskf.o"
-	@echo "... src/eskf.i"
-	@echo "... src/eskf.s"
-	@echo "... src/imu_driver_wit.o"
-	@echo "... src/imu_driver_wit.i"
-	@echo "... src/imu_driver_wit.s"
-	@echo "... src/imu_rt_filter.o"
-	@echo "... src/imu_rt_filter.i"
-	@echo "... src/imu_rt_filter.s"
-	@echo "... src/nav_daemon.o"
-	@echo "... src/nav_daemon.i"
-	@echo "... src/nav_daemon.s"
-	@echo "... src/nav_state_publisher.o"
-	@echo "... src/nav_state_publisher.i"
-	@echo "... src/nav_state_publisher.s"
-	@echo "... src/timebase.o"
-	@echo "... src/timebase.i"
-	@echo "... src/timebase.s"
+	@echo "... src/nav_core/app/nav_daemon.o"
+	@echo "... src/nav_core/app/nav_daemon.i"
+	@echo "... src/nav_core/app/nav_daemon.s"
+	@echo "... src/nav_core/app/nav_daemon_config.o"
+	@echo "... src/nav_core/app/nav_daemon_config.i"
+	@echo "... src/nav_core/app/nav_daemon_config.s"
+	@echo "... src/nav_core/app/tools/DVL_selftest.o"
+	@echo "... src/nav_core/app/tools/DVL_selftest.i"
+	@echo "... src/nav_core/app/tools/DVL_selftest.s"
+	@echo "... src/nav_core/core/logging.o"
+	@echo "... src/nav_core/core/logging.i"
+	@echo "... src/nav_core/core/logging.s"
+	@echo "... src/nav_core/core/timebase.o"
+	@echo "... src/nav_core/core/timebase.i"
+	@echo "... src/nav_core/core/timebase.s"
+	@echo "... src/nav_core/drivers/dvl_driver.o"
+	@echo "... src/nav_core/drivers/dvl_driver.i"
+	@echo "... src/nav_core/drivers/dvl_driver.s"
+	@echo "... src/nav_core/drivers/dvl_protocol.o"
+	@echo "... src/nav_core/drivers/dvl_protocol.i"
+	@echo "... src/nav_core/drivers/dvl_protocol.s"
+	@echo "... src/nav_core/drivers/imu_driver_wit.o"
+	@echo "... src/nav_core/drivers/imu_driver_wit.i"
+	@echo "... src/nav_core/drivers/imu_driver_wit.s"
+	@echo "... src/nav_core/estimator/graph_smoother_2d.o"
+	@echo "... src/nav_core/estimator/graph_smoother_2d.i"
+	@echo "... src/nav_core/estimator/graph_smoother_2d.s"
+	@echo "... src/nav_core/estimator/nav_health_monitor.o"
+	@echo "... src/nav_core/estimator/nav_health_monitor.i"
+	@echo "... src/nav_core/estimator/nav_health_monitor.s"
+	@echo "... src/nav_core/estimator/online_estimator.o"
+	@echo "... src/nav_core/estimator/online_estimator.i"
+	@echo "... src/nav_core/estimator/online_estimator.s"
+	@echo "... src/nav_core/filters/eskf.o"
+	@echo "... src/nav_core/filters/eskf.i"
+	@echo "... src/nav_core/filters/eskf.s"
+	@echo "... src/nav_core/filters/imu_rt_filter.o"
+	@echo "... src/nav_core/filters/imu_rt_filter.i"
+	@echo "... src/nav_core/filters/imu_rt_filter.s"
+	@echo "... src/nav_core/io/bin_logger.o"
+	@echo "... src/nav_core/io/bin_logger.i"
+	@echo "... src/nav_core/io/bin_logger.s"
+	@echo "... src/nav_core/io/nav_state_publisher.o"
+	@echo "... src/nav_core/io/nav_state_publisher.i"
+	@echo "... src/nav_core/io/nav_state_publisher.s"
 	@echo "... third_party/witmotion/wit_c_sdk.o"
 	@echo "... third_party/witmotion/wit_c_sdk.i"
 	@echo "... third_party/witmotion/wit_c_sdk.s"

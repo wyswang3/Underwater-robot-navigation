@@ -57,120 +57,210 @@ include CMakeFiles/nav_core.dir/progress.make
 # Include the compile flags for this target's objects.
 include CMakeFiles/nav_core.dir/flags.make
 
-CMakeFiles/nav_core.dir/src/timebase.cpp.o: CMakeFiles/nav_core.dir/flags.make
-CMakeFiles/nav_core.dir/src/timebase.cpp.o: ../src/timebase.cpp
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/nav_core.dir/src/timebase.cpp.o"
-	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/timebase.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/timebase.cpp
+CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.o: ../src/nav_core/core/logging.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/core/logging.cpp
 
-CMakeFiles/nav_core.dir/src/timebase.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/timebase.cpp.i"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/timebase.cpp > CMakeFiles/nav_core.dir/src/timebase.cpp.i
+CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/core/logging.cpp > CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.i
 
-CMakeFiles/nav_core.dir/src/timebase.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/timebase.cpp.s"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/timebase.cpp -o CMakeFiles/nav_core.dir/src/timebase.cpp.s
+CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/core/logging.cpp -o CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.s
 
-CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.o: CMakeFiles/nav_core.dir/flags.make
-CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.o: ../src/imu_driver_wit.cpp
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.o"
-	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/imu_driver_wit.cpp
+CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.o: ../src/nav_core/core/timebase.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/core/timebase.cpp
 
-CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.i"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/imu_driver_wit.cpp > CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.i
+CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/core/timebase.cpp > CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.i
 
-CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.s"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/imu_driver_wit.cpp -o CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.s
+CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/core/timebase.cpp -o CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.s
 
-CMakeFiles/nav_core.dir/src/dvl_driver.cpp.o: CMakeFiles/nav_core.dir/flags.make
-CMakeFiles/nav_core.dir/src/dvl_driver.cpp.o: ../src/dvl_driver.cpp
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/nav_core.dir/src/dvl_driver.cpp.o"
-	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/dvl_driver.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/dvl_driver.cpp
+CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.o: ../src/nav_core/drivers/imu_driver_wit.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/drivers/imu_driver_wit.cpp
 
-CMakeFiles/nav_core.dir/src/dvl_driver.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/dvl_driver.cpp.i"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/dvl_driver.cpp > CMakeFiles/nav_core.dir/src/dvl_driver.cpp.i
+CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/drivers/imu_driver_wit.cpp > CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.i
 
-CMakeFiles/nav_core.dir/src/dvl_driver.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/dvl_driver.cpp.s"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/dvl_driver.cpp -o CMakeFiles/nav_core.dir/src/dvl_driver.cpp.s
+CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/drivers/imu_driver_wit.cpp -o CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.s
 
-CMakeFiles/nav_core.dir/src/eskf.cpp.o: CMakeFiles/nav_core.dir/flags.make
-CMakeFiles/nav_core.dir/src/eskf.cpp.o: ../src/eskf.cpp
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/nav_core.dir/src/eskf.cpp.o"
-	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/eskf.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/eskf.cpp
+CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.o: ../src/nav_core/drivers/dvl_driver.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/drivers/dvl_driver.cpp
 
-CMakeFiles/nav_core.dir/src/eskf.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/eskf.cpp.i"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/eskf.cpp > CMakeFiles/nav_core.dir/src/eskf.cpp.i
+CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/drivers/dvl_driver.cpp > CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.i
 
-CMakeFiles/nav_core.dir/src/eskf.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/eskf.cpp.s"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/eskf.cpp -o CMakeFiles/nav_core.dir/src/eskf.cpp.s
+CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/drivers/dvl_driver.cpp -o CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.s
 
-CMakeFiles/nav_core.dir/src/bin_logger.cpp.o: CMakeFiles/nav_core.dir/flags.make
-CMakeFiles/nav_core.dir/src/bin_logger.cpp.o: ../src/bin_logger.cpp
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/nav_core.dir/src/bin_logger.cpp.o"
-	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/bin_logger.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/bin_logger.cpp
+CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.o: ../src/nav_core/drivers/dvl_protocol.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/drivers/dvl_protocol.cpp
 
-CMakeFiles/nav_core.dir/src/bin_logger.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/bin_logger.cpp.i"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/bin_logger.cpp > CMakeFiles/nav_core.dir/src/bin_logger.cpp.i
+CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/drivers/dvl_protocol.cpp > CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.i
 
-CMakeFiles/nav_core.dir/src/bin_logger.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/bin_logger.cpp.s"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/bin_logger.cpp -o CMakeFiles/nav_core.dir/src/bin_logger.cpp.s
+CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/drivers/dvl_protocol.cpp -o CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.s
 
-CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.o: CMakeFiles/nav_core.dir/flags.make
-CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.o: ../src/imu_rt_filter.cpp
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.o"
-	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/imu_rt_filter.cpp
+CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.o: ../src/nav_core/filters/imu_rt_filter.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/filters/imu_rt_filter.cpp
 
-CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.i"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/imu_rt_filter.cpp > CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.i
+CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/filters/imu_rt_filter.cpp > CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.i
 
-CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.s"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/imu_rt_filter.cpp -o CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.s
+CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/filters/imu_rt_filter.cpp -o CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.s
 
-CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.o: CMakeFiles/nav_core.dir/flags.make
-CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.o: ../src/nav_state_publisher.cpp
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.o"
-	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_state_publisher.cpp
+CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.o: ../src/nav_core/filters/eskf.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/filters/eskf.cpp
 
-CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.i"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_state_publisher.cpp > CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.i
+CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/filters/eskf.cpp > CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.i
 
-CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.s"
-	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_state_publisher.cpp -o CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.s
+CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/filters/eskf.cpp -o CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.s
+
+CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.o: ../src/nav_core/estimator/online_estimator.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/estimator/online_estimator.cpp
+
+CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/estimator/online_estimator.cpp > CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.i
+
+CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/estimator/online_estimator.cpp -o CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.s
+
+CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.o: ../src/nav_core/estimator/graph_smoother_2d.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/estimator/graph_smoother_2d.cpp
+
+CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/estimator/graph_smoother_2d.cpp > CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.i
+
+CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/estimator/graph_smoother_2d.cpp -o CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.s
+
+CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.o: ../src/nav_core/estimator/nav_health_monitor.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/estimator/nav_health_monitor.cpp
+
+CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/estimator/nav_health_monitor.cpp > CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.i
+
+CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/estimator/nav_health_monitor.cpp -o CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.s
+
+CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.o: ../src/nav_core/io/bin_logger.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/io/bin_logger.cpp
+
+CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/io/bin_logger.cpp > CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.i
+
+CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/io/bin_logger.cpp -o CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.s
+
+CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.o: ../src/nav_core/io/nav_state_publisher.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/io/nav_state_publisher.cpp
+
+CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/io/nav_state_publisher.cpp > CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.i
+
+CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/io/nav_state_publisher.cpp -o CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.s
+
+CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.o: CMakeFiles/nav_core.dir/flags.make
+CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.o: ../src/nav_core/app/nav_daemon_config.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building CXX object CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.o"
+	/usr/lib/ccache/c++  $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -o CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.o -c /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/app/nav_daemon_config.cpp
+
+CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.i"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/app/nav_daemon_config.cpp > CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.i
+
+CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.s"
+	/usr/lib/ccache/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/app/nav_daemon_config.cpp -o CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.s
 
 # Object files for target nav_core
 nav_core_OBJECTS = \
-"CMakeFiles/nav_core.dir/src/timebase.cpp.o" \
-"CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.o" \
-"CMakeFiles/nav_core.dir/src/dvl_driver.cpp.o" \
-"CMakeFiles/nav_core.dir/src/eskf.cpp.o" \
-"CMakeFiles/nav_core.dir/src/bin_logger.cpp.o" \
-"CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.o" \
-"CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.o"
+"CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.o" \
+"CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.o"
 
 # External object files for target nav_core
 nav_core_EXTERNAL_OBJECTS =
 
-libnav_core.a: CMakeFiles/nav_core.dir/src/timebase.cpp.o
-libnav_core.a: CMakeFiles/nav_core.dir/src/imu_driver_wit.cpp.o
-libnav_core.a: CMakeFiles/nav_core.dir/src/dvl_driver.cpp.o
-libnav_core.a: CMakeFiles/nav_core.dir/src/eskf.cpp.o
-libnav_core.a: CMakeFiles/nav_core.dir/src/bin_logger.cpp.o
-libnav_core.a: CMakeFiles/nav_core.dir/src/imu_rt_filter.cpp.o
-libnav_core.a: CMakeFiles/nav_core.dir/src/nav_state_publisher.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/core/logging.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/core/timebase.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_driver.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/drivers/dvl_protocol.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/io/bin_logger.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.o
+libnav_core.a: CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.o
 libnav_core.a: CMakeFiles/nav_core.dir/build.make
 libnav_core.a: CMakeFiles/nav_core.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Linking CXX static library libnav_core.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Linking CXX static library libnav_core.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/nav_core.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/nav_core.dir/link.txt --verbose=$(VERBOSE)
 

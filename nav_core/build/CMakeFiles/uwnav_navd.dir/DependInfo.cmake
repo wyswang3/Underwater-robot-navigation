@@ -4,7 +4,7 @@ set(CMAKE_DEPENDS_LANGUAGES
   )
 # The set of files for implicit dependencies of each language:
 set(CMAKE_DEPENDS_CHECK_CXX
-  "/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_daemon.cpp" "/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/uwnav_navd.dir/src/nav_daemon.cpp.o"
+  "/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/src/nav_core/app/nav_daemon.cpp" "/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon.cpp.o"
   )
 set(CMAKE_CXX_COMPILER_ID "GNU")
 
