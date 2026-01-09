@@ -2,15 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-apps/tools/sensor2_rotating.py  (timebase 统一版)
+apps/tools/volt32_data_verifier.py  (timebase 统一版, 对齐 IMU)
 
 功能：
 - 串口读取 16/32 通道电压采集板行数据
 - 聚合 CH0..CH{N-1} 成一帧
 - 使用统一时间基 uwnav.io.timebase：
-      ts = stamp("volt0", SensorKind.OTHER)
-      → ts.host_time_ns
-      → ts.corrected_time_ns
+      ts = stamp("imu0", SensorKind.IMU)
+      → ts.host_time_ns  (MonoNS)
+      → ts.corrected_time_ns (EstNS)
 - 输出 CSV 列格式：
       MonoNS, EstNS, MonoS, EstS, CH0..CH{N-1}
 """
@@ -32,7 +32,7 @@ from uwnav.io.data_paths import get_sensor_outdir
 
 
 # ===================== 配置 =====================
-SERIAL_PORT   = "/dev/ttyUSB0"
+SERIAL_PORT   = "/dev/ttyUSB1"
 SERIAL_BAUD   = 115200
 N_CHANNELS    = 16
 
@@ -217,6 +217,7 @@ class PeriodicFlusher(threading.Thread):
 
 # ==================== 主流程 ====================
 def main():
+    # 使用 data_paths 的统一规则：data/YYYY-MM-DD/volt/
     sensor_outdir = get_sensor_outdir("volt", OUT_DIR)
 
     header = ["MonoNS", "EstNS", "MonoS", "EstS"] + [f"CH{i}" for i in range(N_CHANNELS)]
@@ -247,12 +248,12 @@ def main():
         if row_vals is None:
             return
 
-        # ---------- ★统一时间基★ ----------
-        ts = stamp("volt0", SensorKind.OTHER)
+        # ---------- ★统一时间基：复用 IMU 时间轴★ ----------
+        ts = stamp("imu0", SensorKind.IMU)
         mono_ns = ts.host_time_ns
         est_ns  = ts.corrected_time_ns
-        mono_s  = mono_ns * 1e-9
-        est_s   = est_ns * 1e-9
+        mono_s  = mono_ns / 1e9
+        est_s   = est_ns / 1e9
 
         writer.writerow([mono_ns, est_ns, mono_s, est_s] + row_vals)
         total_frames += 1
@@ -277,7 +278,7 @@ def main():
     flush_th = PeriodicFlusher(writer, shutdown, FLUSH_SEC)
     flush_th.start()
 
-    # 退出键监听
+    # 退出键监听（终端输入 's' + 回车 或 Ctrl+C）
     input_th = InputListenerThread(shutdown_event=shutdown, shutdown_callback=shutdown.set)
     input_th.start()
     print("运行中。按 's' 回车或 Ctrl+C 退出。")

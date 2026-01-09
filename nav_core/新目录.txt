@@ -1,0 +1,72 @@
+nav_core/
+└── include/nav_core
+    ├── core/
+    │   ├── timebase.hpp              # MonoNS / EstNS 统一时间基
+    │   ├── status.hpp                # NavQuality / 状态枚举
+    │   ├── 
+    │   
+    │   ├── types.hpp             # 前向声明/公共别名（轻量）
+    │   └── math.hpp                  # （可选）Eigen/数学工具集中隔离
+    │
+    ├── drivers/
+    │   ├── imu_driver_wit.hpp        # WIT IMU 驱动封装（输出 ImuSample）
+    │   ├── dvl_driver.hpp            # Hover H1000 DVL 驱动封装（输出 DvlSample）
+    │   ├── dvl_protocol.hpp          # DVL 16字节命令 pack/unpack + 解析纯函数（建议新增）
+    │   └── 
+    │
+    ├── filters/
+    │   ├── imu_rt_filter.hpp         # 静止窗 bias + 实时滤波（输出滤波后 ImuSample/状态）
+    │   ├── eskf.hpp                  # （保留）ESKF，可不启用
+    │   └── filter_common.hpp         # 噪声/阈值配置（可选）
+    │
+    ├── estimator/
+    │   ├── online_estimator.hpp      # 在线解算：yaw 插值 + 体速转 ENU + ZUPT + 积分
+    │   ├── graph_smoother_2d.hpp     # 2D 因子图平滑：状态[p,v]，二次型最小二乘
+    │   ├── nav_health_monitor.hpp    # 健康监测：在线 vs 平滑参考，输出质量/建议
+
+    │
+    ├── io/
+    │   ├── nav_state_publisher.hpp   # 发布 NavState（SHM/UDP 等 facade）
+    │   ├── bin_logger.hpp            # 二进制日志写手（append packet）
+    │   ├── log_packets.hpp           # packet POD 结构定义
+    │   └── 
+    │
+    └── app/
+        ├── nav_daemon_config.hpp     # daemon 配置（端口、频率、窗口等）
+        └── nav_daemon_api.hpp        # （可选）启动/停止接口
+
+Underwater-robot-navigation/
+└── nav_core
+    ├── include/
+    │   └── nav_core/    # 你现在已经有的头文件
+    └── src/
+        └── nav_core
+            ├── core
+            │   ├── timebase.cpp
+            │   ├── status.cpp          # 如有非内联实现
+            │   ├── math.cpp            # 若 math.hpp 完全 header-only 可省略
+            │   └── logging.cpp         # 若 logging.hpp 提供实现
+            │
+            ├── drivers
+            │   ├── imu_driver_wit.cpp
+            │   ├── dvl_driver.cpp
+            │   └── dvl_protocol.cpp
+            │
+            ├── filters
+            │   ├── imu_rt_filter.cpp
+            │   ├── eskf.cpp            # 先放 stub，将来慢慢填
+            │   └── filter_common.cpp   # 建议改名，头文件也别拼成 commom :)
+            │
+            ├── estimator
+            │   ├── online_estimator.cpp
+            │   ├── graph_smoother_2d.cpp
+            │   └── nav_health_monitor.cpp
+            │
+            ├── io
+            │   ├── bin_logger.cpp
+            │   ├── nav_state_publisher.cpp
+            │   └── log_packets.cpp     # 一般不需要，实现很少，可只保留头
+            │
+            └── app
+                └── nav_daemon_main.cpp # 或 nav_daemon.cpp：进程入口 + glue
+

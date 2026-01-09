@@ -1,0 +1,234 @@
+// nav_core/include/nav_core/types.hpp
+#pragma once
+
+#include <cstdint>
+
+namespace nav_core {
+
+/// 单调时钟时间戳（纳秒），用于内部对齐 / 插值 / 导航解算主时间轴。
+/// 一般来自 timebase 模块（例如 monotonic_clock_ns()）。
+using MonoTimeNs = std::int64_t;
+
+/// 估计的 UNIX 时间（纳秒），用于日志 / 对外时间轴（GCS、数据分析等）。
+/// 可以由 MonoTimeNs 通过 timebase 校正得到。
+using SysTimeNs  = std::int64_t;
+
+// ===================== 1. 通用向量类型 =====================
+
+/// 轻量 3D 向量（float 版），用于不想引入 Eigen 时的基础类型。
+struct Vec3f {
+    float x{0.f};
+    float y{0.f};
+    float z{0.f};
+};
+
+/// 轻量 3D 向量（double 版），仅在需要双精度时使用。
+struct Vec3d {
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+};
+
+// ===================== 2. IMU 相关类型 =====================
+
+/**
+ * @brief 原始寄存器更新信息（来自 Wit SDK 的底层回调）
+ *
+ * 用途：
+ *  - 仅用于调试 / 统计（例如观察寄存器更新频率、掉帧情况），
+ *  - 不参与导航计算（导航使用 ImuFrame / ImuSample）。
+ *
+ * 注意：
+ *  - 不拷贝寄存器数组本身（sReg[] 仍由 wit_c_sdk 管理），
+ *  - 只记录这次更新的起始寄存器与数量。
+ *
+ * 时间：
+ *  - timestamp_s：兼容旧代码的粗略系统时间（秒，不推荐新代码依赖），
+ *  - host_mono_ns：推荐新代码使用的单调时间戳（纳秒）。
+ */
+struct ImuRawRegs {
+    double     timestamp_s = 0.0;  ///< 旧接口：system_clock 下的粗略时间（秒）
+
+    MonoTimeNs host_mono_ns{0};    ///< 新接口：主机单调时间（纳秒）
+
+    std::uint32_t start_reg = 0;   ///< 本次更新的起始寄存器地址
+    std::uint32_t count     = 0;   ///< 连续寄存器数量
+};
+
+/**
+ * @brief IMU 标准化数据帧（供导航 / 滤波 / 控制使用）
+ *
+ * 这是整个 nav_core 中 IMU 数据的“统一表示”，驱动层与滤波层
+ * 都应产出 / 消费该结构。
+ *
+ * 单位约定：
+ *  - ang_vel: rad/s    （IMU 自身坐标系下的角速度 [wx, wy, wz]）
+ *  - lin_acc: m/s^2    （IMU 自身坐标系下的线加速度 [ax, ay, az]）
+ *  - euler:   rad      （[roll, pitch, yaw]，右手系，弧度）
+ *  - temperature: °C
+ *
+ * 时间戳：
+ *  - mono_ns: 单调时钟（纳秒），用于内部时间对齐 / 插值（ESKF、在线估计主时间轴）；
+ *  - est_ns:  估计 UNIX 时间（纳秒），用于日志落盘、与 DVL / 其他传感器对齐。
+ *
+ * 质量标志：
+ *  - valid:  该帧是否通过 IMU 层基本过滤（NaN / 溢出 / 明显异常）；
+ *  - status: 预留状态位（自检结果 / 错误码等，上层可扩展）。
+ */
+struct ImuFrame {
+    MonoTimeNs mono_ns{0};  ///< 单调时钟时间戳（纳秒）
+    SysTimeNs  est_ns{0};   ///< 估计 UNIX 时间戳（纳秒）
+
+    float ang_vel[3]  = {0.f, 0.f, 0.f}; ///< 角速度 [wx, wy, wz] (rad/s)
+    float lin_acc[3]  = {0.f, 0.f, 0.f}; ///< 线加速度 [ax, ay, az] (m/s^2)
+    float euler[3]    = {0.f, 0.f, 0.f}; ///< 欧拉角 [roll, pitch, yaw] (rad)
+    float temperature = 0.f;             ///< 温度 (°C)
+
+    bool  valid  = false;                ///< 基本有效性检查是否通过
+    int   status = 0;                    ///< 预留状态位（可编码自检状态 / 错误码）
+};
+
+/**
+ * @brief IMU 基本过滤配置
+ *
+ * 用途：
+ *  - 在进入 ESKF / 在线估计之前，对原始 IMU 数据做一次“硬门控”，
+ *    去掉明显不合理的尖刺 / NaN / 溢出，防止污染后端解算。
+ *
+ * 典型策略：
+ *  - 如果某轴违反 max_abs_accel / max_abs_gyro，则整帧视为 invalid；
+ *  - 如果 enable_euler=true，则对欧拉角范围做额外检查。
+ */
+struct ImuFilterConfig {
+    bool   enable_accel = true;   ///< 是否启用加速度的有效性检查
+    bool   enable_gyro  = true;   ///< 是否启用角速度的有效性检查
+    bool   enable_euler = false;  ///< 是否启用欧拉角的有效性检查
+
+    double max_abs_accel = 50.0;  ///< 单轴最大 |a| (m/s^2)，约 5g
+    double max_abs_gyro  = 10.0;  ///< 单轴最大 |ω| (rad/s)
+    double max_euler_abs = 3.5;   ///< 单轴最大 |姿态| (rad)，约 200°
+};
+
+// 为后端算法统一命名，可以直接把 ImuFrame 当作“采样”
+using ImuSample = ImuFrame;
+
+// ===================== 3. DVL 相关类型 =====================
+
+/// DVL 观测的跟踪类型：未知 / 底跟踪 / 水团跟踪
+enum class DvlTrackType : std::uint8_t {
+    Unknown     = 0,  ///< 未知或未提供
+    BottomTrack = 1,  ///< 底跟踪（锁底）
+    WaterTrack  = 2,  ///< 水团跟踪
+};
+/**
+ * @brief DVL 标准化数据帧（供导航 / 滤波 / 轨迹解算使用）
+ *
+ * 说明：
+ *  - 这是“已解码 & 做过至少一次 sanity check”之后的统一格式，
+ *    不再直接暴露厂商原始字符串；
+ *  - 坐标系区分：
+ *      * vel_body_mps:  体坐标系 XYZ 速度 [vx, vy, vz]，单位 m/s
+ *                       （例如来自 BI/BS 帧，x 前、y 右、z 下/上按安装约定）
+ *      * vel_enu_mps:   导航坐标系 ENU 速度 [vE, vN, vU]，单位 m/s
+ *                       （例如来自 BE 帧，或由体速 + IMU yaw 变换得到）
+ *
+ * 时间戳：
+ *  - mono_ns: 单调时间戳（ns），建议作为 DVL 在导航系统中的主时间轴；
+ *  - est_ns:  估计 UNIX 时间戳，用于跨进程日志对齐。
+ *
+ * 有效性：
+ *  - vel_body_valid: 体速是否来自本次观测（非 NaN / 非 88888 / 非 'V' 标记）；
+ *  - vel_enu_valid:  ENU 速度是否可用（同上；可能直接来自 DVL，也可能由上层计算）；
+ *  - altitude_valid: 高度（离底距离）是否可靠；
+ *  - bottom_lock:    是否锁底成功（典型意义：bottom-track vs water-track）；
+ *  - valid:          该帧是否通过 DVL 层整体过滤（结合 DvlFilterConfig）。
+ *
+ * 注意：
+ *  - “如何处理无效速度”（置零 vs 保持上值）属于上层策略，
+ *    DvlFrame 仅携带“本次观测本身”的有效性标志。
+ *  - 你当前的在线导航策略是：
+ *      * 时间轴上不丢帧，保持时间连续；
+ *      * 对无效速度可以在 estimator 中按策略置零 + 延续高度。
+ */
+struct DvlFrame {
+    MonoTimeNs mono_ns{0};  ///< 统一时间戳（ns）
+    SysTimeNs  est_ns{0};   ///< 估计 UNIX 时间戳（ns），用于日志/对外
+
+    // ---- 1. 底跟踪 / 水团 & 锁底状态 ----
+    bool          bottom_lock{false};   ///< 是否锁底成功（底跟踪）
+    DvlTrackType  track_type{DvlTrackType::Unknown};
+
+    // ---- 2. 体坐标系速度（Body frame / Ship frame）----
+    //
+    // 来源：
+    //   - BI / BS 帧（Instrument / Ship 坐标系）
+    //   - 单位：m/s
+    //
+    float vel_body_mps[3]  = {0.f, 0.f, 0.f};  ///< [vx_b, vy_b, vz_b]
+    bool  has_body_vel{false};
+
+    // ---- 3. 地理 ENU 速度（Earth frame）----
+    //
+    // 来源：
+    //   - 直接来自 BE 帧（Earth 坐标系）
+    //   - 或在 estimator 中由 vel_body_mps + IMU yaw 旋转得到
+    //
+    float vel_enu_mps[3]   = {0.f, 0.f, 0.f};  ///< [vE, vN, vU]
+    bool  has_enu_vel{false};
+
+    // ---- 4. ENU 积分位移（距离）----
+    //
+    // 来源：
+    //   - BD 帧（Earth frame 下的累计位移）；
+    //   - 若当前时刻没有 BD 则 has_dist_enu=false。
+    //
+    float dist_enu_m[3]    = {0.f, 0.f, 0.f};  ///< [dE, dN, dU]
+    bool  has_dist_enu{false};
+
+    // ---- 5. 高度 / 质量指标 ----
+    float altitude_m{0.f};   ///< 离底高度（m），若无则 0
+    float fom{0.f};          ///< Figure of Merit / 厂家质量指标
+
+    // ---- 6. 有效性与质量 ----
+    bool  valid{false};      ///< 当前帧是否被认为“可用于导航”
+    int   quality{0};        ///< 预留质量等级（可由原始 FOM / 标志映射）
+};
+
+
+/**
+ * @brief DVL 基本过滤配置
+ *
+ * 用途：
+ *  - 在进入在线估计 / 因子图平滑前，对 DVL 数据做基本门控；
+ *  - 结合厂商提供的 valid 标志 / A/V 标志 / FOM / 高度范围等，决定
+ *    哪些帧设置为 DvlFrame::valid=true。
+ *
+ * 典型策略：
+ *  - enable_velocity = true 时，对速度范围做检查；
+ *  - enable_altitude = true 时，对高度范围做检查；
+ *  - only_valid_flag = true 时，仅接受底层解析出的“有效”帧；
+ *  - require_all_axes = true 时，三轴速度都必须是有限数；
+ *  - 若 quality < min_quality，则视为无效。
+ *
+ * 注意：
+ *  - 这些门限只影响 DvlFrame::valid / vel_*_valid / altitude_valid 的赋值，
+ *    “是否在积分中置零 / 延续上一帧”由上层 estimator 决定。
+ */
+struct DvlFilterConfig {
+    bool  enable_velocity   = true;   ///< 是否检查速度幅值
+    bool  enable_altitude   = true;   ///< 是否检查高度范围
+
+    bool  only_valid_flag   = true;   ///< 仅接受底层标记为有效的帧（依赖厂商 A/V 语义）
+    bool  require_all_axes  = true;   ///< 要求三轴速度均为有限数
+
+    float max_abs_vel_mps   = 5.0f;   ///< 单轴最大 |v|，根据量程设置；<=0 表示不检查
+    float max_altitude_m    = 100.0f; ///< 最大有效高度；<=0 表示不检查
+    float min_altitude_m    = 0.1f;   ///< 最小有效高度（太近可能不准）
+
+    int   min_quality       = 0;      ///< 质量门限（0 = 不启用）
+};
+
+// 同样给一个统一别名，后端导航算法以 DvlSample 为入口类型。
+using DvlSample = DvlFrame;
+
+} // namespace nav_core

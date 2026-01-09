@@ -1,0 +1,2 @@
+/usr/bin/ar qc libwitmotion_sdk.a  CMakeFiles/witmotion_sdk.dir/third_party/witmotion/wit_c_sdk.c.o
+/usr/bin/ranlib libwitmotion_sdk.a

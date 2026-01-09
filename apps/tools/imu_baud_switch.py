@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 import time, serial
 
-DEVICE   = "/dev/ttyUSB1"
+DEVICE   = "/dev/ttyUSB0"
 OLD_BAUD = 115200
 NEW_BAUD = 230400
 

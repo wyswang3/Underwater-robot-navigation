@@ -26,8 +26,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List
 
-<<<<<<< HEAD
-=======
 import sys
 from pathlib import Path
 # 获取当前脚本的绝对路径
@@ -35,7 +33,6 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
->>>>>>> collaborator_IMU_DVL
 from uwnav.io.timebase import stamp, SensorKind
 from uwnav.drivers.imu.WitHighModbus.serial_io_tools import SerialReaderThread
 
@@ -218,8 +215,8 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Volt32 logger (multi-channel voltage/current board, timebase unified)"
     )
-    ap.add_argument("--port", default="/dev/ttyUSB0",
-                    help="串口设备，例如 /dev/ttyUSB0")
+    ap.add_argument("--port", default="/dev/ttyUSB1",
+                    help="串口设备，例如 /dev/ttyUSB1")
     ap.add_argument("--baud", type=int, default=115200,
                     help="波特率，默认 115200")
     ap.add_argument("--channels", type=int, default=16,
@@ -266,7 +263,12 @@ def main():
     logging.info(f"[VOLT] 今日目录 = {day_volt_dir}")
 
     n_channels = int(args.channels)
-    header = ["Timestamp", "t_s_volt"] + [f"CH{i}" for i in range(n_channels)]
+
+    # === 关键修改 1：时间字段与 IMU/DVL 对齐 ===
+    # 统一使用：MonoNS, EstNS, MonoS, EstS + CH0..CH{N-1}
+    header = [
+        "MonoNS", "EstNS", "MonoS", "EstS",
+    ] + [f"CH{i}" for i in range(n_channels)]
 
     writer = RollingCSVWriter(
         out_dir=day_volt_dir,
@@ -305,16 +307,20 @@ def main():
             return
 
         # 一帧齐全 → 写入 CSV
-        ts = stamp("volt0", SensorKind.OTHER)
-        est_s = ts.corrected_time_ns / 1e9
+        # === 关键修改 2：复用 IMU 的时间基，保证与 IMU/DVL 对齐 ===
+        ts = stamp("imu0", SensorKind.IMU)  # 与 imu_logger 使用的 key/kind 一致
+        mono_ns = ts.host_time_ns
+        est_ns = ts.corrected_time_ns
+        mono_s = mono_ns / 1e9
+        est_s = est_ns / 1e9
 
-        try:
-            ts_str = datetime.fromtimestamp(est_s).strftime("%Y-%m-%d %H:%M:%S.%f")
-        except Exception:
-            # 兜底：使用系统时间
-            ts_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-
-        writer.writerow([ts_str, est_s] + row_values)
+        writer.writerow([
+            mono_ns,
+            est_ns,
+            mono_s,
+            est_s,
+            *row_values,
+        ])
         frames_written["n"] += 1
 
     # ---- 串口线程 ----
@@ -380,7 +386,6 @@ def main():
         f"[VOLT] 总写入帧数：{frames_written['n']}  最后文件：{writer.current_path}"
     )
     logging.info("[VOLT] 已退出。")
-
 
 if __name__ == "__main__":
     main()

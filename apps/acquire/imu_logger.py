@@ -1,108 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-<<<<<<< HEAD
-apps/acquire/IMU_logger.py
-=======
 apps/acquire/imu_logger.py
->>>>>>> collaborator_IMU_DVL
 
 面向“长期运行 / 实时导航定位”的 IMU 记录器：
 - 使用统一时间基 (MonoNS + EstNS)
 - 自动写入 data/YYYY-MM-DD/imu/
-- 输出两类文件：
-    1) raw_imu_log_*.csv        → 原始 IMU 报文（易排障）
-    2) min_imu_tb_*.csv         → 双时间戳 + Acc + Gyro（用于 ESKF / 后处理）
 
-<<<<<<< HEAD
-特点：
-- 与 DVL_logger.py 完全一致的工程结构
-- 适合 tmux/systemd 后台长期运行
-=======
-适配说明：
-- 底层驱动已切换至 uwnav.sensors.imu.IMUReader
-- 数据源使用 acc_raw/gyr_raw 以保持原始观测特性
->>>>>>> collaborator_IMU_DVL
+输出两类文件：
+1) imu_raw_log_*.csv
+   - 明确对齐厂商原始字段集，便于“滤波/定位算法对照”
+   - 字段：AccX/Y/Z, AsX/Y/Z, HX/HY/HZ, AngX/Y/Z, Temperature
+2) min_imu_tb_*.csv
+   - 双时间戳 + Acc/Gyro + YawDeg + EulerDeg（可用于对齐/ESKF/后处理）
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import logging
+import os
 import signal
 import time
-import csv
-import os
 from pathlib import Path
-<<<<<<< HEAD
-from queue import Queue, Empty
-from typing import Optional
+from typing import Optional, Tuple, Any
 
-from uwnav.io.timebase import SensorKind, stamp
-from uwnav.sensors.imu import IMUDevice, IMUData
-=======
-from typing import Optional
-
-# 确保能找到 uwnav (如果未设置 PYTHONPATH)
 import sys
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from uwnav.io.timebase import SensorKind, stamp
-# [修改 1] 导入新的类名
 from uwnav.sensors.imu import IMUReader, IMUResult
->>>>>>> collaborator_IMU_DVL
-
-
-# =====================================================================
-# 最小 IMU 表：用于数据对齐与后处理
-# =====================================================================
-
-class MinimalIMUWriterTB:
-    """
-    写入最简版 IMU 数据（供 ESKF 和对齐使用）：
-    列：
-        MonoNS, EstNS, MonoS, EstS,
-        AccX, AccY, AccZ,
-        GyroX, GyroY, GyroZ
-    """
-
-    def __init__(self, out_dir: Path):
-        os.makedirs(out_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        self._path = out_dir / f"min_imu_tb_{ts}.csv"
-        self._f = open(self._path, "a", newline="", encoding="utf-8")
-        self._w = csv.writer(self._f)
-
-        if self._f.tell() == 0:
-            self._w.writerow([
-                "MonoNS", "EstNS", "MonoS", "EstS",
-                "AccX", "AccY", "AccZ",
-                "GyroX", "GyroY", "GyroZ",
-            ])
-
-        logging.info(f"[IMU-MIN] 写入: {self._path}")
-        self._n = 0
-
-    def write(self, mono_ns, est_ns, acc, gyr):
-        self._w.writerow([
-            mono_ns, est_ns, mono_ns/1e9, est_ns/1e9,
-            acc[0], acc[1], acc[2],
-            gyr[0], gyr[1], gyr[2],
-        ])
-        self._n += 1
-        if self._n % 50 == 0:
-            try:
-                self._f.flush()
-            except:
-                pass
-
-    def close(self):
-        try:
-            self._f.flush()
-        except:
-            pass
-        self._f.close()
-        logging.info(f"[IMU-MIN] 关闭文件: {self._path}")
 
 
 # =====================================================================
@@ -110,13 +38,10 @@ class MinimalIMUWriterTB:
 # =====================================================================
 
 def repo_root() -> Path:
-    here = Path(__file__).resolve()
-    return here.parents[2]   # apps/acquire → apps → repo_root
-
+    return Path(__file__).resolve().parents[2]
 
 def default_data_root() -> Path:
     return repo_root() / "data"
-
 
 def make_day_imu_dir(data_root: Path) -> Path:
     day = time.strftime("%Y-%m-%d")
@@ -126,28 +51,183 @@ def make_day_imu_dir(data_root: Path) -> Path:
 
 
 # =====================================================================
-# 命令行参数
+# 工具：安全转换
+# =====================================================================
+
+def _safe_float(x: Any, default: float = 0.0) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return default
+
+def _opt3(v) -> Optional[Tuple[float, float, float]]:
+    if v is None:
+        return None
+    try:
+        return (float(v[0]), float(v[1]), float(v[2]))
+    except Exception:
+        return None
+
+
+# =====================================================================
+# RAW 写入器：对齐厂商字段集
+# =====================================================================
+
+class RawIMUWriter:
+    """
+    RAW CSV：严格对齐厂商常见“原始报文字段集”，便于后续对比：
+    AccX/Y/Z, AsX/Y/Z, HX/Y/Z, AngX/Y/Z, Temperature
+    """
+
+    def __init__(self, out_dir: Path):
+        os.makedirs(out_dir, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        self._path = out_dir / f"imu_raw_log_{ts}.csv"
+        self._f = open(self._path, "w", newline="", encoding="utf-8")
+        self._w = csv.writer(self._f)
+
+        self._w.writerow([
+            "MonoNS", "EstNS", "MonoS", "EstS",
+            "t_unix",
+            "AccX", "AccY", "AccZ",
+            "AsX", "AsY", "AsZ",
+            "HX", "HY", "HZ",
+            "AngX", "AngY", "AngZ",
+            "TemperatureC",
+        ])
+        self._f.flush()
+
+        logging.info(f"[IMU-RAW] 写入: {self._path}")
+        self._n = 0
+
+    def write(self,
+              mono_ns: int,
+              est_ns: int,
+              t_unix: float,
+              acc: Tuple[float, float, float],
+              gyr: Tuple[float, float, float],
+              mag: Optional[Tuple[float, float, float]],
+              euler_deg: Optional[Tuple[float, float, float]],
+              temperature_c: Optional[float]):
+
+        hx, hy, hz = ("", "", "") if mag is None else (mag[0], mag[1], mag[2])
+        ax, ay, az = ("", "", "") if euler_deg is None else (euler_deg[0], euler_deg[1], euler_deg[2])
+        temp = "" if temperature_c is None else float(temperature_c)
+
+        self._w.writerow([
+            mono_ns, est_ns, mono_ns/1e9, est_ns/1e9,
+            t_unix,
+            acc[0], acc[1], acc[2],
+            gyr[0], gyr[1], gyr[2],
+            hx, hy, hz,
+            ax, ay, az,
+            temp
+        ])
+
+        self._n += 1
+        if self._n % 50 == 0:
+            try:
+                self._f.flush()
+            except Exception:
+                pass
+
+    def close(self):
+        try:
+            self._f.flush()
+        except Exception:
+            pass
+        self._f.close()
+        logging.info(f"[IMU-RAW] 关闭文件: {self._path}")
+
+
+# =====================================================================
+# MIN 写入器：对齐/滤波用最小表（可扩展）
+# =====================================================================
+
+class MinimalIMUWriterTB:
+    """
+    MIN CSV：用于对齐/融合/ESKF：
+    - 双时间戳（MonoNS, EstNS）
+    - Acc/Gyro（原始）
+    - YawDeg（滤波器输出，可能 None）
+    - EulerDeg（来自原始报文 AngX/Y/Z，可能 None）
+    """
+
+    def __init__(self, out_dir: Path):
+        os.makedirs(out_dir, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        self._path = out_dir / f"min_imu_tb_{ts}.csv"
+        self._f = open(self._path, "w", newline="", encoding="utf-8")
+        self._w = csv.writer(self._f)
+
+        self._w.writerow([
+            "MonoNS", "EstNS", "MonoS", "EstS",
+            "AccX", "AccY", "AccZ",
+            "GyroX", "GyroY", "GyroZ",
+            "YawDeg",
+            "AngX", "AngY", "AngZ",
+        ])
+        self._f.flush()
+
+        logging.info(f"[IMU-MIN] 写入: {self._path}")
+        self._n = 0
+
+    def write(self,
+              mono_ns: int,
+              est_ns: int,
+              acc: Tuple[float, float, float],
+              gyr: Tuple[float, float, float],
+              yaw_deg: Optional[float],
+              euler_deg: Optional[Tuple[float, float, float]]):
+
+        yaw = "" if yaw_deg is None else float(yaw_deg)
+        ax, ay, az = ("", "", "") if euler_deg is None else (euler_deg[0], euler_deg[1], euler_deg[2])
+
+        self._w.writerow([
+            mono_ns, est_ns, mono_ns/1e9, est_ns/1e9,
+            acc[0], acc[1], acc[2],
+            gyr[0], gyr[1], gyr[2],
+            yaw,
+            ax, ay, az
+        ])
+
+        self._n += 1
+        if self._n % 50 == 0:
+            try:
+                self._f.flush()
+            except Exception:
+                pass
+
+    def close(self):
+        try:
+            self._f.flush()
+        except Exception:
+            pass
+        self._f.close()
+        logging.info(f"[IMU-MIN] 关闭文件: {self._path}")
+
+
+# =====================================================================
+# CLI
 # =====================================================================
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="IMU logger for long-running navigation data acquisition (timebase unified)"
     )
-    ap.add_argument("--port", default="/dev/ttyUSB1", help="IMU 串口 (默认 /dev/ttyUSB1)")
+    ap.add_argument("--port", default="/dev/ttyUSB0", help="IMU 串口 (默认 /dev/ttyUSB0)")
     ap.add_argument("--baud", type=int, default=230400, help="波特率 (默认 230400)")
-    ap.add_argument("--addr", type=lambda x: int(x, 0), default=0x50,
-                    help="Modbus 地址（hex，如 0x50）")
+    ap.add_argument("--addr", type=lambda x: int(x, 0), default=0x50, help="Modbus 地址（hex，如 0x50）")
 
     ap.add_argument("--data-root", default=None, help="data 根目录（默认 repo_root/data）")
     ap.add_argument("--log-level", default="INFO",
                     choices=["DEBUG", "INFO", "WARN", "ERROR"], help="日志等级")
-    ap.add_argument("--stat-every", type=float, default=5.0,
-                    help="统计打印间隔秒数（0=不打印）")
+    ap.add_argument("--stat-every", type=float, default=5.0, help="统计打印间隔秒数（0=不打印）")
     return ap.parse_args()
 
 
 # =====================================================================
-# 主程序
+# Main
 # =====================================================================
 
 def main():
@@ -159,113 +239,66 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    # data 根目录
     data_root = Path(args.data_root).resolve() if args.data_root else default_data_root()
     data_root.mkdir(parents=True, exist_ok=True)
-    day_imu_dir = make_day_imu_dir(data_root)
+    out_dir = make_day_imu_dir(data_root)
     logging.info(f"[IMU] data_root={data_root}")
-    logging.info(f"[IMU] 今日目录={day_imu_dir}")
+    logging.info(f"[IMU] 今日目录={out_dir}")
 
-    # 打开原始日志文件
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    raw_path = day_imu_dir / f"imu_raw_log_{ts}.csv"
-    raw_f = open(raw_path, "a", newline="", encoding="utf-8")
-    raw_w = csv.writer(raw_f)
-    raw_w.writerow([
-        "EstS",
-        "AccX", "AccY", "AccZ",
-        "GyroX", "GyroY", "GyroZ",
-        "Temperature",
-        "FrameType"
-    ])
-    logging.info(f"[IMU-RAW] 写入: {raw_path}")
+    raw_writer = RawIMUWriter(out_dir)
+    min_writer = MinimalIMUWriterTB(out_dir)
 
-    # 最小表 writer
-    min_writer = MinimalIMUWriterTB(day_imu_dir)
-
-    # 统计
     stats = {"raw": 0, "min": 0, "start_t": time.time()}
+    stop = {"flag": False}
 
-<<<<<<< HEAD
-    # ========== 回调 ==========
-    def imu_callback(frame: IMUData):
-=======
-    # ========== [修改 2] 回调适配 ==========
-    # 参数类型改为 IMUResult
     def imu_callback(res: IMUResult):
->>>>>>> collaborator_IMU_DVL
         ts = stamp("imu0", SensorKind.IMU)
-        
-        mono_ns = ts.host_time_ns
-        est_ns  = ts.corrected_time_ns
-        est_s   = est_ns / 1e9
+        mono_ns = int(ts.host_time_ns)
+        est_ns  = int(ts.corrected_time_ns)
 
-<<<<<<< HEAD
-        # 写原始 log
-        raw_w.writerow([
-            est_s,
-            frame.acc[0], frame.acc[1], frame.acc[2],
-            frame.gyr[0], frame.gyr[1], frame.gyr[2],
-            frame.temp,
-            frame.frame_type
-=======
-        # [修改 3] 字段映射
-        # IMUResult 包含 acc_raw(原始) 和 acc_filt(滤波)
-        # 对于 logger，通常记录 raw 数据供后续处理
-        acc = res.acc_raw
-        gyr = res.gyr_raw
-        
-        # 新驱动暂未提供温度和帧类型，填默认值保持 CSV 格式兼容
-        temp = 0.0 
-        frame_type = "N/A"
+        acc = (float(res.acc_raw[0]), float(res.acc_raw[1]), float(res.acc_raw[2]))
+        gyr = (float(res.gyr_raw[0]), float(res.gyr_raw[1]), float(res.gyr_raw[2]))  # AsX/Y/Z
 
-        # 写原始 log
-        raw_w.writerow([
-            est_s,
-            acc[0], acc[1], acc[2],
-            gyr[0], gyr[1], gyr[2],
-            temp,
-            frame_type
->>>>>>> collaborator_IMU_DVL
-        ])
+        mag = _opt3(res.mag_raw)
+        euler_deg = _opt3(res.euler_deg)
+        temperature_c = res.temperature_c
+
+        # RAW：严格对齐字段集
+        raw_writer.write(
+            mono_ns=mono_ns,
+            est_ns=est_ns,
+            t_unix=_safe_float(res.t_unix, 0.0),
+            acc=acc,
+            gyr=gyr,
+            mag=mag,
+            euler_deg=euler_deg,
+            temperature_c=temperature_c
+        )
         stats["raw"] += 1
 
-        # 写最小表
-<<<<<<< HEAD
-        min_writer.write(mono_ns, est_ns, frame.acc, frame.gyr)
+        # MIN：对齐/融合表
+        min_writer.write(
+            mono_ns=mono_ns,
+            est_ns=est_ns,
+            acc=acc,
+            gyr=gyr,
+            yaw_deg=res.yaw_deg,
+            euler_deg=euler_deg
+        )
         stats["min"] += 1
 
-    # ========== 初始化 IMU ==========
-    imu = IMUDevice(
-        port=args.port,
-        baud=args.baud,
-        address=args.addr,
-        callback_method=imu_callback
-    )
-
-    imu.open_device()
-=======
-        min_writer.write(mono_ns, est_ns, acc, gyr)
-        stats["min"] += 1
-
-    # ========== [修改 4] 初始化 IMUReader ==========
     logging.info(f"[IMU] 初始化串口 {args.port} @ {args.baud}, Addr={hex(args.addr)}")
     imu = IMUReader(
         port=args.port,
         baud=args.baud,
-        addr=args.addr,          # 参数名变更为 addr
-        on_result=imu_callback,  # 参数名变更为 on_result
-        csv_dir=None             # 关闭驱动自带的 CSV 落盘，使用本脚本的逻辑
+        addr=args.addr,
+        on_result=imu_callback,
+        csv_dir=None  # 关闭 IMUReader 自带落盘，统一由本脚本管理
     )
 
-    # [修改 5] 方法名变更 open_device -> open
     imu.open()
->>>>>>> collaborator_IMU_DVL
     imu.start()
     logging.info("[IMU] 启动采集")
-
-    # 信号处理
-    stop = {"flag": False}
 
     def _on_sig(sig, frame):
         logging.info(f"[IMU] 收到信号 {sig}，准备退出…")
@@ -274,7 +307,6 @@ def main():
     signal.signal(signal.SIGINT, _on_sig)
     signal.signal(signal.SIGTERM, _on_sig)
 
-    # 主循环
     last_stat_t = time.time()
     try:
         while not stop["flag"]:
@@ -292,20 +324,16 @@ def main():
                     last_stat_t = now
     except KeyboardInterrupt:
         pass
-<<<<<<< HEAD
-    finally:
-        logging.info("[IMU] 关闭设备…")
-        imu.stop()
-        imu.close_device()
-=======
     except Exception as e:
         logging.error(f"[IMU] 运行时异常: {e}", exc_info=True)
     finally:
         logging.info("[IMU] 关闭设备…")
-        # [修改 6] 方法名变更 close_device -> close
-        imu.stop() # stop 内部会调用 close
->>>>>>> collaborator_IMU_DVL
-        raw_f.close()
+        try:
+            imu.stop()
+        except Exception:
+            pass
+
+        raw_writer.close()
         min_writer.close()
         logging.info("[IMU] logger 完整退出。")
 
