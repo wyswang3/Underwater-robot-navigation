@@ -3,3 +3,4 @@ cd ~/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build
 ./bin/uwnav_navd \
   --config      ../config/nav_daemon.yaml \
   --eskf-config ../config/eskf2d.yaml
+

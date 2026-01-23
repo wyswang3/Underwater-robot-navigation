@@ -1,5 +1,3 @@
-
-
 ````md
 # nav_core —— 水下机器人在线导航 C++ 子系统
 
@@ -8,7 +6,7 @@
 - 通过串口采集 **IMU（WitMotion HWT9073-485, Modbus-RTU）** 与 **DVL（Hover H1000, PD6/EPD6 协议）** 的原始数据；
 - 在板端进行 **IMU / DVL 实时预处理**：
   - IMU：去零偏、扣重力、统一机体系为 body=FRD，输出“线加速度”；
-  - DVL：仅保留 BottomTrack + BottomLock 数据，区分 BI/BS 体速 与 BE 地速，做噪声地板与幅值门控；
+  - DVL：仅保留 BottomTrack + BottomLock 数据，区分 BI 体速 与 BE 地速，做噪声地板、幅值和离底距离门控；
 - 基于 IMU 预处理后的线加速度 + 角速度，配合 DVL BI/BE 速度，运行 **ESKF（Error-State Kalman Filter）在线导航解算**：
   - 输出 ENU 位置 / 速度 / 姿态（roll, pitch, yaw）；
   - 使用 DVL BI 体速 + 当前 yaw 做水平速度约束；
@@ -20,6 +18,79 @@
 
 当前版本的目标是：  
 **在板端得到质量可控的 ENU 轨迹与姿态解算结果，为控制闭环和离线平滑提供基础，不直接参与控制回路。**
+
+---
+
+## 0. 工程根目录与依赖约定（非常重要）
+
+整个系统的目录约定如下（只列关键结构）：
+
+```text
+UnderwaterRobotSystem/
+├── shared/
+│   └── msg/
+│       └── nav_state.hpp        # 导航状态的共享定义（供控制/上位机复用）
+└── Underwater-robot-navigation/
+    └── nav_core/
+        ├── CMakeLists.txt
+        ├── include/
+        ├── src/
+        ├── config/
+        └── third_party/
+            └── witmotion/
+                ├── REG.h
+                ├── wit_c_sdk.c
+                └── wit_c_sdk.h
+````
+
+`nav_core` 的 CMake 假定：
+
+* 当前 `CMakeLists.txt` 所在目录为：
+
+  * `UnderwaterRobotSystem/Underwater-robot-navigation/nav_core`
+* 工程根目录为：
+
+  * `UNDERWATER_ROOT = ${CMAKE_CURRENT_SOURCE_DIR}/../..`
+  * 即 `UnderwaterRobotSystem` 目录
+
+因此：
+
+* 代码中可以直接使用：
+
+  ```cpp
+  #include "shared/msg/nav_state.hpp"
+  ```
+
+  CMake 会通过 `target_include_directories(nav_core ... ${UNDERWATER_ROOT})`
+  把 `UnderwaterRobotSystem/` 加进 include path；
+* **如果后人改了目录结构（例如把 nav_core 单独拎出去）又不改 CMake，编译一定会报 `shared/msg/nav_state.hpp` 找不到。**
+  此时要么：
+
+  * 保持上述目录结构；要么
+  * 在 CMake 中显式设置新的 `UNDERWATER_ROOT` 路径并保证其中有 `shared/msg/nav_state.hpp`。
+
+IMU 厂家 C SDK 被放在：
+
+```text
+nav_core/third_party/witmotion/
+    ├── REG.h
+    ├── wit_c_sdk.c
+    └── wit_c_sdk.h
+```
+
+CMake 已经通过：
+
+```cmake
+target_include_directories(nav_core
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${UNDERWATER_ROOT}
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/witmotion
+)
+```
+
+把该目录加入 include path，并通过 `NAV_CORE_SOURCES` 把 `wit_c_sdk.c` 编进静态库（由源码列表控制）。
+**如果后人改动 third_party/witmotion 的文件名或路径，而没有同步更新 `CMakeLists.txt` 中的源文件列表/包含路径，编译就会在 IMU 驱动处报错。**
 
 ---
 
@@ -96,7 +167,7 @@ nav_core/
 │       │   ├── eskf_update_dvl.cpp      # DVL XY / Z 更新（BI + BE）
 │       │   ├── eskf_update_yaw.cpp      # yaw 伪观测更新
 │       │   ├── eskf.cpp                 # 统合入口 + 管线注释
-│       │   ├── graph_smoother_2d.cpp    # 因子图平滑实现（默认不参与 CMake）
+│       │   ├── graph_smoother_2d.cpp    # 因子图平滑实现（默认由 CMake option 控制）
 │       │   ├── nav_health_monitor.cpp   # 导航健康监控（预留）
 │       │   └── online_estimator.cpp     # 旧版估计器实现（暂不在 nav_daemon 中使用）
 │       ├── io
@@ -111,13 +182,13 @@ nav_core/
         ├── REG.h
         ├── wit_c_sdk.c
         └── wit_c_sdk.h
-````
+```
 
 编译后，会生成：
 
 * 静态库：`libnav_core.a`（供其他工程复用）；
-* 导航守护进程：`uwnav_navd`（通常安装 / 运行路径为 `build/bin/uwnav_navd`）；
-* DVL 自检工具：`uwnav_dvl_selftest`。
+* 导航守护进程：`uwnav_navd`（通常位于 `build/bin/uwnav_navd`）；
+* DVL 自检工具：`uwnav_dvl_selftest`（位于 `build/bin/uwnav_dvl_selftest`）。
 
 ---
 
@@ -132,38 +203,62 @@ nav_core/
   * 串口打开 / 配置（OrangePi 上通常为 `/dev/ttyUSB0`，波特率 230400）；
   * Modbus-RTU 读寄存器循环；
   * 通过 C 回调解码寄存器数组 `sReg[]`。
-* 对上层输出统一的 `ImuFrame`：
+
+* 对上层输出统一的 `ImuFrame`（定义在 `core/types.hpp` 中）：
 
   * 单调时间戳 `mono_ns`（Monotonic Clock）；
-  * 系统时间戳 `est_ns`（System Clock），用于与其他设备对齐；
-  * 机体系角速度 `ang_vel[3]`（rad/s，body=FRD）；
-  * 机体系线加速度 `lin_acc[3]`（预处理前为“含重力”）；
-  * 欧拉角 `euler[3]`（roll / pitch / yaw, rad，来自 IMU 内部解算）；
+  * 系统时间戳 `est_ns`（System Clock，用于与其他设备对齐）；
+  * 机体系角速度 `gyro_rad_s[3]`（rad/s，body=FRD）；
+  * 机体系加速度 `acc_g[3]` 或 `acc_mps2_raw[3]`（含重力）；
+  * 欧拉角 `euler_rad[3]`（roll / pitch / yaw, rad，来自 IMU 内部解算）；
   * 温度 / 状态字等可选字段；
   * 有效标志 `valid` 和状态 `status`。
-* 支持基本幅值检查与异常帧过滤（通过配置项限制明显失真的数据）。
+
+* 若后人修改 WitMotion SDK 文件名或函数签名，需要同步更新：
+
+  * `third_party/witmotion/wit_c_sdk.c/.h`
+  * `drivers/imu_driver_wit.*`
+  * 以及 `CMakeLists.txt` 中的源文件列表，否则编译阶段会在链接 `libnav_core.a` 时出错。
 
 #### 2.1.2 DVL 驱动 `DvlDriver`
 
 * 通过串口阻塞读取 PD6/EPD6 文本帧（Hover H1000，常用波特率 115200）；
+
 * 使用 `dvl_protocol.*` 解析为结构化数据 `ParsedLine`：
 
-  * 底跟踪 / 水团；
-  * 坐标系：BI/BS（Instrument/Ship frame），BE（Earth frame）；
-  * 速度（ve/vn/vu）、位移（dE/dN/dU）、高度、FOM、A/V 有效标志等；
-* 对上层输出 `DvlFrame`：
+  * 区分底跟踪 / 水团；
+  * 区分坐标系：Instrument/Ship frame（BI/BS）、Earth frame（BE）；
+  * 获取底速、位移、离底距离、FOM、相关系数、A/V 有效标志等。
 
-  * 原始解析字段（为日志与调试保留）；
-  * 统一的时间戳 `mono_ns` / `est_ns`；
-  * BI/BS 体速度（后续映射为 body=FRD 速度）；
-  * BE ENU 速度（特别是垂向 vU，用于 ESKF 垂向更新）；
-  * 锁底 `bottom_lock`、跟踪类型 `track_type`、质量指标 `quality`；
-  * 有效标志 `valid`。
-* 支持通过命令接口控制 DVL：
+* 对上层输出统一的 `DvlRawSample`（在 `preprocess/dvl_rt_preprocessor.hpp` 中定义）：
 
-  * `sendCommandCZ()`：停机，避免空气中 ping 损伤换能器；
-  * `sendCommandCS(ping_rate, avg_count)`：下水之后启动 ping；
-* 为 `uwnav_dvl_selftest` 工具提供底层支持，用于单独验证 DVL 串口 / CZ/CS 行为。
+  ```cpp
+  struct DvlRawSample {
+      MonoTimeNs mono_ns{0};
+      MonoTimeNs est_ns{0};
+      std::uint8_t kind{0};     // 0=BI, 1=BE, 2=BS, 3=BD
+      bool   bottom_lock{false};
+      Vec3f  vel_inst_mps;      // BI: 仪器坐标系速度 (I-frame)
+      Vec3f  vel_earth_mps;     // BE: Earth/ENU (?) 速度
+      float  range_m[4];        // 各 beam 测距
+      float  corr[4];           // 各 beam 相关系数
+      float  fom;               // Figure-of-merit，如有
+      std::uint32_t status;     // 厂家 status bitmask，如有
+  };
+  ```
+
+* 这里特别注意：
+
+  * `kind` 决定当前帧被视作 BI/BE/BS/BD；
+  * `vel_inst_mps` 与 `vel_earth_mps` 的物理语义来自驱动，对应 PD6/EPD6 中的字段；
+  * `range_m[]` / `corr[]` / `bottom_lock` / `fom` / `status` 用于后续门控；
+  * **如果后人调整 `DvlRawSample` 字段，必须同步更新 `dvl_rt_preprocessor.cpp`、`dvl_driver.cpp`、`types.hpp`，否则会出现编译成功但运行时语义错乱的隐蔽 bug。**
+
+* DVL 驱动同时提供命令接口：
+
+  * `CZ`：停机，避免空气中 ping；
+  * `CS`：下水后启动 ping；
+  * 自检工具 `uwnav_dvl_selftest` 在 `tools/DVL_selftest.cpp` 中使用这些接口做安全检查。
 
 ---
 
@@ -178,61 +273,167 @@ nav_core/
 * 坐标与单位统一：
 
   * 角速度单位统一为 rad/s，机体系固定为 body=FRD（X 前 / Y 右 / Z 下）；
-  * 加速度统一为 m/s²；
+  * 线加速度统一为 m/s²；
+  * Acc 原始单位若为 g，则通过配置 `imu_raw_g_to_mps2`（例如 9.78）转换为 m/s²。
+
 * 零偏估计与去除：
 
-  * 在配置的静止时间窗内（例如开机前若干秒），检测 gyro/acc 是否处于静止；
+  * 在配置的静止时间窗内（例如开机前前 20s），检测 gyro/acc 是否处于静止；
   * 对静止窗数据估计加速度 bias 与陀螺 bias；
-  * 后续实时数据减去 bias，得到零偏校正后的测量；
+  * 后续实时数据减去 bias，得到零偏校正后的测量。
+
 * 重力扣除：
 
-  * 使用当前 roll/pitch（来自 IMU 内部解算或外部姿态源），估计重力在 body=FRD 下的分量；
-  * 从加速度中扣除重力，输出“线加速度 a_linear”；
+  * 使用当前 roll/pitch（来自 IMU 内部解算或预处理内部积分），估计重力在 body=FRD 下的分量；
+  * 从加速度中扣除重力，输出“线加速度 a_linear”。
+
 * 噪声处理：
 
   * 对线加速度做 deadzone / 一阶低通，抑制高频噪声；
-  * 对异常突变做限幅保护，避免积分漂移被单次异常拉偏；
+  * 对异常突变做限幅保护，避免积分漂移被单次异常拉偏。
+
 * 输出结构 `ImuSample`：
 
-  * `ang_vel[3]`：零偏校正后的角速度；
-  * `lin_acc[3]`：**已经去零偏、扣重力的线加速度**；
-  * `euler[3]`：roll/pitch/yaw（可选，用于诊断与 yaw 伪观测）；
-  * 同步的 `mono_ns` / `est_ns`、温度、状态等。
+  * `ang_vel_b_rad_s[3]`：零偏校正后的角速度；
+  * `lin_acc_b_mps2[3]`：**已经去零偏、扣重力的线加速度**；
+  * `rpy_rad[3]`：roll/pitch/yaw（可选，用于诊断与 yaw 伪观测）；
+  * 同步的 `mono_ns` / `est_ns`；
+  * 状态标志位等。
 
 > 重要：
-> 由于 IMU 预处理已经完成「去零偏 + 扣重力」，ESKF 内部不再重复做这些操作，而是直接配置 `imu_acc_is_linear=true`，把输入 `lin_acc` 视为线加速度。
+>
+> * ESKF 配置中应设置 `imu_acc_source: "processed"` 且 `imu_acc_kind: "linear"`，表示传给 ESKF 的是已经扣重力的线加速度。
+> * 如果后人改成 ESKF 内部再扣重力，需要同时修改：
+>
+>   * `ImuRtPreprocessor` 的输出语义；
+>   * `EskfConfig` 中的 `imu_acc_kind`；
+>   * `eskf_propagate.cpp` 中的加速度处理逻辑。
 
 #### 2.2.2 DVL 实时预处理 `DvlRtPreprocessor`
 
-实现于 `preprocess/dvl_rt_preprocessor.*`，对 `DvlFrame` 做以下处理：
+实现于 `preprocess/dvl_rt_preprocessor.*`，对 `DvlRawSample` 做门控与坐标系归一化，输出 `DvlRtOutput`。
 
-* 只考虑 BottomTrack：
+**输入：`DvlRawSample`（BI/BE/BS/BD 混流）**
 
-  * 仅保留 `is_bottom_track()==true` 的帧；
-  * 可配置 `require_bottom_lock`，强制锁底后才使用；
-  * 可配置 `require_valid_flag`，要求 A/V 标志为 `A` 才视为有效；
-* 区分 BI/BS 与 BE：
+关键字段：
 
-  * **BI / BS（Instrument / Ship frame）**：
+* `kind`：0=BI, 1=BE, 2=BS, 3=BD；
+* `vel_inst_mps`：仪器坐标系速度（BI）；
+* `vel_earth_mps`：地球坐标系速度（BE，通常可视为 ENU）；
+* `range_m[4]` / `corr[4]`：四束测距与相关系数；
+* `bottom_lock`：锁底状态；
+* `status`：厂家 status bitmask。
 
-    * 仅信任水平速度（ve/vn）；
-    * 映射为 body=FRD 下的水平速度 `v_body_xy_mps`（X 前 / Y 右）；
-    * 对水平速度应用噪声地板与最大速度限制（`max_speed_xy_mps` / `noise_floor_xy_mps`）；
-  * **BE（Earth frame）**：
+**输出：`DvlRtOutput`**
 
-    * 只关注 ENU 垂向速度 `vU`；
-    * 对 vU 应用噪声地板与最大速度限制（`max_speed_z_mps` / `noise_floor_z_mps`）；
-* 汇总门控结果：
+```cpp
+struct DvlRtOutput {
+    MonoTimeNs mono_ns{0};
+    MonoTimeNs est_ns{0};
 
-  * 若 BI/BS 提供了合法的水平速度 → `has_body_xy=true`；
-  * 若 BE 提供了合法的垂向速度 → `has_enu_z=true`；
-  * 若两者都不存在或被拒绝，则视为 `reason_code |= kReject_NoVelocity`；
-  * 若配置 `enable_gating=true`，只在 `reason_code==0` 且存在任一测量时返回 `gated_ok=true`；
-* 输出结构 `DvlRtOutput`（在 nav_daemon 内部再映射为 `DvlSample`）：
+    bool   has_be{false};
+    Vec3d  vel_be_enu{0.0, 0.0, 0.0};   // ENU 速度（优先给 ESKF 用）
 
-  * `has_body_xy` + `v_body_xy_mps`：用于 ESKF 的水平更新（BI + yaw-only）；
-  * `has_enu_z` + `v_enu_z_mps`：用于 ESKF 的垂向 vU 更新；
-  * `bottom_lock`、`quality_raw`、`reason_code`、`gated_ok` 等诊断信息。
+    bool   has_bi{false};
+    Vec3d  vel_bi_body{0.0, 0.0, 0.0};  // body(FRD) 速度（可选，用于诊断 / 算法）
+
+    bool   has_alt{false};
+    double alt_bottom_m{0.0};           // DVL 底距（若有），通常来自 beam range
+
+    bool   bottom_lock{false};          // 预处理判定的锁底状态
+
+    bool   gated_ok{false};             // 是否通过门控（true 才推荐用于 ESKF 更新）
+    std::uint32_t reason_code{0};       // 门控失败 bitmask（0 表示 OK）
+
+    float mean_corr{0.0f};              // beams 有效相关系数平均值
+    float min_range_m{0.0f};            // beams 中最小测距（海底距离粗略替代）
+};
+```
+
+**配置：`DvlRtPreprocessConfig` 关键参数**
+
+* 时间与基本开关：
+
+  * `max_gap_s`：帧间最大允许间隔，超出可触发降级逻辑；
+  * `enable_gating`：是否开启门控总开关。
+
+* 门控阈值：
+
+  * `min_corr` / `min_good_beams`：相关系数下限与最少合格 beam 数；
+  * `min_alt_m` / `max_alt_m`：离底距离范围；
+  * `max_abs_speed_mps`：速度模长上限；
+  * `dvl_noise_floor_mps`：噪声地板，小于该模长视为 0；
+  * `require_bottom_lock`：是否必须锁底；
+  * `status_mask_ok`：厂家 status bitmask 的允许值（预留）。
+
+* 坐标系 / 安装角：
+
+  * `mount_yaw_rad`：DVL 仪器坐标系相对 ROV 体坐标系的固定 yaw 偏差；
+  * `use_be_as_enu`：若 true，则 BE vel_earth 直接视为 ENU；否则可只用 BI + yaw 做 ENU 转换。
+
+**门控与坐标系处理逻辑（简述）**
+
+1. **Beam 质量与离底距离**：
+
+   * 从 `range_m[4]` 和 `corr[4]` 统计：
+
+     * 有效测距数量；
+     * 有效相关系数数量与平均值；
+     * 最小离底距离 `min_range_m`；
+   * 若 beam 数不足 / 相关系数太低 → `kReject_Quality`；
+   * 若离底距离不在 `[min_alt_m, max_alt_m]` → `kReject_Altitude`；
+   * 这些信息都会写入 `out.mean_corr`、`out.min_range_m`、`out.alt_bottom_m`、`out.has_alt` 等。
+
+2. **BI / BS：I-frame → body(FRD)**
+
+   * 当 `kind` 为 BI/BS 时：
+
+     * 取 `vel_inst_mps` 转为 double 得到 `v_inst`；
+     * 通过 `mount_yaw_rad` 做 I→B 的 yaw 旋转，得到 `v_body`；
+     * 计算 `|v_body|`，超过 `max_abs_speed_mps` → `kReject_SpeedTooBig`；
+     * 小于 `dvl_noise_floor_mps` → 视为 0；
+     * 通过则：
+
+       * `out.has_bi = true`；
+       * `out.vel_bi_body = v_body`；
+       * 标记“有速度观测”。
+
+3. **BE：直接视作 ENU 速度**
+
+   * 当 `kind` 为 BE 且 `use_be_as_enu=true` 时：
+
+     * 取 `vel_earth_mps` 视作 ENU 速度 `v_enu`；
+     * 同样做模长限制与噪声地板；
+     * 通过则：
+
+       * `out.has_be = true`；
+       * `out.vel_be_enu = v_enu`；
+       * 标记“有速度观测”。
+
+4. **整体门控与输出**
+
+   * 若没有任何速度观测（BI/BE 均无效或被拒绝） → `kReject_NoVelocity`；
+   * `require_bottom_lock=true` 且 `bottom_lock=false` → `kReject_BottomLock`；
+   * 汇总所有 reason bit：
+
+     * 若 `enable_gating=true` 且 `reason!=0` → `out.gated_ok=false`，`process()` 返回 false；
+     * 否则，若至少一个速度观测存在，则 `out.gated_ok=true`，并更新内部统计与 `last_output`。
+
+**与 ESKF 的接口约定**
+
+在导航主循环中，DVL 部分的数据流为：
+
+```text
+DvlDriver → DvlRawSample → DvlRtPreprocessor → DvlRtOutput → ESKF
+```
+
+* 水平（XY）更新：使用 `out.has_bi` + `out.vel_bi_body`，在 ESKF 内部用当前 yaw 做 body→ENU 转换；
+* 垂向（Z）更新：使用 `out.has_be` + `out.vel_be_enu.z` 作为 vU 观测；
+* **如果后人修改 DvlRtOutput 的字段名（例如从 has_bi 改回 has_body_xy），必须同步修改：**
+
+  * `eskf_update_dvl.cpp` 中的 `update_dvl_xy` / `update_dvl_z`；
+  * `nav_daemon_runner.cpp` 中对 DvlRtPreprocessor 的调用；
+  * 否则编译会直接失败或者运行时用错字段。
 
 ---
 
@@ -249,83 +450,85 @@ nav_core/
 
 #### 2.3.1 状态定义与误差维度
 
-误差状态维度在 `filters/filter_common.hpp` 中统一定义：
+误差状态维度在 `filters/filter_common.hpp` 中统一定义，典型为：
 
-* 误差维度：`ESKF_ERR_DIM = 15`；
+```text
+δx = [δp(0-2), δv(3-5), δθ(6-8), δba(9-11), δbg(12-14)]ᵀ
+```
 
-* 误差状态向量 δx 排列为：
+名义状态包含：
 
-  ```text
-  δx = [δp(0-2), δv(3-5), δθ(6-8), δba(9-11), δbg(12-14)]ᵀ
-  ```
-
-* 名义状态包含：
-
-  * 位置 `p_enu`（E, N, U）；
-  * 速度 `v_enu`（vE, vN, vU）；
-  * 姿态四元数 `q_nb`（nav←body）及其 RPY 表示 `rpy_nb_rad`；
-  * 加速度零偏 `ba_mps2`；
-  * 陀螺零偏 `bg_rad_s`。
+* 位置 `p_enu`（E, N, U）；
+* 速度 `v_enu`（vE, vN, vU）；
+* 姿态四元数 `q_nb`（nav←body）及其 RPY 表示 `rpy_nb_rad`；
+* 加速度零偏 `ba_mps2`；
+* 陀螺零偏 `bg_rad_s`。
 
 坐标系约定：
 
 * 机体系：body=FRD（X 前 / Y 右 / Z 下）；
-* 导航系：ENU（East / North / Up），深度 `depth = -U`（向下为正）；
-* 重力：g 向下，对应 ENU.z 为负。
+* 导航系：ENU（East / North / Up），**深度 `depth = -U`**；
+* 重力：g 向下 -> ENU.z 为负。
 
 #### 2.3.2 IMU 传播 `propagate_imu`
 
-输入：**IMU 预处理后的 `ImuSample`**，满足：
+输入：IMU 预处理后的 `ImuSample`，满足：
 
-* `ang_vel[3]`：已扣除 gyro bias 的角速度；
-* `lin_acc[3]`：已去 bias、扣重力的线加速度（body=FRD）；
-* `mono_ns`：单调时间戳（用于计算 dt）。
+* `lin_acc_b_mps2`：已去 bias、扣重力的线加速度；
+* `ang_vel_b_rad_s`：已去 gyro bias 的角速度；
+* `mono_ns`：单调时间戳。
 
-传播步骤（简述）：
+传播步骤（简略）：
 
-1. 根据 `mono_ns` 与上一次时间计算 `dt`，并做 `dt_min` / `dt_max` 检查；
-2. 使用零偏校正后的陀螺测量 `omega_corr` 积分姿态：
+1. 由当前 `mono_ns` 与上一时刻时间计算 `dt`，并做 `dt_min` / `dt_max` 检查；
+2. 积分姿态（通过 `eskf_math` 工具）；
+3. 将 `lin_acc_b` 通过当前姿态旋转到 ENU，若 `imu_acc_kind="linear"` 则不再补重力；
+4. 积分速度与位置，并做限幅/泄漏设计；
+5. 根据 IMU 噪声 / bias 漂移构造 F、G、Qd，传播协方差。
 
-   * 小角度时使用一阶近似；
-   * 一般情况使用轴角 → 四元数；
-3. 使用当前姿态 `R_nb` 将线加速度从 body→ENU，若 `imu_acc_is_linear=false` 则内部补重力（当前工程配置为 true，即不再补重力）；
-4. 积分速度与位置，包含：
-
-   * 水平速度限幅；
-   * 垂向速度限幅；
-   * 可选的速度泄漏（防止积分无限生长）；
-5. 构建线性化矩阵 F、G，根据 IMU 噪声 / bias 漂移参数构造离散过程噪声 Qd，传播协方差。
+**ESKF 与 IMU 预处理之间最敏感的接口就是“加速度是否已扣重力”。任何一个地方变了，另一个必须同步改。**
 
 #### 2.3.3 DVL 水平更新 `update_dvl_xy`
 
-测量来自 DVL BI/BS 帧（经 `DvlRtPreprocessor` 预处理）：
+* 观测：`z = [vE, vN]`；
 
-* 仅在 `valid && has_body_xy && bottom_lock && BottomTrack` 时启用；
-* 使用当前状态 yaw（来自 ESKF 姿态）+ `math::body_to_enu_yaw_only` 将 BI 体速投影到 ENU，得到 `[vE, vN]`；
-* 对剔除噪声地板后的水平速度：
+* 从 `DvlRtOutput` 取 `has_bi=true` 且 `gated_ok=true` 的样本：
 
-  * 若测量速度幅值小于阈值 → 视为 ZUPT（水平速度接近 0）；
-  * 进入 2D ESKF 更新（含 ZUPT 模式 / 非 ZUPT 模式）；
-* 支持 NIS / 速度比值门控，支持软膨胀 R（噪声协方差），并记录详细诊断信息。
+  * 用 `vel_bi_body` 通过 `math::body_to_enu_yaw_only`（当前 yaw + mount_yaw_rad）转换为 ENU 水平速度；
 
-这一策略体现了当前工程假设：**水平速度主要相信 BI 体速 + 当前 yaw，IMU 提供姿态，DVL 提供地速大小与方向约束。**
+* 构造观测模型：
+
+  ```text
+  h(x) = v_EN = [vE, vN]ᵀ
+  ```
+
+* 进行标准 Kalman 更新，并有 NIS 门控 / S 正定性检查 / 噪声膨胀等逻辑；
+
+* 如果将来希望用 BE 水平速度替代 BI，也需要同步修改：
+
+  * `DvlRtPreprocessConfig::use_be_as_enu`；
+  * `eskf_update_dvl.cpp` 中对应的观测构造。
 
 #### 2.3.4 DVL 垂向更新 `update_dvl_z`
 
-测量来自 DVL BE 帧（Earth frame）：
+* 观测：`z = vU`；
 
-* 仅在 `valid && has_enu_vel && bottom_lock && BottomTrack` 且配置 `enable_dvl_z_update=true` 时启用；
-* 使用 ENU 垂向速度 `vU` 作为观测，对 ESKF 中的 vU（以及间接的 pU、姿态、bias）进行校正；
-* 带有 NIS 门控、S 正定性检查等防御逻辑。
+* 从 `DvlRtOutput` 中使用 `has_be=true` 的 ENU 速度分量；
+
+* 一维观测模型：
+
+  ```text
+  h(x) = v_EN.z = vU
+  ```
+
+* 用于抑制 IMU 垂向积分漂移，与深度传感器联合时，通常效果更好。
 
 #### 2.3.5 yaw 伪观测 `update_yaw`
 
-用于注入外部航向信息（例如 IMU 内部解算 yaw 或离线估计结果）：
-
-* 衡量测量 yaw 与当前状态 yaw 的差值，做 wrap 到 [-π, π]；
-* 使用一维量测模型，只作用在误差姿态 δθz 上；
-* 进行标准的 Kalman 更新，并支持 NIS / S 检查与拒绝策略；
-* 有利于抑制纯 IMU 积分导致的 yaw 漂移。
+* 观测：`z = yaw_meas`（来源可为 IMU 内部解算或其他外部航向）；
+* 误差：`δψ = wrap(z - yaw_state)`；
+* 仅作用在姿态误差的 yaw 分量，做一维 Kalman 更新；
+* 通过 NIS 门控避免激进航向观测把滤波器“拽崩”。
 
 ---
 
@@ -335,20 +538,31 @@ nav_core/
 
 * 根据 `nav_daemon.yaml` 中的 `logging` 配置自动创建目录：
 
-  * base_dir（如 `data`）下按日期分目录：`data/YYYY-MM-DD/nav`；
+  ```text
+  base_dir/YYYY-MM-DD/nav/
+  ```
+
 * 可按开关记录：
 
   * IMU 预处理后的 `ImuSample`；
-  * DVL 预处理后的 `DvlSample`；
-  * ESKF 内部更新诊断（如启用）；
-  * 导航状态 `NavState` 快照；
-* 日志结构在 `io/log_packets.hpp` 中定义，兼容离线 Python 工具与后续 C++ 回放器。
+  * DVL 预处理后的 `DvlRtOutput` / `DvlSample`；
+  * ESKF 更新诊断（可选）；
+  * 导航状态 `NavState`。
+
+* 日志结构在 `io/log_packets.hpp` 中定义；
+  离线 Python 项目 `offline_nav` 会读取这些日志进行重放 / ESKF 重算 / 因子图平滑。
+
+**如果后人增加日志字段，记得同时更新：**
+
+* `log_packets.hpp` 中对应结构；
+* `BinLogger` 的写入逻辑；
+* Python 侧解析脚本（否则会解析失败或字段错位）。
 
 #### 2.4.2 共享内存发布 `NavStatePublisher`
 
-* 通过 POSIX shm 暴露 `shared::msg::NavState` 布局；
+* 通过 shm 暴露 `shared::msg::NavState`；
 * 使用 seqlock 协议保证读取一致性；
-* 控制端只需按照统一 shm 名称（如 `/rov_nav_state_v1`）即可零拷贝读取最新导航状态。
+* 控制进程只需遵循同一个 shm 名称和结构定义，不需要关心 ESKF 内部细节。
 
 ---
 
@@ -356,24 +570,22 @@ nav_core/
 
 导航主程序相关文件：
 
-* `app/nav_daemon.cpp`：`main()`，**只做 wiring，不写业务逻辑**；
-* `app/nav_daemon_runner.cpp`：`run_nav_daemon(...)`，实现主循环；
+* `app/nav_daemon.cpp`：`main()`，只做参数解析 + wiring；
+* `app/nav_daemon_runner.cpp`：`run_nav_daemon(...)`，主循环实现；
 * `app/nav_daemon_config.*`：从 YAML 读取配置。
 
 ### 3.1 构建示例
 
-在 UnderwaterRobotSystem 根目录下（包含 `shared/` 和 `Underwater-robot-navigation/nav_core/`）：
-
 ```bash
-cd Underwater-robot-navigation/nav_core
+cd UnderwaterRobotSystem/Underwater-robot-navigation/nav_core
 mkdir -p build
 cd build
 
-cmake ..          # 可加 -DCMAKE_BUILD_TYPE=RelWithDebInfo 等
+cmake ..
 make -j4
 ```
 
-完成后，通常会得到：
+生成：
 
 ```text
 build/
@@ -385,131 +597,165 @@ build/
 
 ### 3.2 启动示例
 
-在 `nav_core/build` 目录下运行：
+在 `nav_core` 目录下：
 
 ```bash
-./bin/uwnav_navd \
-  --config      ../config/nav_daemon.yaml \
-  --eskf-config ../config/eskf2d.yaml
+cd UnderwaterRobotSystem/Underwater-robot-navigation/nav_core
+./build/bin/uwnav_navd \
+  --config      config/nav_daemon.yaml \
+  --eskf-config config/eskf2d.yaml
 ```
 
-其中：
+**注意：**
 
-* `--config`：导航守护进程配置（串口、预处理参数、日志、共享内存等）；
-* `--eskf-config`：ESKF 参数配置（噪声、初值、NIS 门控、DVL Z 更新开关等）。
+* `uwnav_navd` 默认以当前工作目录为基准找 `config/xxx.yaml`，
+  所以建议在 `nav_core` 根目录下运行；
+* 若后人从 `build` 目录下直接运行，需要调整相对路径，例如 `../config/...`。
 
-### 3.3 主循环逻辑（简述）
+### 3.3 主循环逻辑（数据流）
 
-`run_nav_daemon(...)` 主循环（配置频率，如 20 Hz）大致流程：
+简化版数据流示意：
 
-1. 从共享状态中取出最近一帧 IMU / DVL 原始帧：
+```text
+         +---------------------+
+         |  imu_driver_wit     |
+         +----------+----------+
+                    |
+                    v  ImuFrame
+         +---------------------+
+         | ImuRtPreprocessor   |
+         +----------+----------+
+                    |
+                    v  ImuSample
+         +---------------------+
+         |      EskfFilter     |
+         |  propagate_imu()    |
+         +----------+----------+
+                    |
+                    v
+       +-------------------------+
+       | DvlDriver + Protocol    |
+       +-----------+-------------+
+                   |
+                   v  DvlRawSample
+       +-------------------------+
+       |   DvlRtPreprocessor     |
+       +-----------+-------------+
+                   |
+                   v  DvlRtOutput
+       +-------------------------+
+       |      EskfFilter         |
+       | update_dvl_xy/z/yaw()   |
+       +-----------+-------------+
+                   |
+                   v
+         +---------------------+
+         |   NavState 输出     |
+         +----------+----------+
+                    |
+         +----------+----------+
+         |   BinLogger (日志)  |
+         +----------+----------+
+         | NavStatePublisher   |
+         +---------------------+
+```
 
-   * IMU/DVL 驱动在后台线程中持续填充 `SharedSensorState`；
-2. 时间检查：
+每个循环周期大致执行：
 
-   * 计算 IMU / DVL 的“数据年龄”（当前 monotonic_now - last_mono_ns）；
-   * 若超过配置的最大容忍时间，认为掉线或暂不可用；
-3. **IMU 管线：Frame → ImuSample → ESKF 传播**
+1. 从 IMU 驱动读取最新 `ImuFrame` → 预处理 → `ImuSample` → `eskf.propagate_imu()`；
+2. 从 DVL 驱动读取最新 `DvlRawSample` → `dvl_pp.process()` → `DvlRtOutput`：
 
-   * 将 `ImuFrame` 映射为 `ImuSample`（字段复制、时间戳补全）；
-   * 交给 `ImuRtPreprocessor` 做实时预处理（bias + 重力 + 低通）；
-   * 若预处理成功，调用 `EskfFilter::propagate_imu()` 完成一次 IMU 传播；
-   * 如配置开启日志，则通过 `BinLogger` 记录 `ImuSample`；
-4. **DVL 管线：Frame → DvlSample → DvlRtPreprocessor → ESKF 更新**
-
-   * 将 `DvlFrame` 映射为 `DvlSample`（统一字段）；
-   * 交给 `DvlRtPreprocessor::process()`，获得水平 BI 体速 / BE 垂向速度候选；
-   * 门控通过后，调用：
-
-     * `eskf.update_dvl_xy()` 进行水平更新；
-     * 若 `enable_dvl_z_update=true` 则进一步 `eskf.update_dvl_z()`；
-   * 如配置开启日志，则记录预处理后的 `DvlSample`；
-5. **ESKF → NavState（唯一出口）**
-
-   * 调用 `eskf.state()` 获得名义状态；
-   * 映射为 `shared::msg::NavState`：
-
-     * 位置 pos(E,N,U)、速度 vel(E,N,U)、姿态 rpy；
-     * 深度 `depth = -U`；
-     * 健康状态与标志位（IMU 是否超时、DVL 是否在线）；
-6. **对外发布与落盘**
-
-   * 若 `NavStatePublisher` 初始化成功，则将 `NavState` 写入共享内存；
-   * 若日志开关开启，则落盘当前 `NavState`；
-7. **终端状态打印**
-
-   * 每若干循环打印一次简要状态，包括：
-
-     * 当前 t_ns；
-     * pos(E,N,U)、depth、yaw；
-     * health / status_flags；
-   * 方便在 SSH 终端查看实时导航情况。
+   * 若 `gated_ok=true`，则调用 `update_dvl_xy` / `update_dvl_z`；
+3. 从 ESKF 拿状态，映射为 `NavState`；
+4. 写日志 + 写共享内存；
+5. 定期在终端打印导航 summary 便于现场观察。
 
 ---
 
-## 4. 导航信息的终端输出方式
+## 4. 导航信息的终端输出
 
-### 4.1 通过 `uwnav_navd` 自身日志
+### 4.1 `uwnav_navd` 自身日志
 
-导航守护进程会周期性打印状态概要，例如：
+程序会定期打印导航摘要，例如：
 
 ```text
-[nav_daemon] NAV t_ns=1234567890123 pos(E,N,U)=(+0.23, -0.15, -0.05) depth=0.05 yaw=+1.57 health=1 flags=0x0003
+[nav_daemon] NAV t=123.456s pos(E,N,U)=(+0.23,-0.15,-0.05) depth=0.05 yaw=+1.57 imu=OK dvl=OK
 ```
 
-典型信息包含：
-
-* 当前 ENU 位置与深度；
-* 当前 yaw（rad）；
-* 导航健康状态（IMU/DVL 是否在线）；
-* 状态标志位（如 IMU_OK / DVL_OK）。
-
-这类日志非常适合在水池实验中直接通过 SSH 观察：
+可在香橙派上直接：
 
 ```bash
 ssh orangepi@<ip>
-cd UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build
-./bin/uwnav_navd --config ../config/nav_daemon.yaml --eskf-config ../config/eskf2d.yaml
+cd UnderwaterRobotSystem/Underwater-robot-navigation/nav_core
+./build/bin/uwnav_navd --config config/nav_daemon.yaml --eskf-config config/eskf2d.yaml
 ```
 
-### 4.2 通过单独的“监视器程序”读取共享内存
+观察实时导航状态。
 
-如果需要更丰富的终端 UI（如表格、趋势、颜色高亮），可以：
+### 4.2 共享内存 + 其它监控程序
 
-1. 在上位机或板端写一个小程序，通过 `NavStatePublisher` 的 shm 布局读取最新 `NavState`；
-2. 使用 C++/ncurses 或 Python/curses 定期刷新画面。
+控制程序或上位机可以通过 `NavStatePublisher` 的 shm 接口读取 `NavState`：
 
-当前 `nav_core` 已经提供统一的共享内存接口，无需修改导航主循环，只需新写一个“NavState 监控程序”。
+* 用于控制闭环；
+* 用于上位机 UI 显示轨迹 / 速度 / 姿态等。
 
 ---
 
-## 5. 当前版本的边界与下一步规划
+## 5. 对后续维护者的提醒（避免踩坑）
 
-当前 C++ 导航子系统聚焦于：
+1. **不要随意改目录结构**
 
-* IMU + DVL 的板端实时采集与预处理；
-* 基于 ESKF 的 ENU 位置 / 速度 / 姿态在线解算；
-* 共享内存发布 + 二进制日志记录；
-* 基本的终端监控能力。
+   * `nav_core` 的 CMake 假定了 `UnderwaterRobotSystem/` 根目录下存在 `shared/`。
+   * 如果要拆分 repo 或移动目录，务必同步修改：
 
-暂未完全纳入本版本的内容包括：
+     * CMake 中的 `UNDERWATER_ROOT`；
+     * 控制项目中 `#include "shared/msg/nav_state.hpp"` 的路径设计。
 
-* 深度传感器 / USBL / DVL 里程（dE/dN/dU）等更多传感器的联合 ESKF 融合；
-* C++ 版因子图平滑（`graph_smoother_2d.*`）与 `NavHealthMonitor` 的上线；
-* 基于平滑轨迹 vs 在线轨迹偏差的自动停机策略；
-* 图形化 GCS 级轨迹可视化。
+2. **改 DVL/IMU 数据结构要“一条龙改完”**
+   涉及以下几层：
 
-下一步典型演进方向：
+   ```text
+   drivers/*    → core/types.hpp / dvl_rt_preprocessor.hpp
+                → preprocess/*   → estimator/eskf_update_*.cpp
+                → app/nav_daemon_runner.cpp（管线连接处）
+   ```
 
-1. 在现有 ESKF 框架中，逐步接入深度 / USBL / DVL 里程因子，形成完整 3D/6DoF INS+辅助导航；
-2. 打通 C++ 因子图平滑链路，支持在线日志 → 离线平滑 → 精度评估 → 导航健康监控；
-3. 针对控制系统需求，定义 NavState 的扩展字段与 QoS 指标（延迟、抖动、置信度等）；
-4. 为新人补充更多文档，例如：
+   任意一层字段变动而另一层不改，编译可能通过，但运行时数据含义就错了。
 
-   * “如何在 offline_nav 中用 Python 重现 nav_core 的 ESKF 轨迹”；
-   * “如何根据 IMU/DVL 实验数据调参 EskfConfig”。
+3. **改“加速度是否扣重力”要同步改 ESKF 配置与 propagate 逻辑**
+
+   * 若 IMU 预处理输出的是“带重力的加速度”，ESKF 内部需要补重力；
+   * 现在的工程假设是：**IMU 预处理已经扣重力，ESKF 只做坐标变换和积分**。
+   * 对应配置项包括：
+
+     * `eskf.yaml` 中的 `imu_acc_kind`；
+     * `imu_processing` / `imu_rt_preprocessor` 中的处理逻辑。
+
+4. **不要在 nav_daemon 中“临时改逻辑”**
+   `nav_daemon.cpp` + `nav_daemon_runner.cpp` 只负责 wiring 和循环调度。
+   真正的业务逻辑应分别放在：
+
+   * 设备相关：`drivers/*`；
+   * 预处理相关：`preprocess/*`；
+   * 估计相关：`estimator/*`；
+   * IO：`io/*`。
+
+   这样以后无论是做 offline_nav、因子图平滑，还是把同样的 ESKF 移植到别的项目，都能复用同一套核心模块。
+
+5. **编译报错时优先检查 CMake 与 include path，而不是“乱删代码”**
+
+   * 典型错误：
+
+     * 找不到 `shared/msg/nav_state.hpp` → 工程根路径不对；
+     * 找不到 `wit_c_sdk.h` → third_party/witmotion 路径或 CMake 源文件列表不匹配；
+     * undefined reference to `WitInit` 等 → `wit_c_sdk.c` 没有被编进 `libnav_core.a`；
+   * 遇到这类问题，先对照本 README 中的“工程根目录约定”和 `CMakeLists.txt`，确认路径/源文件/选项是否齐全。
 
 ---
 
-```
+当前版本的 `nav_core` 已经能够在板端完成：“IMU+DVL 实时预处理 → ESKF 在线解算 → NavState 发布+日志记录”的完整流水线。
+后续如需扩展（深度 / USBL / 因子图平滑 / 导航健康监控等），优先在 `estimator/*` 和 `preprocess/*` 中增加模块，并在本 README 的“数据流”章节同步更新结构说明，避免后人只看到某个 cpp 报错却不知道上游/下游依赖关系。
 
+```
+::contentReference[oaicite:0]{index=0}
+```
