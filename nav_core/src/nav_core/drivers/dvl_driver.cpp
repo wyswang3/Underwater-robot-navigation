@@ -157,14 +157,18 @@ bool DvlDriver::start() {
     }
 
     // 上电后的安全初始化序列（可选）：
-    // CZ -> PR(ping_rate) -> PM(avg_count) -> CS
+    // CZ -> CS -> PR(ping_rate) -> PM(avg_count) 
     if (cfg_.send_startup_cmds) {
         // 1) 确保停机，避免空气中 ping
         if (!sendCommandCZ()) {
             std::cerr << "[DVL] WARN: send CZ failed during start()\n";
         }
+        // 2) 启动 ping
+        if (!sendCommandCS()) {
+            std::cerr << "[DVL] WARN: send CS failed during start()\n";
+        }
 
-        // 2) 设置发射呼率（优先用配置；<=0 则回退到默认 10）
+        // 3) 设置发射呼率（优先用配置；<=0 则回退到默认 10）
         const int ping_rate = (cfg_.ping_rate > 0)
                                 ? cfg_.ping_rate
                                 : kDefaultPingRate;
@@ -173,7 +177,7 @@ bool DvlDriver::start() {
                       << " failed during start()\n";
         }
 
-        // 3) 设置平均次数
+        // 4) 设置平均次数
          const int avg_count = (cfg_.avg_count > 0)
                                 ? cfg_.avg_count
                                 : kDefaultAvgCount;
@@ -182,10 +186,6 @@ bool DvlDriver::start() {
                       << " failed during start()\n";
         }
 
-        // 4) 启动 ping
-        if (!sendCommandCS()) {
-            std::cerr << "[DVL] WARN: send CS failed during start()\n";
-        }
     }
 
     try {
