@@ -135,7 +135,6 @@ struct ParsedLine {
     }
 };
 
-
 // ============================ 3. 文本解析接口 ============================
 
 /**
@@ -162,139 +161,140 @@ struct ParsedLine {
 using CommandBytes = std::array<std::uint8_t, 16>;
 
 /**
- * @brief 将 ASCII 命令打包为 Hover H1000 所需的 16 字节命令。
- *
- * 规则（与厂家要求一致的工程约定）：
- *   - 输入 ascii_cmd 为“人类可读命令本体”，例如 "CS"、"CZ"、"PR10"、"PM10"；
- *   - 实际发送内容为：
- *       [ ascii_cmd 字符... ][ '\r' ][ 0x00 填充到 16 字节 ];
- *   - 若 ascii_cmd 本身包含空白或 '\r' / '\n'，实现会先做 trim，再追加 '\r'。
- *
- * 说明：
- *   - 调用方只需关心“逻辑命令”字符串；
- *   - 本函数保证返回的数组长度始终为 16，可直接写入串口。
- *
- * @param ascii_cmd  人类可读命令字符串（不带结尾 '\r'）
- * @return           固定长度 16 字节命令缓冲区，可直接写入串口。
- */
-[[nodiscard]] CommandBytes make_command_from_ascii(std::string_view ascii_cmd);
-
-/**
- * @brief 生成 CZ 命令（强制停机）。
- *
- * 典型用途：
- *   - 上电后先发送 CZ，确保 DVL 不会在空气中发 ping；
- *   - 程序退出 / 机器人上岸前再次发送 CZ，保证设备安全。
+ * @brief DH1000 风格的 16 字节命令帧构造（与 Python 版 build_cmd16 对齐）。
  *
  * 约定：
- *   - 实际发送内容等价于 "CZ" + '\r' + 0 填充。
+ *   - cmd2：2 字符命令缩写（"CS" / "CZ" / "PR" / "PM" 等），不区分大小写；
+ *   - arg ：可选参数字符串，未做范围检查：
+ *       * 若为空（std::string_view{} 或 只含空白），则构造无参数命令：
+ *           s = cmd2;
+ *       * 否则构造有参数命令：
+ *           s = cmd2 + " " + arg;
+ *   - s 末尾追加 '\r'：
+ *           s += '\r';
+ *   - 若此时 s 长度 > 16，视为错误（抛异常或在实现中返回全 0 并记录错误）；
+ *   - 若 s 长度 <= 16，则用字符 '0' 右侧填充至 16 字节。
+ *
+ * 最终：
+ *   - 返回长度严格为 16 的字节数组，可直接写入串口。
+ *
+ * 典型示例：
+ *   - build_command16("CS", {})      -> "CS\\r0000000000000"
+ *   - build_command16("CZ", {})      -> "CZ\\r0000000000000"
+ *   - build_command16("PR", " 1")    -> "PR 1\\r000000000000"
+ *   - build_command16("PR", "10")    -> "PR 10\\r0000000000"
+ */
+[[nodiscard]] CommandBytes build_command16(std::string_view cmd2,
+                                           std::string_view arg);
+
+/**
+ * @brief 构造 PR 命令参数字符串（两位宽整数，前导空格），例如 " 1"、"10"。
+ *
+ * 约定：
+ *   - ping_rate 必须在 [0, 99] 区间内；
+ *   - 返回格式固定为 2 字符宽度：
+ *       1  -> " 1"
+ *       10 -> "10"
+ *
+ * 说明：
+ *   - 这是 Python 版 fmt_int_2d 的 C++ 等价物；
+ *   - 仅负责格式化整数，不负责追加命令/回车/填充。
+ */
+[[nodiscard]] std::string format_pr_pm_arg_2d(int value);
+
+/**
+ * @brief 生成 CZ 命令（停机），语义等价于 Python safe_start 里的 "CZ" 步骤。
+ *
+ * 实际发送内容：
+ *   - build_command16("CZ", {})
  */
 [[nodiscard]] CommandBytes make_command_cz();
 
 /**
- * @brief 生成 CS 命令（启动 ping）。
+ * @brief 生成 CS 命令（启动 ping），语义等价于 Python safe_start 里的 "CS" 步骤。
  *
- * 说明：
- *   - 实际协议中 CS 不带数值参数，仅表示“开始工作”；
- *   - 呼率与平均次数通过 PR/PM 命令单独设置。
- *
- * 约定：
- *   - 实际发送内容等价于 "CS" + '\r' + 0 填充。
+ * 实际发送内容：
+ *   - build_command16("CS", {})
  */
 [[nodiscard]] CommandBytes make_command_cs();
 
 /**
- * @brief 构造 PR 命令的 ASCII 形式，例如 "PR10"。
- *
- * 说明：
- *   - 协议要求格式为指令 + 数字，无逗号，即 "PR10"；
- *   - 本函数仅返回 ASCII 部分（不含 '\r'），方便日志 / 调试或进一步打包。
- *
- * @param ping_rate   呼率参数（例如 10）
- * @return            ASCII 命令字符串（如 "PR10"）
- */
-[[nodiscard]] std::string make_pr_ascii(int ping_rate);
-
-/**
- * @brief 构造 PM 命令的 ASCII 形式，例如 "PM10"。
- *
- * 说明与 make_pr_ascii 相同。
- *
- * @param avg_count   平均次数（例如 10）
- * @return            ASCII 命令字符串（如 "PM10"）
- */
-[[nodiscard]] std::string make_pm_ascii(int avg_count);
-
-/**
  * @brief 生成 PR 命令（设置发射呼率）。
  *
- * 实现约定：
- *   - 等价于 make_command_from_ascii(make_pr_ascii(ping_rate))。
+ * 实际发送内容：
+ *   - build_command16("PR", format_pr_pm_arg_2d(ping_rate));
+ *
+ * @param ping_rate   呼率值（0..99），具体物理含义按说明书定义
  */
 [[nodiscard]] CommandBytes make_command_pr(int ping_rate);
 
 /**
  * @brief 生成 PM 命令（设置平均次数）。
  *
- * 实现约定：
- *   - 等价于 make_command_from_ascii(make_pm_ascii(avg_count))。
+ * 实际发送内容：
+ *   - build_command16("PM", format_pr_pm_arg_2d(avg_count));
+ *
+ * @param avg_count   平均次数（0..99）
  */
 [[nodiscard]] CommandBytes make_command_pm(int avg_count);
 
 
+/**
+ * @brief 返回“人类可读”的命令 ASCII 表示（不含 '\r'），用于日志和 echo 比较。
+ *
+ * 约定：
+ *   - 无参数命令："CS" / "CZ"
+ *   - 带参数命令："PR 10" / "PM  5"（包含空格）
+ *
+ * 说明：
+ *   - 这只是日志/比较用字符串，不参与 16 字节填充；
+ *   - 实际串口发送仍使用 build_command16 生成的 CommandBytes。
+ */
+[[nodiscard]] std::string make_ascii_cmd(std::string_view cmd2,
+                                         std::string_view arg);
+
 // ============================ 5. 命令回显 / 确认检测 ============================
 
 /**
- * @brief 规范化命令 ASCII 字符串（用于比较）。
+ * @brief 规范化命令 ASCII 字符串（用于比较），与 Python normalize 行为对齐。
  *
- * 建议处理规则（在 .cpp 中实现）：
- *   - 去掉首尾空白字符（空格、'\r'、'\n'、'\t' 等）；
- *   - 将连续空格折叠为单个空格（如果需要支持带空格命令）；
-///   - 可选：将字母统一转为大写，避免大小写差异；
-///   - 不做 16 字节填充，仅针对“人类可读”的命令行。
+ * 建议实现规则：
+ *   - 去掉首尾空白（空格 / '\t' / '\r' / '\n' 等）；
+ *   - 将连续空格折叠为单个空格（可选）；
+ *   - 字母统一转为大写；
+ *   - 不处理 16 字节填充，仅针对“人类可读”的命令部分。
  *
- * 用途：
-///   - 用于比较“发送的 ASCII 命令”和“DVL 回显的命令行”是否等价；
-///   - 也可单独用来打印或记录规范化格式。
- *
- * @param cmd   原始命令字符串（发送时或回显行中的片段）
- * @return      规范化后的命令字符串
+ * 典型用法：
+ *   - normalize_ascii("PR 10")        -> "PR 10"
+ *   - normalize_ascii("  pr  10\r")   -> "PR 10"
  */
 [[nodiscard]] std::string normalize_command_ascii(std::string_view cmd);
 
 /**
- * @brief 检查回传行是否与给定命令等价（通用版本）。
+ * @brief 检查回传行是否“看起来是”指定命令的 echo。
  *
  * 典型实现思路：
- *   - 对 sent_ascii_cmd 和 echoed_line 分别调用 normalize_command_ascii；
- *   - 比较规范化后字符串是否完全相等；
- *   - 如需忽略 echoed_line 中前缀/后缀，可在实现中先截取命令部分再比较。
+ *   - 对 sent_ascii_cmd 调用 normalize_command_ascii，得到 norm_sent；
+ *   - 对 echoed_line 内部尝试提取类似命令片段（例如去掉前后杂字符），
+ *     调用 normalize_command_ascii 得到 norm_echo；
+ *   - 若 norm_echo 中包含 norm_sent 子串，或者相等，则认为“通过 echo 检查”。
  *
  * 典型用法（在 DvlDriver 中）：
- *   - 发送命令前记录 sent = "CS" / "CZ" / "PR10" / "PM10"；
- *   - 后台线程解析到一行非 PD6/EPD6 文本时，调用 is_command_echo(sent, line)，
- *     若返回 true，则认为该命令已被 DVL 接收并回显。
- *
- * @param sent_ascii_cmd   本地构造的命令 ASCII（如 "CS"、"PR10"）
- * @param echoed_line      从 DVL 串口读回的一整行文本
- * @return true            若认为是同一命令的回显
- * @return false           否则
+ *   - 发送 PR 命令时记录 ascii："PR 10"；
+ *   - 收到来自 DVL 的 RESP 行时，调用 is_command_echo("PR 10", line)；
+ *   - 若返回 true，即认为 DVL 已接受并回显该命令。
  */
 [[nodiscard]] bool is_command_echo(std::string_view sent_ascii_cmd,
                                    std::string_view echoed_line);
 
 /**
- * @brief CS 命令专用的回显检查工具。
+ * @brief CS 命令的专用 echo 检查。
  *
  * 说明：
- *   - 内部可直接实现为：
- *       return is_command_echo("CS", echoed_line);
- *   - 注意：CS 命令不带数值参数，因此无需 ping_rate / avg_count。
- *
- * @param echoed_line DVL 回传的一行文本
- * @return true       若认为 DVL 回显了 CS 命令
- * @return false      否则
+ *   - 等价于 is_command_echo("CS", echoed_line)；
+ *   - 由于 CS 不带数值参数，因此不涉及格式化/空格。
  */
 [[nodiscard]] bool is_cs_command_echo(std::string_view echoed_line);
+
 
 } // namespace nav_core::dvl_protocol

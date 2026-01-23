@@ -19,6 +19,8 @@
 #include <unistd.h>
 #include <utility>
 #include <thread>
+// 如需要也可以补上 <chrono>，目前很多编译器会通过 <thread> 间接包含
+// #include <chrono>
 
 // Wit 官方 C SDK（在 third_party/witmotion 下）
 extern "C" {
@@ -113,7 +115,7 @@ bool ImuDriverWit::init(const ImuConfig& cfg,
                         FrameCallback    on_frame,
                         RawCallback      on_raw)
 {
-    // 保存一份完整配置，兼容老代码
+    // 保存一份完整配置
     cfg_ = cfg;
 
     // 展开到成员字段，供实现内部使用
@@ -126,16 +128,22 @@ bool ImuDriverWit::init(const ImuConfig& cfg,
     on_raw_   = std::move(on_raw);
 
     // 运行时状态重置
-    fd_           = -1;
-    sdk_inited_   = false;
+    fd_         = -1;
+    sdk_inited_ = false;
+
     stop_requested_.store(false);
     running_.store(false);
+
+    port_open_.store(false);
+    have_any_frame_.store(false);
+    have_valid_frame_.store(false);
+    last_frame_mono_ns_.store(0);
 
     return true;
 }
 
 // ============================================================================
-// 公共接口：start / stop / filterConfig
+// 公共接口：start / stop / filterConfig / 健康检查
 // ============================================================================
 
 bool ImuDriverWit::start()
@@ -147,6 +155,12 @@ bool ImuDriverWit::start()
     }
 
     stop_requested_.store(false);
+
+    // 每次启动重置“本轮运行”的健康状态
+    have_any_frame_.store(false);
+    have_valid_frame_.store(false);
+    last_frame_mono_ns_.store(0);
+    port_open_.store(false);
 
     if (!openPort()) {
         std::cerr << "[IMU] openPort() failed on " << port_ << "\n";
@@ -255,6 +269,33 @@ ImuFilterConfig ImuDriverWit::filterConfig() const
     return filter_cfg_;
 }
 
+// -------- 健康检查接口 --------
+
+bool ImuDriverWit::isRunning() const noexcept
+{
+    return running_.load();
+}
+
+bool ImuDriverWit::isPortOpen() const noexcept
+{
+    return port_open_.load();
+}
+
+bool ImuDriverWit::hasEverReceivedFrame() const noexcept
+{
+    return have_any_frame_.load();
+}
+
+bool ImuDriverWit::hasEverReceivedValidFrame() const noexcept
+{
+    return have_valid_frame_.load();
+}
+
+MonoTimeNs ImuDriverWit::lastFrameMonoNs() const noexcept
+{
+    return last_frame_mono_ns_.load();
+}
+
 // ============================================================================
 // 串口打开 / 关闭
 // ============================================================================
@@ -262,6 +303,7 @@ ImuFilterConfig ImuDriverWit::filterConfig() const
 bool ImuDriverWit::openPort()
 {
     if (fd_ >= 0) {
+        port_open_.store(true);
         return true;
     }
 
@@ -269,6 +311,7 @@ bool ImuDriverWit::openPort()
     if (fd_ < 0) {
         std::cerr << "[IMU] open(" << port_ << ") failed: "
                   << std::strerror(errno) << "\n";
+        port_open_.store(false);
         return false;
     }
 
@@ -278,6 +321,7 @@ bool ImuDriverWit::openPort()
                   << std::strerror(errno) << "\n";
         ::close(fd_);
         fd_ = -1;
+        port_open_.store(false);
         return false;
     }
 
@@ -307,10 +351,12 @@ bool ImuDriverWit::openPort()
                   << std::strerror(errno) << "\n";
         ::close(fd_);
         fd_ = -1;
+        port_open_.store(false);
         return false;
     }
 
     std::cerr << "[IMU] serial opened: " << port_ << " @" << baud_ << "\n";
+    port_open_.store(true);
     return true;
 }
 
@@ -321,6 +367,7 @@ void ImuDriverWit::closePort()
         fd_ = -1;
         std::cerr << "[IMU] serial closed\n";
     }
+    port_open_.store(false);
 }
 
 // ============================================================================
@@ -445,14 +492,18 @@ void ImuDriverWit::onSerialWrite(std::uint8_t* data, std::uint32_t len)
 
 void ImuDriverWit::onRegUpdate(std::uint32_t start_reg, std::uint32_t num)
 {
+    // 统一时间基：先拿一份当前单调时间
+    MonoTimeNs now_ns = tb::now_ns();
+
     ImuRawRegs raw{};
     raw.timestamp_s  = static_cast<double>(::time(nullptr));
-
-    // 这里改成用统一时间基
-    raw.host_mono_ns = tb::now_ns();
-
+    raw.host_mono_ns = now_ns;
     raw.start_reg    = start_reg;
     raw.count        = num;
+
+    // 健康检查：只要回调被调用，就认为“收到过原始寄存器更新”
+    have_any_frame_.store(true);
+    last_frame_mono_ns_.store(now_ns);
 
     if (on_raw_) {
         on_raw_(raw);
@@ -468,7 +519,54 @@ void ImuDriverWit::onRegUpdate(std::uint32_t start_reg, std::uint32_t num)
         return;
     }
 
+    // 有效帧统计
+    have_valid_frame_.store(true);
+    last_frame_mono_ns_.store(frame.mono_ns);
+
     on_frame_(frame);
+}
+
+// ============================================================================
+// 单位转换小函数
+// ============================================================================
+
+float ImuDriverWit::rawAccCountToG(std::int16_t raw) const
+{
+    // 官方公式：raw / 32768 * 量程_g（默认 16g）
+    return static_cast<float>(raw) / 32768.0f * cfg_.acc_range_g;
+}
+
+float ImuDriverWit::rawAccCountToMps2(std::int16_t raw) const
+{
+    // 先转成 g，再乘 raw_g_to_mps2（默认 9.78）
+    const float acc_g = rawAccCountToG(raw);
+    return acc_g * cfg_.raw_g_to_mps2;
+}
+
+float ImuDriverWit::rawGyroCountToDegPerSec(std::int16_t raw) const
+{
+    // 官方公式：raw / 32768 * 量程_dps（默认 2000 °/s）
+    return static_cast<float>(raw) / 32768.0f * cfg_.gyro_range_dps;
+}
+
+float ImuDriverWit::rawGyroCountToRadPerSec(std::int16_t raw) const
+{
+    constexpr float kDeg2Rad = static_cast<float>(M_PI / 180.0);
+    return rawGyroCountToDegPerSec(raw) * kDeg2Rad;
+}
+
+float ImuDriverWit::rawAngleCountToDeg(std::int16_t raw) const
+{
+    // 一般 16 位角度寄存器常见缩放：raw / 32768 * 180.0
+    // 目前 HWT9073-485 我们使用高精度 HRoll/LRoll 组合方式，
+    // 这个函数暂时未在 makeFrameFromRegs 中使用，保留给其他型号。
+    return static_cast<float>(raw) / 32768.0f * 180.0f;
+}
+
+float ImuDriverWit::rawAngleCountToRad(std::int16_t raw) const
+{
+    constexpr float kDeg2Rad = static_cast<float>(M_PI / 180.0);
+    return rawAngleCountToDeg(raw) * kDeg2Rad;
 }
 
 // ============================================================================
@@ -496,66 +594,55 @@ void ImuDriverWit::makeFrameFromRegs(std::uint32_t /*start_reg*/,
         return sReg[reg];
     };
 
-    // 参考 Wit 官方 Demo：
-    //  a[i] = sReg[AX+i] / 32768.0 * 16.0                 // 16g 量程，加速度单位：g
-    //  w[i] = sReg[GX+i] / 32768.0 * 2000.0              // 2000 dps 量程，角速度单位：deg/s
-    //  Angle[i] = (((uint32_t)sReg[HRoll+2*i])<<16 |
-    //              (uint16_t)sReg[LRoll+2*i]) / 1000.0   // 高精度角度，单位：deg
-    //  Temp = sReg[TEMP905x] / 100.0                     // 温度，°C
-
-    constexpr double g       = 9.80665;
-    constexpr double deg2rad = M_PI / 180.0;
-
-    double acc_g[3];
-    double gyro_dps[3];
+    double acc_mps2[3];
+    double gyro_rad_s[3];
     double angle_deg[3];
 
+    // 加速度 / 角速度：使用配置驱动的单位转换
     for (int i = 0; i < 3; ++i) {
-        acc_g[i]    = static_cast<double>(get_i16(AX + i)) / 32768.0 * 16.0;
-        gyro_dps[i] = static_cast<double>(get_i16(GX + i)) / 32768.0 * 2000.0;
+        const std::int16_t raw_acc  = get_i16(AX + i);
+        const std::int16_t raw_gyro = get_i16(GX + i);
 
+        acc_mps2[i]   = static_cast<double>(rawAccCountToMps2(raw_acc));
+        gyro_rad_s[i] = static_cast<double>(rawGyroCountToRadPerSec(raw_gyro));
+    }
+
+    // 高精度角度：HRoll/LRoll 组合，单位 0.001 deg
+    for (int i = 0; i < 3; ++i) {
         const std::uint32_t hi    = static_cast<std::uint16_t>(get_i16(HRoll + 2 * i));
         const std::uint32_t lo    = static_cast<std::uint16_t>(get_i16(LRoll + 2 * i));
         const std::uint32_t iBuff = (hi << 16) | lo;
-        angle_deg[i]              = static_cast<double>(static_cast<std::int32_t>(iBuff)) / 1000.0;
+        const std::int32_t  as_i32 = static_cast<std::int32_t>(iBuff);
+        angle_deg[i] = static_cast<double>(as_i32) / 1000.0;  // 0.001 deg
     }
 
     const double temp_c = static_cast<double>(get_i16(TEMP905x)) / 100.0;
 
-    // 转换到导航常用单位
-    const double ax = acc_g[0] * g;
-    const double ay = acc_g[1] * g;
-    const double az = acc_g[2] * g;
-
-    const double gx = gyro_dps[0] * deg2rad;
-    const double gy = gyro_dps[1] * deg2rad;
-    const double gz = gyro_dps[2] * deg2rad;
-
-    const double roll  = angle_deg[0] * deg2rad;
-    const double pitch = angle_deg[1] * deg2rad;
-    const double yaw   = angle_deg[2] * deg2rad;
+    const double roll  = angle_deg[0] * (M_PI / 180.0);
+    const double pitch = angle_deg[1] * (M_PI / 180.0);
+    const double yaw   = angle_deg[2] * (M_PI / 180.0);
 
     // -------- 过滤逻辑：这里只做非常基础的幅值/NaN 检查 --------
     const ImuFilterConfig cfg = filter_cfg_;  // 拷贝一份，避免并发撕裂
 
     if (cfg.enable_accel) {
-        if (!isFinite(ax) || !isFinite(ay) || !isFinite(az)) {
+        if (!isFinite(acc_mps2[0]) || !isFinite(acc_mps2[1]) || !isFinite(acc_mps2[2])) {
             return;
         }
-        if (std::fabs(ax) > cfg.max_abs_accel ||
-            std::fabs(ay) > cfg.max_abs_accel ||
-            std::fabs(az) > cfg.max_abs_accel) {
+        if (std::fabs(acc_mps2[0]) > cfg.max_abs_accel ||
+            std::fabs(acc_mps2[1]) > cfg.max_abs_accel ||
+            std::fabs(acc_mps2[2]) > cfg.max_abs_accel) {
             return;
         }
     }
 
     if (cfg.enable_gyro) {
-        if (!isFinite(gx) || !isFinite(gy) || !isFinite(gz)) {
+        if (!isFinite(gyro_rad_s[0]) || !isFinite(gyro_rad_s[1]) || !isFinite(gyro_rad_s[2])) {
             return;
         }
-        if (std::fabs(gx) > cfg.max_abs_gyro ||
-            std::fabs(gy) > cfg.max_abs_gyro ||
-            std::fabs(gz) > cfg.max_abs_gyro) {
+        if (std::fabs(gyro_rad_s[0]) > cfg.max_abs_gyro ||
+            std::fabs(gyro_rad_s[1]) > cfg.max_abs_gyro ||
+            std::fabs(gyro_rad_s[2]) > cfg.max_abs_gyro) {
             return;
         }
     }
@@ -578,13 +665,13 @@ void ImuDriverWit::makeFrameFromRegs(std::uint32_t /*start_reg*/,
     out.est_ns  = ts.corrected_time_ns;   // 延迟补偿后的统一时间
 
     // -------- 填充 IMU 数据 --------
-    out.lin_acc[0] = static_cast<float>(ax);
-    out.lin_acc[1] = static_cast<float>(ay);
-    out.lin_acc[2] = static_cast<float>(az);
+    out.lin_acc[0] = static_cast<float>(acc_mps2[0]);
+    out.lin_acc[1] = static_cast<float>(acc_mps2[1]);
+    out.lin_acc[2] = static_cast<float>(acc_mps2[2]);
 
-    out.ang_vel[0] = static_cast<float>(gx);
-    out.ang_vel[1] = static_cast<float>(gy);
-    out.ang_vel[2] = static_cast<float>(gz);
+    out.ang_vel[0] = static_cast<float>(gyro_rad_s[0]);
+    out.ang_vel[1] = static_cast<float>(gyro_rad_s[1]);
+    out.ang_vel[2] = static_cast<float>(gyro_rad_s[2]);
 
     out.euler[0] = static_cast<float>(roll);
     out.euler[1] = static_cast<float>(pitch);

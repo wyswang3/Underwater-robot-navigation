@@ -6,17 +6,14 @@
 //   - 支持简单的按 POD 结构写入/读取；
 //   - 不依赖任何第三方库，Control 侧和 Nav 侧都能直接复用。
 
-// 新建议：
-#include "nav_core/io/log_packets.hpp"
-#include "nav_core/core/types.hpp"     // 如果里头需要 MonoTimeNs / SysTimeNs
-#include "nav_core/io/bin_logger.hpp"  // 自己对应的声明
-#include "nav_core/core/timebase.hpp"  // 若里头用到了 timebase
+#include "nav_core/io/bin_logger.hpp"
 
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <utility>   // std::swap
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -123,9 +120,33 @@ BinLogger::BinLogger(const std::string& path)
     open(path, /*append=*/false);
 }
 
+BinLogger::BinLogger(BinLogger&& other) noexcept
+{
+    swap(other);
+}
+
+BinLogger& BinLogger::operator=(BinLogger&& other) noexcept
+{
+    if (this != &other) {
+        swap(other);
+    }
+    return *this;
+}
+
 BinLogger::~BinLogger()
 {
     close();
+}
+
+void BinLogger::swap(BinLogger& other) noexcept
+{
+    if (this == &other) {
+        return;
+    }
+
+    // 同时锁住两个 logger，避免竞争
+    std::scoped_lock lock(mtx_, other.mtx_);
+    std::swap(fp_, other.fp_);
 }
 
 bool BinLogger::open(const std::string& path, bool append)

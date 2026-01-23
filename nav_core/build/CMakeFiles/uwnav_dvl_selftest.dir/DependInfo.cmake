@@ -8,16 +8,22 @@ set(CMAKE_DEPENDS_CHECK_CXX
   )
 set(CMAKE_CXX_COMPILER_ID "GNU")
 
+# Preprocessor definitions for this target.
+set(CMAKE_TARGET_DEFINITIONS_CXX
+  "NAV_CORE_ENABLE_GRAPH=0"
+  )
+
 # The include file search paths:
 set(CMAKE_CXX_TARGET_INCLUDE_PATH
   "../include"
-  "/home/wys/orangepi/UnderwaterRobotSystem"
+  "../../.."
+  "../third_party/witmotion"
+  "/usr/include/eigen3"
   )
 
 # Targets to which this target links.
 set(CMAKE_TARGET_LINKED_INFO_FILES
   "/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/nav_core.dir/DependInfo.cmake"
-  "/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/witmotion_sdk.dir/DependInfo.cmake"
   )
 
 # Fortran module output directory.

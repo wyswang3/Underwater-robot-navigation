@@ -1,15 +1,15 @@
 // nav_core/include/nav_core/estimator/nav_health_monitor.hpp
 //
 // @file  nav_health_monitor.hpp
-// @brief 导航健康监测：综合传感器心跳 + 在线导航状态 + 因子图 baseline，
-//        给出 NavHealth / status_flags 以及控制层可用的“停机/降级建议”。
+// @brief ESKF 导航健康监测：基于 IMU / DVL 心跳与 ESKF 更新统计，给出
+//        NavHealth / status_flags 以及控制层可用的“停机/降级建议”。
 //
 // 设计定位：
 //   - 作为 estimator 层的“监督模块”，不直接参与状态估计；
 //   - 消费三个主要信息源：
-//       1) 传感器心跳（IMU / DVL 最近一次观测时间）；
-//       2) 在线导航输出（NavState）；
-//       3) 离线/准在线因子图平滑得到的 baseline 评估指标；
+//       1) 传感器心跳（IMU / DVL 最近一次有效观测时间）；
+//       2) 在线导航输出（NavState，仅用于辅助判定）；
+//       3) ESKF 内部更新诊断（NIS / 残差范数 / 接受率等）；
 //   - 输出：
 //       * shared::msg::NavHealth（OK / DEGRADED / INVALID）；
 //       * status_flags 中与导航质量相关的 bit；
@@ -17,33 +17,32 @@
 //       * 一组可用于日志与 GCS 展示的数值指标。
 //
 // 注意：
-//   - 本模块不负责“跑因子图”，只消耗 GraphSmoother2DResult 等结果；
+//   - 本模块不负责“因子图平滑 / 离线基准解算”，仅针对在线 ESKF；
 //   - 不做任何 IO（不写日志、不发 UDP），纯计算 + 状态机；
-//   - 评估策略（阈值、分档规则）由 NavHealthConfig 控制，可在运行时调整。
+//   - ESKF 过程量的落盘由 nav_daemon / 其他模块利用 log_packets 完成；
+//   - 评估阈值由 NavHealthConfig 配置，可在运行时调整。
 // 
 
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
-#include "nav_core/core/types.hpp"          // MonoTimeNs / SysTimeNs 等别名
-#include "nav_core/core/status.hpp"    // 通用 Status
-#include "shared/msg/nav_state.hpp"    // NavHealth / NavStatusFlags / NavState
+#include "nav_core/core/types.hpp"   // MonoTimeNs / SysTimeNs 等别名
+#include "nav_core/core/status.hpp"  // 通用 Status，如有需要可扩展
+#include "shared/msg/nav_state.hpp"  // NavHealth / NavStatusFlags / NavState
 
 namespace nav_core::estimator {
-
-// 前向声明：避免在头文件中强依赖 graph_smoother_2d.hpp
-struct GraphSmoother2DResult;
 
 // ============================ 1. 配置结构 ============================
 
 /**
- * @brief 导航健康监测配置（阈值 & 策略参数）
+ * @brief ESKF 导航健康监测配置（阈值 & 策略参数）
  *
  * 说明：
  *   - 所有单位与注释中保持一致，便于调参；
  *   - IMU / DVL 超时阈值用于判断“传感器掉线”；
- *   - baseline 相关阈值用于比较“在线导航 vs 因子图平滑参考”的一致性；
+ *   - NIS / 残差阈值用于判断“观测更新是否稳定 / 是否频繁被拒绝”；
  *   - 分档策略：通常先判定 INVALID，再判定 DEGRADED，最后剩下的视为 OK。
  */
 struct NavHealthConfig {
@@ -55,37 +54,40 @@ struct NavHealthConfig {
     std::int64_t imu_timeout_ns{200'000'000};   ///< 0.2s
     std::int64_t dvl_timeout_ns{3'000'000'000}; ///< 3.0s
 
-    // -------- baseline 有效性要求 --------
+    // -------- DVL 水平速度更新 NIS 阈值 --------
     //
-    // 因子图 baseline 若时间窗太短 / 样本太少，可能不具代表性；
-    // 只有满足以下条件时，才把 baseline 作为“可信参考”参与评估。
+    // 典型策略（自由度为 2 的卡方分布）：
+    //   - dvl_nis <= dvl_nis_ok_max        -> 认为更新正常；
+    //   - dvl_nis > dvl_nis_reject_max     -> 建议滤波器拒绝该测量；
     //
-    double       min_baseline_duration_s{60.0}; ///< baseline 最小时间跨度（秒）
-    std::size_t  min_baseline_samples{100};      ///< baseline 最小样本数
+    // 本模块只用这些阈值来统计“超阈比率 / 近期 NIS 均值”等。
+    //
+    double dvl_nis_ok_max{9.21};       ///< 2 自由度，约为 0.99 置信度
+    double dvl_nis_reject_max{16.0};   ///< 明显异常区间，可视为 outlier
 
-    // -------- 在线 vs baseline 位置误差阈值（XY 平面）--------
+    // -------- 垂向观测（DVL vU / 深度）NIS 阈值 --------
     //
-    // 典型策略：
-    //   - rms_xy_m <= max_rms_xy_ok_m          -> OK
-    //   - max_rms_xy_ok_m < rms_xy_m <= max_rms_xy_degraded_m -> DEGRADED
-    //   - rms_xy_m > max_rms_xy_degraded_m    -> INVALID
+    // 这里不强制区分来源，仅作为“垂向更新”的健康参考。
     //
-    double max_rms_xy_ok_m{0.5};        ///< OK 区间上界（米）
-    double max_rms_xy_degraded_m{2.0};  ///< DEGRADED 区间上界（米）
+    double z_nis_ok_max{9.21};         ///< 自由度 ~1..2 的大致 OK 区
+    double z_nis_reject_max{16.0};
 
-    // -------- 在线 vs baseline 航向误差阈值 --------
+    // -------- 更新接受率阈值（统计一定时间窗口内）--------
     //
-    // 单位 rad；可按 3° / 10° 等经验值设置。
+    // 若某类观测（例如 DVL 水平速度）在统计窗口中实际被采样了 N 次，
+    // 仅有 accept_ratio * N 次被滤波器接受，则认为导航质量退化。
     //
-    double max_rms_yaw_ok_rad{3.0 * 3.14159265358979323846 / 180.0};   ///< ≈3°
-    double max_rms_yaw_degraded_rad{10.0 * 3.14159265358979323846 / 180.0}; ///< ≈10°
+    double dvl_accept_ratio_degraded{0.7};  ///< 接受率低于此值视为退化
+    double dvl_accept_ratio_invalid{0.4};   ///< 接受率低于此值视为严重异常
 
-    // -------- 漂移速率限制（可选）--------
+    double z_accept_ratio_degraded{0.7};
+    double z_accept_ratio_invalid{0.4};
+
+    // -------- 统计窗口长度 --------
     //
-    // 用于约束“位置漂移速度”，例如每分钟不能超过多少米。
+    // ESKF 健康评估使用一个滑动时间窗口统计 NIS / 接受率指标。
     //
-    double max_drift_rate_ok_m_per_min{1.0};       ///< OK 区间最大漂移速率
-    double max_drift_rate_degraded_m_per_min{5.0}; ///< DEGRADED 区间最大漂移速率
+    double stats_window_duration_s{60.0}; ///< 默认 60s 时间窗
 
     // -------- 工程建议策略开关 --------
     //
@@ -93,7 +95,7 @@ struct NavHealthConfig {
     // 避免在早期调试阶段过于敏感。
     //
     bool enable_stop_suggestion{true};        ///< 允许根据 INVALID 状态建议停机
-    bool enable_reloc_suggestion{true};       ///< 允许根据大漂移建议重定位
+    bool enable_reloc_suggestion{true};       ///< 允许根据观测严重异常建议重定位
     bool enable_speed_reduce_suggestion{true};///< 允许 DEGRADED 时建议减速
 };
 
@@ -101,30 +103,58 @@ struct NavHealthConfig {
 
 /**
  * @brief 导航健康原始指标（便于日志与 GCS 展示）
+ *
+ * 注：这些字段主要来源于：
+ *   - 传感器心跳 + 滤波器初始化状态；
+ *   - 近期 NIS 统计（均值 / 最大值 / 超阈比率）；
+ *   - 观测更新计数与接受率。
  */
 struct NavHealthMetrics {
     // 评估时刻（mono ns）
     MonoTimeNs eval_mono_ns{0};
 
-    // 传感器心跳信息
+    // -------- 滤波器整体状态 --------
+    bool eskf_initialized{false};    ///< ESKF 是否已完成初始对准 / 初始化
+
+    // -------- 传感器心跳信息 --------
     bool   imu_alive{false};
     bool   dvl_alive{false};
-    double imu_age_s{0.0};   ///< IMU 距离上次观测的时间（秒）
-    double dvl_age_s{0.0};   ///< DVL 距离上次观测的时间（秒）
+    double imu_age_s{0.0};   ///< IMU 距离上次有效观测的时间（秒）
+    double dvl_age_s{0.0};   ///< DVL 距离上次有效观测的时间（秒）
 
-    // baseline 相关指标
-    bool   has_baseline{false};         ///< 是否有可用 baseline
-    double baseline_duration_s{0.0};    ///< baseline 时间跨度
-    double baseline_path_length_m{0.0}; ///< baseline 轨迹总长度（XY）
+    // -------- DVL 水平速度更新统计（vE,vN）--------
+    //
+    // 统计窗口内的计数与 NIS 指标。
+    //
+    std::size_t dvl_xy_updates_total{0};      ///< 时间窗内 DVL XY 更新尝试总数
+    std::size_t dvl_xy_updates_accepted{0};   ///< 其中被接受的次数
 
-    // 在线 vs baseline 对齐后的误差指标
-    double rms_xy_m{0.0};        ///< 平面位置 RMS 误差（米）
-    double rms_yaw_rad{0.0};     ///< 航向 RMS 误差（rad）
-    double drift_rate_m_per_min{0.0}; ///< 漂移速率估计（米/分钟）
+    double      dvl_xy_nis_mean{0.0};         ///< NIS 均值
+    double      dvl_xy_nis_max{0.0};          ///< NIS 最大值
+    double      dvl_xy_nis_last{0.0};         ///< 最近一次 NIS
 
-    // 预留扩展字段（例如 Z 方向误差、速度误差等）
-    double rms_z_m{0.0};
-    double rms_speed_mps{0.0};
+    double      dvl_xy_accept_ratio{0.0};     ///< 接受率（0..1）
+
+    // -------- 垂向观测更新统计（vU / depth / pressure）--------
+    std::size_t z_updates_total{0};           ///< 时间窗内垂向更新总数
+    std::size_t z_updates_accepted{0};        ///< 接受次数
+
+    double      z_nis_mean{0.0};              ///< NIS 均值
+    double      z_nis_max{0.0};               ///< NIS 最大值
+    double      z_nis_last{0.0};              ///< 最近一次 NIS
+
+    double      z_accept_ratio{0.0};          ///< 接受率（0..1）
+
+    // -------- 预留扩展：位置 / 速度漂移估计等 --------
+    //
+    // 若将来需要，可由外部模块计算误差（例如与锚点 / 浮标对齐）后填充。
+    //
+    double est_horizontal_drift_m{0.0};       ///< 估计水平漂移（工程意义）
+    double est_vertical_drift_m{0.0};         ///< 估计垂向漂移
+
+    // 最近一次在线 NavState 的部分信息（只读辅助展示用）
+    double last_yaw_rad{0.0};                 ///< 最近一次 NavState 中的 yaw
+    double last_speed_xy_mps{0.0};            ///< 水平速度模长估计
 };
 
 /**
@@ -141,7 +171,7 @@ struct NavHealthDecision {
 
     bool recommend_stop_motion{false};   ///< 建议立即停机（进入 failsafe）
     bool recommend_reduce_speed{false};  ///< 建议降低速度（安全保守）
-    bool recommend_relocalize{false};    ///< 建议执行重定位（如回池边 / 上浮）
+    bool recommend_relocalize{false};    ///< 建议执行重定位（回池边 / 上浮等）
 };
 
 /**
@@ -155,25 +185,32 @@ struct NavHealthReport {
 // ============================ 3. 健康监测主类 ============================
 
 /**
- * @brief 导航健康监测器。
+ * @brief 基于 ESKF 的导航健康监测器。
  *
  * 使用方式（典型流程）：
  *
  *   NavHealthMonitor monitor(cfg);
  *
- *   // 1) 每当收到 NavState（来自 online estimator）：
+ *   // 1) 滤波器初始化 / 重置时：
+ *   monitor.notify_eskf_reset(now_mono_ns);
+ *
+ *   // 2) 每当 ESKF 执行一次 IMU 预测步（可选，仅统计频率）：
+ *   monitor.notify_imu_propagate(now_mono_ns);
+ *
+ *   // 3) 每当 ESKF 执行一次 DVL 水平速度更新：
+ *   monitor.notify_dvl_xy_update(now_mono_ns, nis, accepted);
+ *
+ *   // 4) 每当 ESKF 执行一次垂向观测更新（DVL vU / 深度 / 压力）：
+ *   monitor.notify_z_update(now_mono_ns, nis, accepted);
+ *
+ *   // 5) 控制循环周期性更新传感器心跳与在线 NavState：
+ *   monitor.update_sensor_heartbeat(now_mono_ns, last_imu_ns, last_dvl_ns);
  *   monitor.update_online_state(nav_state);
  *
- *   // 2) 每当完成一轮因子图平滑：
- *   monitor.update_baseline_from_graph(window_begin_ns,
- *                                      window_end_ns,
- *                                      smoother_result);
+ *   // 6) 周期性进行健康评估：
+ *   NavHealthReport rep = monitor.evaluate(now_mono_ns);
  *
- *   // 3) 在控制循环中周期性更新传感器心跳和评估：
- *   monitor.update_sensor_heartbeat(now_ns, last_imu_ns, last_dvl_ns);
- *   NavHealthReport rep = monitor.evaluate(now_ns);
- *
- *   // 4) 控制层根据 rep.decision.health / recommend_* 做模式切换或停机。
+ *   // 7) 控制层根据 rep.decision.health / recommend_* 做模式切换或停机。
  */
 class NavHealthMonitor {
 public:
@@ -184,6 +221,38 @@ public:
 
     /// @brief 获取当前配置（只读引用）。
     const NavHealthConfig& config() const noexcept { return cfg_; }
+
+    // -------------------- 滤波器整体事件 --------------------
+
+    /// @brief 通知监视器“ESKF 已完成初始化 / 重置”。
+    void notify_eskf_reset(MonoTimeNs now_mono_ns) noexcept;
+
+    /// @brief 通知监视器“执行了一次 IMU 预测步”（可选，主要用于频率统计）。
+    void notify_imu_propagate(MonoTimeNs now_mono_ns) noexcept;
+
+    // -------------------- ESKF 观测更新事件 --------------------
+
+    /**
+     * @brief 通知监视器“执行了一次 DVL 水平速度更新（vE,vN）”。
+     *
+     * @param now_mono_ns 当前时间（mono ns）
+     * @param nis         本次更新的 NIS（若未计算可传负值并在实现里忽略）
+     * @param accepted    滤波器是否最终接受该观测（true=接受，false=拒绝）
+     */
+    void notify_dvl_xy_update(MonoTimeNs now_mono_ns,
+                              double nis,
+                              bool accepted) noexcept;
+
+    /**
+     * @brief 通知监视器“执行了一次垂向观测更新（vU / depth / pressure）”。
+     *
+     * @param now_mono_ns 当前时间（mono ns）
+     * @param nis         本次更新的 NIS
+     * @param accepted    是否被接受
+     */
+    void notify_z_update(MonoTimeNs now_mono_ns,
+                         double nis,
+                         bool accepted) noexcept;
 
     // -------------------- 传感器心跳更新 --------------------
 
@@ -205,30 +274,10 @@ public:
      *
      * 说明：
      *   - 本接口不会做复杂计算，只是缓存最近一次 NavState；
-     *   - evaluate() 时可以结合该状态（例如 yaw、速度等）做额外判断；
-     *   - 若不需要，可选择不调用，本模块仍然可以基于 baseline 和心跳工作。
+     *   - evaluate() 时可以结合 yaw / 速度等信息做辅助判断或展示；
+     *   - 若不需要，可选择不调用，本模块仍然可以工作。
      */
     void update_online_state(const shared::msg::NavState& nav) noexcept;
-
-    // -------------------- baseline / 因子图结果输入 --------------------
-
-    /**
-     * @brief 使用因子图平滑结果更新 baseline 评估。
-     *
-     * @param window_begin_ns 对应数据时间窗的起始（mono ns）
-     * @param window_end_ns   对应数据时间窗的结束（mono ns）
-     * @param result          因子图平滑结果（内部会提取误差指标）
-     *
-     * 约定：
-     *   - 此接口由“离线/准在线平滑模块”在每次完成因子图后调用；
-     *   - NavHealthMonitor 内部只保留一份最近的 baseline 概要指标，
-     *     不保存完整轨迹数组，以控制内存占用；
-     *   - 若 result 不满足 min_baseline_duration_s / min_baseline_samples 等条件，
-     *     内部会标记 has_baseline=false。
-     */
-    void update_baseline_from_graph(MonoTimeNs window_begin_ns,
-                                    MonoTimeNs window_end_ns,
-                                    const GraphSmoother2DResult& result);
 
     // -------------------- 主评估接口 --------------------
 
@@ -240,10 +289,12 @@ public:
      *
      * 典型评估逻辑（在 .cpp 中实现）：
      *   1) 基于传感器心跳计算 imu_alive/dvl_alive 及 age_s；
-     *   2) 检查 baseline 是否存在且满足配置要求；
-     *   3) 综合 baseline 中的 rms_xy_m / rms_yaw_rad / drift_rate 等指标，
-     *      与 NavHealthConfig 阈值比较，得出 health 档位；
-     *   4) 结合传感器掉线情况、health 档位，设置 recommend_* 建议；
+     *   2) 在配置的时间窗口内统计 DVL / 垂向观测更新的 NIS 与接受率；
+     *   3) 根据 NavHealthConfig 中的 NIS / 接受率阈值，判定健康档位：
+     *        - 有严重传感器掉线或接受率极低 → INVALID；
+     *        - 指标处于中间区间 → DEGRADED；
+     *        - 其余情况 → OK；
+     *   4) 结合 health 档位与传感器状态，设置 recommend_* 建议；
      *   5) 根据 health & 传感器状态填充 status_flags（NavStatusFlags）。
      */
     NavHealthReport evaluate(MonoTimeNs now_mono_ns) const noexcept;
@@ -258,12 +309,36 @@ private:
 
     // 最近一次在线导航状态（可选）
     shared::msg::NavState last_nav_state_{};
+    bool                  has_nav_state_{false};
 
-    // 最近一次 baseline 概要信息
-    bool        has_baseline_{false};
-    MonoTimeNs  baseline_begin_ns_{0};
-    MonoTimeNs  baseline_end_ns_{0};
-    NavHealthMetrics baseline_metrics_snapshot_{}; ///< 仅使用其中 baseline 相关字段
+    // ESKF 初始化标志
+    bool      eskf_initialized_{false};
+    MonoTimeNs eskf_last_reset_ns_{0};
+
+    // -------------------- 统计窗口内部状态 --------------------
+    //
+    // 简化设计：仅记录“当前统计窗口”的汇总量，具体窗口对齐策略
+    // 由 .cpp 中根据 stats_window_duration_s 和时间戳实现。
+    //
+    // DVL XY 更新统计
+    std::size_t dvl_xy_updates_total_{0};
+    std::size_t dvl_xy_updates_accepted_{0};
+    double      dvl_xy_nis_sum_{0.0};
+    double      dvl_xy_nis_max_{0.0};
+    double      dvl_xy_nis_last_{0.0};
+
+    // 垂向更新统计
+    std::size_t z_updates_total_{0};
+    std::size_t z_updates_accepted_{0};
+    double      z_nis_sum_{0.0};
+    double      z_nis_max_{0.0};
+    double      z_nis_last_{0.0};
+
+    // 统计窗口起点（mono ns）
+    MonoTimeNs stats_window_begin_ns_{0};
+
+    // 辅助：重置统计窗口
+    void reset_stats_window(MonoTimeNs new_begin_ns) noexcept;
 };
 
 } // namespace nav_core::estimator

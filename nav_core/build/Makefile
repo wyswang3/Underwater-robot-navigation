@@ -149,19 +149,6 @@ nav_core/fast:
 	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/build
 .PHONY : nav_core/fast
 
-#=============================================================================
-# Target rules for targets named witmotion_sdk
-
-# Build rule for target.
-witmotion_sdk: cmake_check_build_system
-	$(MAKE) -f CMakeFiles/Makefile2 witmotion_sdk
-.PHONY : witmotion_sdk
-
-# fast build rule for target.
-witmotion_sdk/fast:
-	$(MAKE) -f CMakeFiles/witmotion_sdk.dir/build.make CMakeFiles/witmotion_sdk.dir/build
-.PHONY : witmotion_sdk/fast
-
 src/nav_core/app/nav_daemon.o: src/nav_core/app/nav_daemon.cpp.o
 
 .PHONY : src/nav_core/app/nav_daemon.o
@@ -215,6 +202,33 @@ src/nav_core/app/nav_daemon_config.s: src/nav_core/app/nav_daemon_config.cpp.s
 src/nav_core/app/nav_daemon_config.cpp.s:
 	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/app/nav_daemon_config.cpp.s
 .PHONY : src/nav_core/app/nav_daemon_config.cpp.s
+
+src/nav_core/app/nav_daemon_runner.o: src/nav_core/app/nav_daemon_runner.cpp.o
+
+.PHONY : src/nav_core/app/nav_daemon_runner.o
+
+# target to build an object file
+src/nav_core/app/nav_daemon_runner.cpp.o:
+	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon_runner.cpp.o
+.PHONY : src/nav_core/app/nav_daemon_runner.cpp.o
+
+src/nav_core/app/nav_daemon_runner.i: src/nav_core/app/nav_daemon_runner.cpp.i
+
+.PHONY : src/nav_core/app/nav_daemon_runner.i
+
+# target to preprocess a source file
+src/nav_core/app/nav_daemon_runner.cpp.i:
+	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon_runner.cpp.i
+.PHONY : src/nav_core/app/nav_daemon_runner.cpp.i
+
+src/nav_core/app/nav_daemon_runner.s: src/nav_core/app/nav_daemon_runner.cpp.s
+
+.PHONY : src/nav_core/app/nav_daemon_runner.s
+
+# target to generate assembly for a file
+src/nav_core/app/nav_daemon_runner.cpp.s:
+	$(MAKE) -f CMakeFiles/uwnav_navd.dir/build.make CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon_runner.cpp.s
+.PHONY : src/nav_core/app/nav_daemon_runner.cpp.s
 
 src/nav_core/app/tools/DVL_selftest.o: src/nav_core/app/tools/DVL_selftest.cpp.o
 
@@ -378,140 +392,167 @@ src/nav_core/drivers/imu_driver_wit.cpp.s:
 	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/drivers/imu_driver_wit.cpp.s
 .PHONY : src/nav_core/drivers/imu_driver_wit.cpp.s
 
-src/nav_core/estimator/graph_smoother_2d.o: src/nav_core/estimator/graph_smoother_2d.cpp.o
+src/nav_core/estimator/eskf.o: src/nav_core/estimator/eskf.cpp.o
 
-.PHONY : src/nav_core/estimator/graph_smoother_2d.o
-
-# target to build an object file
-src/nav_core/estimator/graph_smoother_2d.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.o
-.PHONY : src/nav_core/estimator/graph_smoother_2d.cpp.o
-
-src/nav_core/estimator/graph_smoother_2d.i: src/nav_core/estimator/graph_smoother_2d.cpp.i
-
-.PHONY : src/nav_core/estimator/graph_smoother_2d.i
-
-# target to preprocess a source file
-src/nav_core/estimator/graph_smoother_2d.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.i
-.PHONY : src/nav_core/estimator/graph_smoother_2d.cpp.i
-
-src/nav_core/estimator/graph_smoother_2d.s: src/nav_core/estimator/graph_smoother_2d.cpp.s
-
-.PHONY : src/nav_core/estimator/graph_smoother_2d.s
-
-# target to generate assembly for a file
-src/nav_core/estimator/graph_smoother_2d.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/graph_smoother_2d.cpp.s
-.PHONY : src/nav_core/estimator/graph_smoother_2d.cpp.s
-
-src/nav_core/estimator/nav_health_monitor.o: src/nav_core/estimator/nav_health_monitor.cpp.o
-
-.PHONY : src/nav_core/estimator/nav_health_monitor.o
+.PHONY : src/nav_core/estimator/eskf.o
 
 # target to build an object file
-src/nav_core/estimator/nav_health_monitor.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.o
-.PHONY : src/nav_core/estimator/nav_health_monitor.cpp.o
+src/nav_core/estimator/eskf.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf.cpp.o
+.PHONY : src/nav_core/estimator/eskf.cpp.o
 
-src/nav_core/estimator/nav_health_monitor.i: src/nav_core/estimator/nav_health_monitor.cpp.i
+src/nav_core/estimator/eskf.i: src/nav_core/estimator/eskf.cpp.i
 
-.PHONY : src/nav_core/estimator/nav_health_monitor.i
+.PHONY : src/nav_core/estimator/eskf.i
 
 # target to preprocess a source file
-src/nav_core/estimator/nav_health_monitor.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.i
-.PHONY : src/nav_core/estimator/nav_health_monitor.cpp.i
+src/nav_core/estimator/eskf.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf.cpp.i
+.PHONY : src/nav_core/estimator/eskf.cpp.i
 
-src/nav_core/estimator/nav_health_monitor.s: src/nav_core/estimator/nav_health_monitor.cpp.s
+src/nav_core/estimator/eskf.s: src/nav_core/estimator/eskf.cpp.s
 
-.PHONY : src/nav_core/estimator/nav_health_monitor.s
+.PHONY : src/nav_core/estimator/eskf.s
 
 # target to generate assembly for a file
-src/nav_core/estimator/nav_health_monitor.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/nav_health_monitor.cpp.s
-.PHONY : src/nav_core/estimator/nav_health_monitor.cpp.s
+src/nav_core/estimator/eskf.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf.cpp.s
+.PHONY : src/nav_core/estimator/eskf.cpp.s
 
-src/nav_core/estimator/online_estimator.o: src/nav_core/estimator/online_estimator.cpp.o
+src/nav_core/estimator/eskf_config_yaml.o: src/nav_core/estimator/eskf_config_yaml.cpp.o
 
-.PHONY : src/nav_core/estimator/online_estimator.o
+.PHONY : src/nav_core/estimator/eskf_config_yaml.o
 
 # target to build an object file
-src/nav_core/estimator/online_estimator.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.o
-.PHONY : src/nav_core/estimator/online_estimator.cpp.o
+src/nav_core/estimator/eskf_config_yaml.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_config_yaml.cpp.o
+.PHONY : src/nav_core/estimator/eskf_config_yaml.cpp.o
 
-src/nav_core/estimator/online_estimator.i: src/nav_core/estimator/online_estimator.cpp.i
+src/nav_core/estimator/eskf_config_yaml.i: src/nav_core/estimator/eskf_config_yaml.cpp.i
 
-.PHONY : src/nav_core/estimator/online_estimator.i
+.PHONY : src/nav_core/estimator/eskf_config_yaml.i
 
 # target to preprocess a source file
-src/nav_core/estimator/online_estimator.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.i
-.PHONY : src/nav_core/estimator/online_estimator.cpp.i
+src/nav_core/estimator/eskf_config_yaml.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_config_yaml.cpp.i
+.PHONY : src/nav_core/estimator/eskf_config_yaml.cpp.i
 
-src/nav_core/estimator/online_estimator.s: src/nav_core/estimator/online_estimator.cpp.s
+src/nav_core/estimator/eskf_config_yaml.s: src/nav_core/estimator/eskf_config_yaml.cpp.s
 
-.PHONY : src/nav_core/estimator/online_estimator.s
+.PHONY : src/nav_core/estimator/eskf_config_yaml.s
 
 # target to generate assembly for a file
-src/nav_core/estimator/online_estimator.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/online_estimator.cpp.s
-.PHONY : src/nav_core/estimator/online_estimator.cpp.s
+src/nav_core/estimator/eskf_config_yaml.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_config_yaml.cpp.s
+.PHONY : src/nav_core/estimator/eskf_config_yaml.cpp.s
 
-src/nav_core/filters/eskf.o: src/nav_core/filters/eskf.cpp.o
+src/nav_core/estimator/eskf_core.o: src/nav_core/estimator/eskf_core.cpp.o
 
-.PHONY : src/nav_core/filters/eskf.o
+.PHONY : src/nav_core/estimator/eskf_core.o
 
 # target to build an object file
-src/nav_core/filters/eskf.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.o
-.PHONY : src/nav_core/filters/eskf.cpp.o
+src/nav_core/estimator/eskf_core.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_core.cpp.o
+.PHONY : src/nav_core/estimator/eskf_core.cpp.o
 
-src/nav_core/filters/eskf.i: src/nav_core/filters/eskf.cpp.i
+src/nav_core/estimator/eskf_core.i: src/nav_core/estimator/eskf_core.cpp.i
 
-.PHONY : src/nav_core/filters/eskf.i
+.PHONY : src/nav_core/estimator/eskf_core.i
 
 # target to preprocess a source file
-src/nav_core/filters/eskf.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.i
-.PHONY : src/nav_core/filters/eskf.cpp.i
+src/nav_core/estimator/eskf_core.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_core.cpp.i
+.PHONY : src/nav_core/estimator/eskf_core.cpp.i
 
-src/nav_core/filters/eskf.s: src/nav_core/filters/eskf.cpp.s
+src/nav_core/estimator/eskf_core.s: src/nav_core/estimator/eskf_core.cpp.s
 
-.PHONY : src/nav_core/filters/eskf.s
+.PHONY : src/nav_core/estimator/eskf_core.s
 
 # target to generate assembly for a file
-src/nav_core/filters/eskf.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/eskf.cpp.s
-.PHONY : src/nav_core/filters/eskf.cpp.s
+src/nav_core/estimator/eskf_core.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_core.cpp.s
+.PHONY : src/nav_core/estimator/eskf_core.cpp.s
 
-src/nav_core/filters/imu_rt_filter.o: src/nav_core/filters/imu_rt_filter.cpp.o
+src/nav_core/estimator/eskf_propagate.o: src/nav_core/estimator/eskf_propagate.cpp.o
 
-.PHONY : src/nav_core/filters/imu_rt_filter.o
+.PHONY : src/nav_core/estimator/eskf_propagate.o
 
 # target to build an object file
-src/nav_core/filters/imu_rt_filter.cpp.o:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.o
-.PHONY : src/nav_core/filters/imu_rt_filter.cpp.o
+src/nav_core/estimator/eskf_propagate.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_propagate.cpp.o
+.PHONY : src/nav_core/estimator/eskf_propagate.cpp.o
 
-src/nav_core/filters/imu_rt_filter.i: src/nav_core/filters/imu_rt_filter.cpp.i
+src/nav_core/estimator/eskf_propagate.i: src/nav_core/estimator/eskf_propagate.cpp.i
 
-.PHONY : src/nav_core/filters/imu_rt_filter.i
+.PHONY : src/nav_core/estimator/eskf_propagate.i
 
 # target to preprocess a source file
-src/nav_core/filters/imu_rt_filter.cpp.i:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.i
-.PHONY : src/nav_core/filters/imu_rt_filter.cpp.i
+src/nav_core/estimator/eskf_propagate.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_propagate.cpp.i
+.PHONY : src/nav_core/estimator/eskf_propagate.cpp.i
 
-src/nav_core/filters/imu_rt_filter.s: src/nav_core/filters/imu_rt_filter.cpp.s
+src/nav_core/estimator/eskf_propagate.s: src/nav_core/estimator/eskf_propagate.cpp.s
 
-.PHONY : src/nav_core/filters/imu_rt_filter.s
+.PHONY : src/nav_core/estimator/eskf_propagate.s
 
 # target to generate assembly for a file
-src/nav_core/filters/imu_rt_filter.cpp.s:
-	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/filters/imu_rt_filter.cpp.s
-.PHONY : src/nav_core/filters/imu_rt_filter.cpp.s
+src/nav_core/estimator/eskf_propagate.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_propagate.cpp.s
+.PHONY : src/nav_core/estimator/eskf_propagate.cpp.s
+
+src/nav_core/estimator/eskf_update_dvl.o: src/nav_core/estimator/eskf_update_dvl.cpp.o
+
+.PHONY : src/nav_core/estimator/eskf_update_dvl.o
+
+# target to build an object file
+src/nav_core/estimator/eskf_update_dvl.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_update_dvl.cpp.o
+.PHONY : src/nav_core/estimator/eskf_update_dvl.cpp.o
+
+src/nav_core/estimator/eskf_update_dvl.i: src/nav_core/estimator/eskf_update_dvl.cpp.i
+
+.PHONY : src/nav_core/estimator/eskf_update_dvl.i
+
+# target to preprocess a source file
+src/nav_core/estimator/eskf_update_dvl.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_update_dvl.cpp.i
+.PHONY : src/nav_core/estimator/eskf_update_dvl.cpp.i
+
+src/nav_core/estimator/eskf_update_dvl.s: src/nav_core/estimator/eskf_update_dvl.cpp.s
+
+.PHONY : src/nav_core/estimator/eskf_update_dvl.s
+
+# target to generate assembly for a file
+src/nav_core/estimator/eskf_update_dvl.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_update_dvl.cpp.s
+.PHONY : src/nav_core/estimator/eskf_update_dvl.cpp.s
+
+src/nav_core/estimator/eskf_update_yaw.o: src/nav_core/estimator/eskf_update_yaw.cpp.o
+
+.PHONY : src/nav_core/estimator/eskf_update_yaw.o
+
+# target to build an object file
+src/nav_core/estimator/eskf_update_yaw.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_update_yaw.cpp.o
+.PHONY : src/nav_core/estimator/eskf_update_yaw.cpp.o
+
+src/nav_core/estimator/eskf_update_yaw.i: src/nav_core/estimator/eskf_update_yaw.cpp.i
+
+.PHONY : src/nav_core/estimator/eskf_update_yaw.i
+
+# target to preprocess a source file
+src/nav_core/estimator/eskf_update_yaw.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_update_yaw.cpp.i
+.PHONY : src/nav_core/estimator/eskf_update_yaw.cpp.i
+
+src/nav_core/estimator/eskf_update_yaw.s: src/nav_core/estimator/eskf_update_yaw.cpp.s
+
+.PHONY : src/nav_core/estimator/eskf_update_yaw.s
+
+# target to generate assembly for a file
+src/nav_core/estimator/eskf_update_yaw.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/estimator/eskf_update_yaw.cpp.s
+.PHONY : src/nav_core/estimator/eskf_update_yaw.cpp.s
 
 src/nav_core/io/bin_logger.o: src/nav_core/io/bin_logger.cpp.o
 
@@ -567,13 +608,67 @@ src/nav_core/io/nav_state_publisher.cpp.s:
 	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/io/nav_state_publisher.cpp.s
 .PHONY : src/nav_core/io/nav_state_publisher.cpp.s
 
+src/nav_core/preprocess/dvl_rt_preprocessor.o: src/nav_core/preprocess/dvl_rt_preprocessor.cpp.o
+
+.PHONY : src/nav_core/preprocess/dvl_rt_preprocessor.o
+
+# target to build an object file
+src/nav_core/preprocess/dvl_rt_preprocessor.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/preprocess/dvl_rt_preprocessor.cpp.o
+.PHONY : src/nav_core/preprocess/dvl_rt_preprocessor.cpp.o
+
+src/nav_core/preprocess/dvl_rt_preprocessor.i: src/nav_core/preprocess/dvl_rt_preprocessor.cpp.i
+
+.PHONY : src/nav_core/preprocess/dvl_rt_preprocessor.i
+
+# target to preprocess a source file
+src/nav_core/preprocess/dvl_rt_preprocessor.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/preprocess/dvl_rt_preprocessor.cpp.i
+.PHONY : src/nav_core/preprocess/dvl_rt_preprocessor.cpp.i
+
+src/nav_core/preprocess/dvl_rt_preprocessor.s: src/nav_core/preprocess/dvl_rt_preprocessor.cpp.s
+
+.PHONY : src/nav_core/preprocess/dvl_rt_preprocessor.s
+
+# target to generate assembly for a file
+src/nav_core/preprocess/dvl_rt_preprocessor.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/preprocess/dvl_rt_preprocessor.cpp.s
+.PHONY : src/nav_core/preprocess/dvl_rt_preprocessor.cpp.s
+
+src/nav_core/preprocess/imu_rt_preprocessor.o: src/nav_core/preprocess/imu_rt_preprocessor.cpp.o
+
+.PHONY : src/nav_core/preprocess/imu_rt_preprocessor.o
+
+# target to build an object file
+src/nav_core/preprocess/imu_rt_preprocessor.cpp.o:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/preprocess/imu_rt_preprocessor.cpp.o
+.PHONY : src/nav_core/preprocess/imu_rt_preprocessor.cpp.o
+
+src/nav_core/preprocess/imu_rt_preprocessor.i: src/nav_core/preprocess/imu_rt_preprocessor.cpp.i
+
+.PHONY : src/nav_core/preprocess/imu_rt_preprocessor.i
+
+# target to preprocess a source file
+src/nav_core/preprocess/imu_rt_preprocessor.cpp.i:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/preprocess/imu_rt_preprocessor.cpp.i
+.PHONY : src/nav_core/preprocess/imu_rt_preprocessor.cpp.i
+
+src/nav_core/preprocess/imu_rt_preprocessor.s: src/nav_core/preprocess/imu_rt_preprocessor.cpp.s
+
+.PHONY : src/nav_core/preprocess/imu_rt_preprocessor.s
+
+# target to generate assembly for a file
+src/nav_core/preprocess/imu_rt_preprocessor.cpp.s:
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/src/nav_core/preprocess/imu_rt_preprocessor.cpp.s
+.PHONY : src/nav_core/preprocess/imu_rt_preprocessor.cpp.s
+
 third_party/witmotion/wit_c_sdk.o: third_party/witmotion/wit_c_sdk.c.o
 
 .PHONY : third_party/witmotion/wit_c_sdk.o
 
 # target to build an object file
 third_party/witmotion/wit_c_sdk.c.o:
-	$(MAKE) -f CMakeFiles/witmotion_sdk.dir/build.make CMakeFiles/witmotion_sdk.dir/third_party/witmotion/wit_c_sdk.c.o
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/third_party/witmotion/wit_c_sdk.c.o
 .PHONY : third_party/witmotion/wit_c_sdk.c.o
 
 third_party/witmotion/wit_c_sdk.i: third_party/witmotion/wit_c_sdk.c.i
@@ -582,7 +677,7 @@ third_party/witmotion/wit_c_sdk.i: third_party/witmotion/wit_c_sdk.c.i
 
 # target to preprocess a source file
 third_party/witmotion/wit_c_sdk.c.i:
-	$(MAKE) -f CMakeFiles/witmotion_sdk.dir/build.make CMakeFiles/witmotion_sdk.dir/third_party/witmotion/wit_c_sdk.c.i
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/third_party/witmotion/wit_c_sdk.c.i
 .PHONY : third_party/witmotion/wit_c_sdk.c.i
 
 third_party/witmotion/wit_c_sdk.s: third_party/witmotion/wit_c_sdk.c.s
@@ -591,7 +686,7 @@ third_party/witmotion/wit_c_sdk.s: third_party/witmotion/wit_c_sdk.c.s
 
 # target to generate assembly for a file
 third_party/witmotion/wit_c_sdk.c.s:
-	$(MAKE) -f CMakeFiles/witmotion_sdk.dir/build.make CMakeFiles/witmotion_sdk.dir/third_party/witmotion/wit_c_sdk.c.s
+	$(MAKE) -f CMakeFiles/nav_core.dir/build.make CMakeFiles/nav_core.dir/third_party/witmotion/wit_c_sdk.c.s
 .PHONY : third_party/witmotion/wit_c_sdk.c.s
 
 # Help Target
@@ -605,13 +700,15 @@ help:
 	@echo "... uwnav_dvl_selftest"
 	@echo "... uwnav_navd"
 	@echo "... nav_core"
-	@echo "... witmotion_sdk"
 	@echo "... src/nav_core/app/nav_daemon.o"
 	@echo "... src/nav_core/app/nav_daemon.i"
 	@echo "... src/nav_core/app/nav_daemon.s"
 	@echo "... src/nav_core/app/nav_daemon_config.o"
 	@echo "... src/nav_core/app/nav_daemon_config.i"
 	@echo "... src/nav_core/app/nav_daemon_config.s"
+	@echo "... src/nav_core/app/nav_daemon_runner.o"
+	@echo "... src/nav_core/app/nav_daemon_runner.i"
+	@echo "... src/nav_core/app/nav_daemon_runner.s"
 	@echo "... src/nav_core/app/tools/DVL_selftest.o"
 	@echo "... src/nav_core/app/tools/DVL_selftest.i"
 	@echo "... src/nav_core/app/tools/DVL_selftest.s"
@@ -630,27 +727,36 @@ help:
 	@echo "... src/nav_core/drivers/imu_driver_wit.o"
 	@echo "... src/nav_core/drivers/imu_driver_wit.i"
 	@echo "... src/nav_core/drivers/imu_driver_wit.s"
-	@echo "... src/nav_core/estimator/graph_smoother_2d.o"
-	@echo "... src/nav_core/estimator/graph_smoother_2d.i"
-	@echo "... src/nav_core/estimator/graph_smoother_2d.s"
-	@echo "... src/nav_core/estimator/nav_health_monitor.o"
-	@echo "... src/nav_core/estimator/nav_health_monitor.i"
-	@echo "... src/nav_core/estimator/nav_health_monitor.s"
-	@echo "... src/nav_core/estimator/online_estimator.o"
-	@echo "... src/nav_core/estimator/online_estimator.i"
-	@echo "... src/nav_core/estimator/online_estimator.s"
-	@echo "... src/nav_core/filters/eskf.o"
-	@echo "... src/nav_core/filters/eskf.i"
-	@echo "... src/nav_core/filters/eskf.s"
-	@echo "... src/nav_core/filters/imu_rt_filter.o"
-	@echo "... src/nav_core/filters/imu_rt_filter.i"
-	@echo "... src/nav_core/filters/imu_rt_filter.s"
+	@echo "... src/nav_core/estimator/eskf.o"
+	@echo "... src/nav_core/estimator/eskf.i"
+	@echo "... src/nav_core/estimator/eskf.s"
+	@echo "... src/nav_core/estimator/eskf_config_yaml.o"
+	@echo "... src/nav_core/estimator/eskf_config_yaml.i"
+	@echo "... src/nav_core/estimator/eskf_config_yaml.s"
+	@echo "... src/nav_core/estimator/eskf_core.o"
+	@echo "... src/nav_core/estimator/eskf_core.i"
+	@echo "... src/nav_core/estimator/eskf_core.s"
+	@echo "... src/nav_core/estimator/eskf_propagate.o"
+	@echo "... src/nav_core/estimator/eskf_propagate.i"
+	@echo "... src/nav_core/estimator/eskf_propagate.s"
+	@echo "... src/nav_core/estimator/eskf_update_dvl.o"
+	@echo "... src/nav_core/estimator/eskf_update_dvl.i"
+	@echo "... src/nav_core/estimator/eskf_update_dvl.s"
+	@echo "... src/nav_core/estimator/eskf_update_yaw.o"
+	@echo "... src/nav_core/estimator/eskf_update_yaw.i"
+	@echo "... src/nav_core/estimator/eskf_update_yaw.s"
 	@echo "... src/nav_core/io/bin_logger.o"
 	@echo "... src/nav_core/io/bin_logger.i"
 	@echo "... src/nav_core/io/bin_logger.s"
 	@echo "... src/nav_core/io/nav_state_publisher.o"
 	@echo "... src/nav_core/io/nav_state_publisher.i"
 	@echo "... src/nav_core/io/nav_state_publisher.s"
+	@echo "... src/nav_core/preprocess/dvl_rt_preprocessor.o"
+	@echo "... src/nav_core/preprocess/dvl_rt_preprocessor.i"
+	@echo "... src/nav_core/preprocess/dvl_rt_preprocessor.s"
+	@echo "... src/nav_core/preprocess/imu_rt_preprocessor.o"
+	@echo "... src/nav_core/preprocess/imu_rt_preprocessor.i"
+	@echo "... src/nav_core/preprocess/imu_rt_preprocessor.s"
 	@echo "... third_party/witmotion/wit_c_sdk.o"
 	@echo "... third_party/witmotion/wit_c_sdk.i"
 	@echo "... third_party/witmotion/wit_c_sdk.s"

@@ -102,10 +102,10 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
     {
         YAML::Node loop_n = get_child(root, "loop");
         if (loop_n) {
-            load_scalar(loop_n, "nav_loop_hz",        out_cfg.loop.nav_loop_hz);
-            load_scalar(loop_n, "max_imu_age_s",      out_cfg.loop.max_imu_age_s);
-            load_scalar(loop_n, "max_dvl_age_s",      out_cfg.loop.max_dvl_age_s);
-            load_scalar(loop_n, "smoother_window_s",  out_cfg.loop.smoother_window_s);
+            load_scalar(loop_n, "nav_loop_hz",   out_cfg.loop.nav_loop_hz);
+            load_scalar(loop_n, "max_imu_age_s", out_cfg.loop.max_imu_age_s);
+            load_scalar(loop_n, "max_dvl_age_s", out_cfg.loop.max_dvl_age_s);
+            // 因子图相关的 smoother_window_s 已经取消，这里不再读取
         } else {
             log_warn("section 'loop' missing, using defaults");
         }
@@ -124,7 +124,7 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
                 load_scalar(drv_n, "baud",       out_cfg.imu.driver.baud);
                 load_scalar(drv_n, "slave_addr", out_cfg.imu.driver.slave_addr);
 
-                // 2.1.1 filter (ImuFilterConfig)
+                // 2.1.1 低层 filter（ImuFilterConfig），给驱动用
                 YAML::Node filt_n = get_child(drv_n, "filter");
                 if (filt_n) {
                     auto& f = out_cfg.imu.driver.filter;
@@ -139,112 +139,162 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
                 log_warn("section 'imu.driver' missing, using default ImuConfig");
             }
 
-            // 2.2 rt_filter (ImuRtFilterConfig)
-            YAML::Node rtf_n = get_child(imu_n, "rt_filter");
-            if (rtf_n) {
-                auto& rtf = out_cfg.imu.rt_filter;
+            // 2.2 实时预处理配置（ImuRtPreprocessConfig）
+            //
+            // 优先读取 imu.preprocess；若没有则兼容老字段 imu.rt_preproc。
+            YAML::Node pre_n = get_child(imu_n, "preprocess");
+            if (!pre_n) {
+                pre_n = get_child(imu_n, "rt_preproc");
+            }
+            if (pre_n) {
+                auto& pcfg = out_cfg.imu.rt_preproc;
 
-                // 新版 ImuRtFilterConfig 至少包含 deadband 这两个参数，先对齐这两个字段；
-                // 其他旧字段（static_* / *_bias_* / *_deadzone_* / yaw_unwrap_* 等）已在
-                // 结构体中移除，这里先不再从 YAML 读取，避免访问不存在成员。
-                load_scalar(rtf_n, "gyro_deadband_rad_s",   rtf.gyro_deadband_rad_s);
-                load_scalar(rtf_n, "accel_deadband_m_s2",   rtf.accel_deadband_m_s2);
+                // 2.2.1 basic 有效性过滤（ImuFilterConfig），挂在 preprocess.basic 下面
+                //
+                //   imu:
+                //     preprocess:
+                //       basic:
+                //         enable_accel: true
+                //         ...
+                YAML::Node basic_n = get_child(pre_n, "basic");
+                if (basic_n) {
+                    auto& b = pcfg.basic;
+                    load_scalar(basic_n, "enable_accel",  b.enable_accel);
+                    load_scalar(basic_n, "enable_gyro",   b.enable_gyro);
+                    load_scalar(basic_n, "enable_euler",  b.enable_euler);
+                    load_scalar(basic_n, "max_abs_accel", b.max_abs_accel);
+                    load_scalar(basic_n, "max_abs_gyro",  b.max_abs_gyro);
+                    load_scalar(basic_n, "max_euler_abs", b.max_euler_abs);
+                }
+
+                // 2.2.2 静止窗 / bias 估计参数
+                load_scalar(pre_n, "static_window_s",          pcfg.static_window_s);
+                load_scalar(pre_n, "static_max_abs_gyro",      pcfg.static_max_abs_gyro);
+                load_scalar(pre_n, "static_max_abs_accel_dev", pcfg.static_max_abs_accel_dev);
+                load_scalar(pre_n, "static_max_samples",       pcfg.static_max_samples);
+
+                // 2.2.3 重力参考与补偿
+                load_scalar(pre_n, "g_ref_m_s2",                   pcfg.g_ref_m_s2);
+                load_scalar(pre_n, "enable_gravity_compensation",  pcfg.enable_gravity_compensation);
+
+                // 2.2.4 yaw 轴滤波 + deadband
+                load_scalar(pre_n, "yaw_lpf_cutoff_hz",  pcfg.yaw_lpf_cutoff_hz);
+                load_scalar(pre_n, "yaw_deadband_rad_s", pcfg.yaw_deadband_rad_s);
+
+                // 2.2.5 全轴 deadband
+                load_scalar(pre_n, "gyro_deadband_rad_s",  pcfg.gyro_deadband_rad_s);
+                load_scalar(pre_n, "accel_deadband_m_s2",  pcfg.accel_deadband_m_s2);
+
+                // 2.2.6 roll/pitch 来源开关
+                load_scalar(pre_n, "use_imu_rp_from_sample", pcfg.use_imu_rp_from_sample);
             }
         } else {
             log_warn("section 'imu' missing, IMU will use defaults and may be disabled");
         }
     }
 
-    // ============================ 3. dvl ============================
+   // ============================ 3. dvl ============================
     {
-        YAML::Node dvl_n = get_child(root, "dvl");
-        if (dvl_n) {
-            load_scalar(dvl_n, "enable", out_cfg.dvl.enable);
+       YAML::Node dvl_n = get_child(root, "dvl");
+    if (dvl_n) {
+        load_scalar(dvl_n, "enable", out_cfg.dvl.enable);
 
-            YAML::Node drv_n = get_child(dvl_n, "driver");
-            if (drv_n) {
-                load_scalar(drv_n, "port", out_cfg.dvl.driver.port);
-                load_scalar(drv_n, "baud", out_cfg.dvl.driver.baud);
+        // 3.1 DVL 串口驱动配置
+        YAML::Node drv_n = get_child(dvl_n, "driver");
+        if (drv_n) {
+            auto& dcfg = out_cfg.dvl.driver;
 
-                // DvlFilterConfig
-                YAML::Node filt_n = get_child(drv_n, "filter");
-                if (filt_n) {
-                    auto& f = out_cfg.dvl.driver.filter;
-                    load_scalar(filt_n, "enable_velocity", f.enable_velocity);
-                    load_scalar(filt_n, "enable_altitude", f.enable_altitude);
-                    load_scalar(filt_n, "only_valid_flag", f.only_valid_flag);
-                    load_scalar(filt_n, "require_all_axes", f.require_all_axes);
-                    load_scalar(filt_n, "max_abs_vel_mps", f.max_abs_vel_mps);
-                    load_scalar(filt_n, "max_altitude_m",  f.max_altitude_m);
-                    load_scalar(filt_n, "min_altitude_m",  f.min_altitude_m);
-                    load_scalar(filt_n, "min_quality",     f.min_quality);
-                }
+            load_scalar(drv_n, "port",              dcfg.port);
+            load_scalar(drv_n, "baud",              dcfg.baud);
+            load_scalar(drv_n, "auto_reconnect",    dcfg.auto_reconnect);
+            load_scalar(drv_n, "send_startup_cmds", dcfg.send_startup_cmds);
 
-                // CS 呼率 / 平均次数（如果你已经在 DvlConfig 中加了这两个字段）
-                load_scalar(drv_n, "cs_ping_rate", out_cfg.dvl.driver.cs_ping_rate);
-                load_scalar(drv_n, "cs_avg_count", out_cfg.dvl.driver.cs_avg_count);
-            } else {
-                log_warn("section 'dvl.driver' missing, DVL will use defaults and may be disabled");
-            }
+            // 新版字段：ping_rate / avg_count
+            // （如 YAML 中缺失，则保持结构体默认值）
+            load_scalar(drv_n, "ping_rate",         dcfg.ping_rate);
+            load_scalar(drv_n, "avg_count",         dcfg.avg_count);
+
+            // ★ 旧版 driver.filter.* 已移除，对应逻辑搬到 DvlRtPreprocessConfig，
+            //   这里不再解析 "filter" 子节点。
         } else {
-            log_warn("section 'dvl' missing, DVL will use defaults and may be disabled");
+            log_warn("section 'dvl.driver' missing, DVL will use defaults and may be disabled");
         }
+
+        // 3.2 DVL 实时预处理配置（BI/BE 分流、噪声地板等）
+        YAML::Node pre_n = get_child(dvl_n, "preprocess");
+        if (!pre_n) {
+            pre_n = get_child(dvl_n, "rt_preproc");
+        }
+        if (pre_n) {
+            auto& pcfg = out_cfg.dvl.rt_preproc;  // 按你现有的配置结构命名
+
+            load_scalar(pre_n, "max_gap_s",           pcfg.max_gap_s);
+            load_scalar(pre_n, "enable_gating",       pcfg.enable_gating);
+
+            load_scalar(pre_n, "min_corr",            pcfg.min_corr);
+            load_scalar(pre_n, "min_good_beams",      pcfg.min_good_beams);
+
+            load_scalar(pre_n, "min_alt_m",           pcfg.min_alt_m);
+            load_scalar(pre_n, "max_alt_m",           pcfg.max_alt_m);
+
+            load_scalar(pre_n, "max_abs_speed_mps",   pcfg.max_abs_speed_mps);
+            load_scalar(pre_n, "dvl_noise_floor_mps", pcfg.dvl_noise_floor_mps);
+
+            load_scalar(pre_n, "require_bottom_lock", pcfg.require_bottom_lock);
+            load_scalar(pre_n, "status_mask_ok",      pcfg.status_mask_ok);
+
+            load_scalar(pre_n, "mount_yaw_rad",       pcfg.mount_yaw_rad);
+            load_scalar(pre_n, "use_be_as_enu",       pcfg.use_be_as_enu);
+           }
+    } else {
+           log_warn("section 'dvl' missing, DVL will use defaults and may be disabled");
+       }
     }
 
     // ============================ 4. estimator ============================
     {
         YAML::Node est_n = get_child(root, "estimator");
         if (est_n) {
-            load_scalar(est_n, "enable_online",   out_cfg.estimator.enable_online);
-            load_scalar(est_n, "enable_smoother", out_cfg.estimator.enable_smoother);
-            load_scalar(est_n, "enable_health",   out_cfg.estimator.enable_health);
+            auto& est_cfg = out_cfg.estimator;
 
-            // 4.1 online (OnlineEstimatorConfig)
-            YAML::Node on_n = get_child(est_n, "online");
-            if (on_n) {
-                auto& ocfg = out_cfg.estimator.online;
-
-                // ZUPT 阈值
-                load_scalar(on_n, "zupt_threshold_mps", ocfg.zupt_threshold_mps);
-
-                // YAML 中叫 max_imu_gap_s / max_dvl_gap_s，
-                // 对应 OnlineEstimatorConfig 里的 max_imu_dt_s / dvl_timeout_s
-                if (on_n["max_imu_gap_s"]) {
-                    load_scalar(on_n, "max_imu_gap_s", ocfg.max_imu_dt_s);
-                }
-                if (on_n["max_dvl_gap_s"]) {
-                    load_scalar(on_n, "max_dvl_gap_s", ocfg.dvl_timeout_s);
-                }
-
-                // dvl_noise_floor_mps：简单策略——如果配置 use_dvl_noise_floor==true，
-                // 没有单独给数值，就用 zupt_threshold_mps 当噪声地板；否则保持默认。
-                bool use_noise_floor = false;
-                if (on_n["use_dvl_noise_floor"]) {
-                    load_scalar(on_n, "use_dvl_noise_floor", use_noise_floor);
-                }
-                if (use_noise_floor) {
-                    // 若 YAML 里单独写了 dvl_noise_floor_mps 就用那个，否则退回 zupt_threshold
-                    if (on_n["dvl_noise_floor_mps"]) {
-                        load_scalar(on_n, "dvl_noise_floor_mps", ocfg.dvl_noise_floor_mps);
-                    } else if (on_n["zupt_threshold_mps"]) {
-                        ocfg.dvl_noise_floor_mps = on_n["zupt_threshold_mps"].as<double>();
-                    }
-                }
-
-                // 是否使用 DVL 垂直速度：把 use_dvl_depth 解释成 use_dvl_vertical
-                if (on_n["use_dvl_depth"]) {
-                    load_scalar(on_n, "use_dvl_depth", ocfg.use_dvl_vertical);
-                }
-            }
-
-            // 4.2 smoother / 4.3 health
+            // 4.1 健康监控总开关（新字段：enable_health）
             //
-            // 当前版本你还没确定 GraphSmoother2D / NavHealthMonitor 的最终指标，
-            // 这里先只解析 enable_*，具体 sigma / lambda / 阈值保持默认。
-            // 未来如果你把 GraphSmoother2DConfig / NavHealthConfig 设计稳定了，
-            // 再在这里把字段一一对齐即可。
+            // 说明：
+            //   - true  时，如果编译时开启了 NAV_CORE_ENABLE_GRAPH 并实现了 NavHealthMonitor，
+            //            则运行时可以根据健康状态做告警 / 降级；
+            //   - false 时，健康监控逻辑关闭，仅输出导航结果。
+            load_scalar(est_n, "enable_health", est_cfg.enable_health);
+
+            // 4.2 健康监控详细参数（NavHealthConfig）
+            //
+            // 当前 NavHealthConfig 已精简，不再包含旧版的
+            //   min_baseline_duration_s / min_baseline_samples /
+            //   max_rms_xy_ok_m / max_rms_xy_degraded_m /
+            //   max_rms_yaw_ok_rad / max_rms_yaw_degraded_rad /
+            //   max_drift_rate_ok_m_per_min / max_drift_rate_degraded_m_per_min
+            //
+            // 如需在 YAML 中配置新的参数，可以在这里按实际 struct 成员名补充。
+            YAML::Node h_n = get_child(est_n, "health");
+            if (h_n) {
+                auto& hcfg = est_cfg.health;
+
+            // 由于当前 NavHealthConfig 中尚未定义新的可配置字段，
+            // 这里先预留接口。如果未来在 nav_health_monitor.hpp /
+            // 相关头文件中补充了成员，例如：
+            //
+            //   double max_xy_drift_m;
+            //   double max_yaw_drift_rad;
+            //
+            // 则可以按如下方式添加：
+            //
+            // load_scalar(h_n, "max_xy_drift_m",     hcfg.max_xy_drift_m);
+            // load_scalar(h_n, "max_yaw_drift_rad",  hcfg.max_yaw_drift_rad);
+            //
+            // 现在先不从 YAML 中加载任何数值，全部使用结构体默认值，
+            // 避免访问不存在的成员导致编译错误。
+            }
         } else {
-            log_warn("section 'estimator' missing, estimator configs will use defaults");
+            log_warn("section 'estimator' missing, estimator config will use defaults");
         }
     }
 
@@ -256,10 +306,37 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
             load_scalar(log_n, "base_dir",      out_cfg.logging.base_dir);
             load_scalar(log_n, "split_by_date", out_cfg.logging.split_by_date);
 
-            load_scalar(log_n, "log_imu",       out_cfg.logging.log_imu);
-            load_scalar(log_n, "log_dvl",       out_cfg.logging.log_dvl);
-            load_scalar(log_n, "log_nav_state", out_cfg.logging.log_nav_state);
-            load_scalar(log_n, "log_eskf",      out_cfg.logging.log_eskf);
+            // 新版多路日志开关
+            load_scalar(log_n, "log_imu_raw",        out_cfg.logging.log_imu_raw);
+            load_scalar(log_n, "log_dvl_raw",        out_cfg.logging.log_dvl_raw);
+            load_scalar(log_n, "log_imu_processed",  out_cfg.logging.log_imu_processed);
+            load_scalar(log_n, "log_dvl_processed",  out_cfg.logging.log_dvl_processed);
+            load_scalar(log_n, "log_eskf_state",     out_cfg.logging.log_eskf_state);
+            load_scalar(log_n, "log_eskf_update",    out_cfg.logging.log_eskf_update);
+            load_scalar(log_n, "log_health_report",  out_cfg.logging.log_health_report);
+
+            // 兼容老字段（如果你还在用旧版 yaml，可以临时复用）
+            bool old_log_imu = false, old_log_dvl = false, old_log_eskf = false;
+            if (log_n["log_imu"]) {
+                load_scalar(log_n, "log_imu", old_log_imu);
+                if (!log_n["log_imu_raw"] && !log_n["log_imu_processed"]) {
+                    out_cfg.logging.log_imu_raw       = old_log_imu;
+                    out_cfg.logging.log_imu_processed = old_log_imu;
+                }
+            }
+            if (log_n["log_dvl"]) {
+                load_scalar(log_n, "log_dvl", old_log_dvl);
+                if (!log_n["log_dvl_raw"] && !log_n["log_dvl_processed"]) {
+                    out_cfg.logging.log_dvl_raw       = old_log_dvl;
+                    out_cfg.logging.log_dvl_processed = old_log_dvl;
+                }
+            }
+            if (log_n["log_eskf"]) {
+                load_scalar(log_n, "log_eskf", old_log_eskf);
+                if (!log_n["log_eskf_state"]) {
+                    out_cfg.logging.log_eskf_state = old_log_eskf;
+                }
+            }
         } else {
             log_warn("section 'logging' missing, logging will use defaults");
         }

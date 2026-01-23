@@ -1,11 +1,11 @@
 # ============================================================
 # nav_daemon.yaml
-# 在线导航守护进程 nav_daemon 的主配置文件
+# 在线导航守护进程 nav_daemon 的主配置文件（ESKF 在线版）
 #
 # 说明：
-#   - 所有字段对应 nav_core::app::NavDaemonConfig 及其子结构；
-#   - 数值是“保守的默认值 + 你当前硬件”的建议初始参数；
-#   - 真正上线前建议根据水池 / 海试数据做一次调参。
+#   - 对应 nav_core::app::NavDaemonConfig 及其子结构；
+#   - 因子图已下线，仅保留 Online ESKF + 健康监测；
+#   - 部分参数参考离线 ESKF 2D 配置做了数值对齐。
 # ============================================================
 
 # ------------------------------------------------------------
@@ -13,7 +13,7 @@
 # ------------------------------------------------------------
 loop:
   # 导航主循环频率（Hz）
-  # - 每个周期做：从 IMU/DVL 缓冲取最新样本 → OnlineEstimator 更新 → 发布 NavState
+  # - 每个周期：从 IMU/DVL 缓冲取最新样本 → OnlineEstimator 更新 → 发布 NavState
   nav_loop_hz: 50.0
 
   # 若“最新 IMU 样本时间”距离当前 mono 时刻超过该阈值，视为 IMU 掉线 / 失效
@@ -22,14 +22,13 @@ loop:
   # 若“最新 DVL 样本时间”距离当前 mono 时刻超过该阈值，视为 DVL 不在线
   max_dvl_age_s: 3.0
 
-  # 离线因子图平滑窗口长度（s），例如最近 10 分钟
-  smoother_window_s: 600.0
+  # 因子图已下线，smoother_window_s 不再使用；如有老配置可删除
 
 
 # ------------------------------------------------------------
 # 2. IMU 子系统
 #   - 驱动：香橙派 + HWT9073-485 (Modbus)
-#   - 实时滤波：静止窗 bias + deadzone
+#   - 实时预处理：静止窗 / deadband / 简单滤波
 # ------------------------------------------------------------
 imu:
   # 是否启用 IMU 链路（一般为 true；调试 DVL-only 可以临时关掉）
@@ -38,16 +37,15 @@ imu:
   # 2.1 底层驱动配置（对应 nav_core::ImuConfig）
   driver:
     # 串口设备路径
-    # - 香橙派上通常是 /dev/ttyUSB0 或 /dev/ttyUSB1（根据你实际 udev 规则）
     port: "/dev/ttyUSB0"
 
     # 波特率（你当前 IMU 配置为 230400）
     baud: 230400
 
-    # Modbus 从机地址（HWT9073 默认 0x50，如你前面配置）
+    # Modbus 从机地址（HWT9073 默认 0x50）
     slave_addr: 0x50
 
-    # IMU 过滤（types.hpp 中 ImuFilterConfig）
+    # IMU 硬门控过滤（types.hpp 中 ImuFilterConfig）
     filter:
       enable_accel: true      # 是否检查加速度幅值
       enable_gyro:  true      # 是否检查角速度幅值
@@ -57,47 +55,74 @@ imu:
       max_abs_gyro:  10.0     # 单轴最大 |ω| (rad/s)
       max_euler_abs: 3.5      # 单轴最大 |姿态| (rad)
 
-  # 2.2 实时滤波配置（对应 nav_core::filters::ImuRtFilterConfig）
-  rt_filter:
-    # 静止窗长度（秒），用于估计 gyro / accel bias
-    static_window_s: 2.0
+  # 2.2 实时预处理配置（对应 nav_core::preprocess::ImuRtPreprocessConfig）
+  #
+  # 对应 C++ 里的 ImuRtPreprocessConfig 字段：
+  #   - basic: ImuFilterConfig（再做一层 basic 有效性检查）
+  #   - static_window_*: 启动静止窗零偏估计
+  #   - g_ref_m_s2 / enable_gravity_compensation: 重力补偿
+  #   - yaw_lpf_* / *deadband*: yaw 一阶低通 + 全轴 deadband
+  #   - use_imu_rp_from_sample: roll/pitch 来源于 IMU 自带姿态
 
-    # 判定“静止窗”的阈值：
-    # - gyro 静止阈值（rad/s），例如 < 0.01 认为无明显旋转
-    static_gyro_thresh_rad_s: 0.01
+  preprocess:
+    # 2.2.1 basic 有效性检查（再过一层 ImuFilterConfig）
+     # 说明：零偏完全由实时静止窗估计，不从 YAML 读取固定值
+    basic:
+      enable_accel: true
+      enable_gyro:  true
+      enable_euler: false
 
-    # - accel 静止阈值（m/s^2），例如 |a - g| 很小认为近似静止
-    static_accel_thresh_mps2: 0.05
+      max_abs_accel: 50.0     # 和 driver.filter 保持一致即可
+      max_abs_gyro:  10.0
+      max_euler_abs: 3.5
 
-    # bias 估计的允许范围（防止异常数据把 bias 拉得太离谱）
-    gyro_bias_max_abs_rad_s:  0.1      # 单轴最大 bias
-    accel_bias_max_abs_mps2:  1.0      # 单轴最大 bias
+    # 2.2.2 静止窗 / bias 估计参数
+    #
+    # 离线 ESKF 用的是前 20s 做 bias 估计，这里沿用 20s，
+    # 如果你希望上电后更快进入工作状态，可以改成 5~10s。
+    static_window_s: 20.0          # 连续静止累计时间 ≥ 该值时认为 bias_ready
+    static_max_abs_gyro: 0.01      # |ω| < 0.01 rad/s 视为静止
+    static_max_abs_accel_dev: 0.05 # ||a|-g_ref| < 0.05 m/s^2 视为静止
+    static_max_samples: 10000      # 静止窗内最大样本数（用于 std 估计）
 
-    # 静止补偿之后的 deadzone（抑制残余噪声积分）
-    gyro_deadzone_rad_s:  0.001        # < 0.001 rad/s 视为 0
-    accel_deadzone_mps2:  0.01         # < 0.01 m/s^2 视为 0
+    # 2.2.3 重力参考与补偿
+    #
+    # 离线 ESKF 配置为 imu.acc_is_linear = true，
+    # 所以这里必须做重力补偿，保证输入给 ESKF 的是“线加速度”。
+    g_ref_m_s2: 9.78
+    enable_gravity_compensation: true
 
-    # yaw 解缠（unwrap）相关
-    enable_yaw_unwrap: true
-    yaw_unwrap_trust_s: 0.5           # 最近 0.5s 内有有效 IMU 即信任 yaw 连续性
+    # 2.2.4 yaw 轴滤波 + deadband
+    #
+    # 2 Hz 截止频率 + 0.001 rad/s deadband：压掉低频飘 + 小噪声。
+    yaw_lpf_cutoff_hz: 2.0
+    yaw_deadband_rad_s: 0.001
 
-    # 是否对 accel 做重力补偿（静止窗估计出重力方向后减去）
-    enable_gravity_compensation: false  # 你当前流程是 DVL+yaw，先留 false
+    # 2.2.5 全轴 deadband
+    gyro_deadband_rad_s: 0.002     # X/Y 轴 gyro deadband，Z 轴取 max(yaw_deadband, 该值)
+    accel_deadband_m_s2: 0.01      # 加速度 deadband
+
+    # 2.2.6 roll/pitch 来源开关
+    #
+    # true：直接信任 IMU 输出的 roll/pitch，用来构造重力向量并扣重力。
+    use_imu_rp_from_sample: true
 
 
 # ------------------------------------------------------------
 # 3. DVL 子系统
 #   - Hover H1000, PD6/EPD6 文本协议
+#   - BI: 体速（body / instrument frame）
+#   - BE: 地速（ENU）
 # ------------------------------------------------------------
 dvl:
   # 是否启用 DVL 链路
   enable: true
 
   driver:
-    # 串口路径（根据你现在的接线习惯：一般 /dev/ttyACM0）
+    # 串口路径
     port: "/dev/ttyACM0"
 
-    # 波特率（Hover H1000 常见为 115200，如有改动按实际填写）
+    # 波特率（Hover H1000 常见为 115200）
     baud: 115200
 
     # 协议级过滤配置（nav_core::DvlFilterConfig）
@@ -105,8 +130,7 @@ dvl:
       enable_velocity: true      # 检查速度幅值
       enable_altitude: true      # 检查高度范围
 
-      # 若 only_valid_flag = true，则只接受 valid == A 的帧
-      only_valid_flag:  true
+      only_valid_flag:  true     # 只接受 valid == A 的帧
       require_all_axes: true     # 三轴速度都须为有限数
 
       max_abs_vel_mps: 5.0       # 单轴最大 |v| (m/s)，超出直接丢掉
@@ -115,83 +139,101 @@ dvl:
 
       min_quality:     0         # 暂不启用质量等级门限（等有数据再调）
 
+  # 3.1 DVL 实时预处理配置（对应 nav_core::preprocess::DvlRtPreprocessorConfig）
+  #
+  # 目标：
+  #   - BI → 统一为 BODY=FRD 体速；
+  #   - BE → 统一为 ENU 速度；
+  #   - 做一次简单噪声地板 / 缺失补偿。
+  preprocess:
+    # 水平速度噪声地板（m/s），参考 ESKF.dvl.meas_speed_eps_mps ≈ 0.07
+    noise_floor_mps: 0.07
+
+    # DVL 最大允许无更新时间（秒），超过视为“间断”
+    max_gap_s: 3.0
+
+    # 有效底跟踪高度范围
+    min_bottom_alt_m: 0.3
+    max_bottom_alt_m: 50.0
+
+    # 是否在预处理阶段使用 BE 帧的垂直速度
+    use_be_vertical: false
+
 
 # ------------------------------------------------------------
-# 4. 估计器部分：在线导航 + 因子图平滑 + 健康监测
+# 4. 估计器部分：在线 ESKF + 健康监测
 # ------------------------------------------------------------
 estimator:
-  # 是否启用各子模块
-  enable_online:   true
-  enable_smoother: false       # 若只跑在线导航，可临时关掉
-  enable_health:   true
+  # 是否启用在线导航估计器
+  enable_online: true
+  eskf_config_path: "/home/wys/水下机器人实验数据/offline_nav/config/eskf_2d_pooltest01.yaml"
+
+  # 因子图已下线，不再需要 enable_smoother
+  enable_health: true
 
   # 4.1 在线导航估计器（nav_core::estimator::OnlineEstimatorConfig）
+  #
+  # 对齐离线 ESKF 配置：
+  #   - zupt_threshold_mps ≈ dvl.zupt_speed_mps (0.04)
+  #   - dvl_noise_floor_mps ≈ dvl.meas_speed_eps_mps (0.07)
+  #   - IMU / DVL gap 与 loop / driver 配置统一。
   online:
-    # ZUPT 判定阈值（ENU 速度模长 < 该值视为零速）
-    zupt_threshold_mps: 0.08
+    # ZUPT 判定阈值（ENU 水平速度模长 < 该值视为零速）
+    zupt_threshold_mps: 0.04
 
-    # 是否对 DVL 速度应用噪声地板（< 0.08m/s 硬置零）
-    use_dvl_noise_floor: true
+    # DVL 噪声地板：小于该速度直接视为 0（配合上面 ZUPT）
+    dvl_noise_floor_mps: 0.07
 
     # IMU / DVL 最大允许无更新时间（秒）
     max_imu_gap_s: 0.2
     max_dvl_gap_s: 3.0
 
-    # yaw 来源（示意：和 OnlineEstimatorConfig 中的枚举对应）
-    # 例如：imu_euler_z / eskf / external_yaw
+    # yaw 来源（与 C++ OnlineEstimatorConfig 枚举对应）
+    # 这里保留原来的策略：直接用 IMU yaw（经预处理修正后的 euler_z）
     yaw_source: "imu_euler_z"
 
-    # DVL 使用的体速来源（例如 "ship_frame" → BS, "instrument_frame" → BI）
-    body_velocity_source: "ship_frame"
+    # DVL 体速来源：我们水平速度更新走 BI → BODY=FRD
+    body_velocity_source: "instrument_frame"   # 或 "body_frame"，按实现约定
 
-    # 是否使用 DVL 深度辅助 z 轴（否则只用压力深度）
-    use_dvl_depth: false
+    # 是否使用 DVL 垂直速度 / 深度辅助 z 轴
+    use_dvl_vertical: false
 
-    # 重力加速度，用于 IMU 整体标定/重力估计（与前期 9.78 m/s^2 约定一致）
+    # 重力加速度，用于内部一致性（离线/在线统一为 9.78）
     gravity_mps2: 9.78
 
-  # 4.2 2D 因子图平滑（nav_core::estimator::GraphSmoother2DConfig）
-  smoother:
-    # 因子图节点之间的 nominal 时间间隔（秒）
-    node_dt_s: 1.0
-
-    # 位置观测噪声标准差（m）
-    sigma_pos_m: 0.05
-
-    # 速度观测噪声标准差（m/s）
-    sigma_vel_mps: 0.02
-
-    # 动力学先验的平滑权重（越大 → 轨迹越平滑，但对数据不敏感）
-    lambda_smooth: 1.0
-
-    # 先验约束权重（初始位姿固定程度）
-    lambda_prior: 10.0
-
-    # 对轨迹两端是否增加“软固定”约束
-    use_endpoint_prior: true
-
-  # 4.3 导航健康监测（nav_core::estimator::NavHealthMonitorConfig）
+  # 4.2 导航健康监测（nav_core::estimator::NavHealthConfig）
+  #
+  # 目前我们主要用它来监控：
+  #   - 传感器心跳：IMU / DVL 掉线；
+  #   - 未来可以扩展位置 / 航向 RMS 评估；
+  #   - 给控制层提供“停机/降级建议”。
   health:
-    # 位置 RMS 阈值（在线轨迹 vs 平滑因子图）
-    pos_rms_warn_m:   0.3    # 超过该值进入“降级”
-    pos_rms_fault_m:  0.8    # 超过该值认为“不可用”
+    # 心跳超时（ns）
+    imu_timeout_ns: 200000000      # 0.2 s
+    dvl_timeout_ns: 3000000000     # 3.0 s
 
-    # 速度 RMS 阈值
-    vel_rms_warn_mps: 0.05
-    vel_rms_fault_mps: 0.15
+    # baseline 相关暂时用不到（因子图下线），保留默认即可
+    min_baseline_duration_s: 60.0
+    min_baseline_samples:    100
 
-    # 最大延迟（秒）：平滑轨迹相对于在线轨迹的延迟上限
-    max_allowed_delay_s: 5.0
+    # 位置 / 航向 RMS 阈值先保持保守默认
+    max_rms_xy_ok_m:        0.5
+    max_rms_xy_degraded_m:  2.0
+    max_rms_yaw_ok_rad:     0.0523599   # ≈ 3°
+    max_rms_yaw_degraded_rad: 0.174533  # ≈ 10°
 
-    # 进入 BAD/FAULT 状态前，需要连续多少秒不达标才触发
-    min_bad_duration_s: 3.0
+    # 漂移速率约束
+    max_drift_rate_ok_m_per_min:       1.0
+    max_drift_rate_degraded_m_per_min: 5.0
 
-    # 回到 OK 状态前，至少需要多少秒连续达标
-    min_recover_duration_s: 5.0
+    # 工程建议开关
+    enable_stop_suggestion:        true
+    enable_reloc_suggestion:       true
+    enable_speed_reduce_suggestion: true
 
 
 # ------------------------------------------------------------
-# 5. 二进制日志配置
+# 5. 二进制日志配置（多路）
 # ------------------------------------------------------------
 logging:
   # 总开关
@@ -203,11 +245,25 @@ logging:
   # 是否按日期分子目录：data/YYYY-MM-DD/...
   split_by_date: true
 
-  # 各类 packet 开关
-  log_imu:       true   # ImuLogPacket
-  log_dvl:       true   # DvlLogPacket
-  log_nav_state: true   # NavState（若 bin_logger 有对应 packet）
-  log_eskf:      false  # 如暂未启用 ESKF，可先关掉
+  # 细粒度日志开关：
+  #   - raw: 驱动层刚解码出的 IMU / DVL（硬门控之后）；
+  #   - processed: 预处理输出（进入 ESKF 之前）；
+  #   - eskf_state: 每次状态输出（位置、速度、yaw、bias 等）；
+  #   - eskf_update: 每次 DVL 更新的 diag（NIS / ratio / r_pre / r_meas 等）；
+  #   - health_report: 健康监测结果（等级 + 建议）。
+  log_imu_raw:        true
+  log_dvl_raw:        true
+  log_imu_processed:  true
+  log_dvl_processed:  true
+  log_eskf_state:     true
+  log_eskf_update:    true
+  log_health_report:  true
+
+  # 兼容旧字段（可选；若完全迁移，可以删掉）
+  log_imu:       true
+  log_dvl:       true
+  log_nav_state: true
+  log_eskf:      true
 
 
 # ------------------------------------------------------------
@@ -221,5 +277,4 @@ publisher:
     shm_name: "/rov_nav_state_v1"
 
     # SHM 大小（字节），包含 header + NavState + 预留
-    # 4096 远够放一帧 NavState + header
     shm_size: 4096

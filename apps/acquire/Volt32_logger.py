@@ -308,7 +308,7 @@ def main():
 
         # 一帧齐全 → 写入 CSV
         # === 关键修改 2：复用 IMU 的时间基，保证与 IMU/DVL 对齐 ===
-        ts = stamp("imu0", SensorKind.IMU)  # 与 imu_logger 使用的 key/kind 一致
+        ts = stamp("volt0", SensorKind.OTHER) # 与 imu_logger 使用的 key/kind 一致
         mono_ns = ts.host_time_ns
         est_ns = ts.corrected_time_ns
         mono_s = mono_ns / 1e9

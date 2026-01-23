@@ -3,6 +3,3 @@
 /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/uwnav_dvl_selftest.dir
 /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/uwnav_navd.dir
 /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/nav_core.dir
-/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/CMakeFiles/witmotion_sdk.dir
-/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/_deps/shared_msgs-build/CMakeFiles/rebuild_cache.dir
-/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/build/_deps/shared_msgs-build/CMakeFiles/edit_cache.dir

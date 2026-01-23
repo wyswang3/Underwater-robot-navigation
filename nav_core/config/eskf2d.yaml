@@ -1,0 +1,175 @@
+# ============================================================
+# ESKF 2D configuration
+#
+# Scope:
+#   - Offline Python ESKF (offnav)
+#   - Online C++ ESKF (future integration)
+#
+# Assumptions:
+#   - IMU data is preprocessed into BODY frame
+#   - Yaw semantic is corrected BEFORE entering the filter
+#   - Horizontal velocity update uses DVL_BI only
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Time & numerical stability
+# ------------------------------------------------------------
+time:
+  # Maximum allowed dt between IMU propagation steps
+  dt_max_s: 0.05
+
+  # Minimum dt to avoid division / conditioning issues
+  dt_min_s: 1.0e-4
+
+  # Wrap yaw into (-pi, pi]
+  yaw_wrap: true
+
+
+# ------------------------------------------------------------
+# 2. Initialization strategy
+# ------------------------------------------------------------
+init:
+  # Initial yaw source:
+  #   - imu    : use first valid IMU yaw (after yaw_sign & yaw_offset)
+  #   - config : use init_yaw_rad below
+  yaw_source: imu   # imu | config
+
+  # Initial state values (ENU, radians)
+  E_m: 0.0
+  N_m: 0.0
+  vE_mps: 0.0
+  vN_mps: 0.0
+  yaw_rad: 0.0
+  bgz_rad_s: 0.0
+
+  # Initial covariance (large = weak prior)
+  P0:
+    pos_m2: 0.25          # (0.5 m)^2
+    vel_m2s2: 0.36        # (0.6 m/s)^2
+    yaw_rad2: 0.03046     # (10 deg)^2
+    bgz_rad2s2: 0.0004    # (0.02 rad/s)^2
+
+
+# ------------------------------------------------------------
+# 3. IMU input semantics
+# ------------------------------------------------------------
+imu:
+  # true  : acceleration is already linear (gravity removed)
+  # false : raw acc, gravity will be subtracted internally
+  acc_is_linear: true
+
+  # Gravity magnitude (used only if acc_is_linear = false)
+  gravity_mps2: 9.78
+
+  # Yaw semantic correction:
+  #   used_yaw = yaw_sign * yaw_meas + yaw_offset_rad
+  yaw_sign: 1.0
+
+  # Fixed yaw bias (frame / axis mismatch correction)
+  # Typical values:
+  #   +1.57079632679  -> +90 deg
+  #   -1.57079632679  -> -90 deg
+  yaw_offset_rad: 0.0
+
+
+# ------------------------------------------------------------
+# 4. Process noise (core dynamics uncertainty)
+# ------------------------------------------------------------
+process_noise:
+  # Linear acceleration noise (discrete-time std)
+  sigma_acc_mps2: 0.06
+
+  # Yaw gyro noise (Z axis, discrete-time std)
+  sigma_gyro_z_rad_s: 0.008
+
+  # Gyro Z bias random walk (continuous, sqrt(s))
+  sigma_bgz_rw: 2.0e-5
+
+  # Extra velocity process noise to admit poor dynamics model
+  q_vel_extra_mps2: 1.20
+
+
+# ------------------------------------------------------------
+# 5. DVL observation model (horizontal)
+# ------------------------------------------------------------
+dvl:
+  # Horizontal velocity measurement noise (m/s)
+  sigma_xy_mps: 0.008
+
+  # ZUPT-like handling
+  zupt_speed_mps: 0.04
+  sigma_zupt_mps: 0.06
+
+  # Measurement speed floor (avoid ratio blow-up at low speed)
+  meas_speed_eps_mps: 0.07
+
+
+# ------------------------------------------------------------
+# 6. Innovation gating & covariance inflation
+# ------------------------------------------------------------
+gating:
+  # NIS thresholds
+  nis_soft: 25.0
+  nis_target: 25.0
+  nis_hard: 120.0
+
+  # Velocity ratio gating (|v_pre| / |v_meas|)
+  ratio_soft: 2.5
+  ratio_hard: 10.0
+
+  # Maximum covariance inflation factor
+  r_inflate_max: 5.0e3
+
+  # Reject measurement even after inflation
+  post_inflate_hard_reject: false
+
+  # Absolute hard rejection (safety net)
+  reject_huge_residual: true
+  nis_abs_hard: 300.0
+
+
+# ------------------------------------------------------------
+# 7. Propagation stabilizers (engineering safeguards)
+# ------------------------------------------------------------
+stabilizer:
+  # Velocity leakage (1/s), prevents free integration blow-up
+  vel_leak_1ps: 0.35
+
+  # Hard velocity clamp (horizontal)
+  v_hard_max_mps: 0.80
+
+
+# ------------------------------------------------------------
+# 8. Numerical jitter (conditioning protection)
+# ------------------------------------------------------------
+numerics:
+  meas_jitter: 1.0e-9
+  S_jitter: 1.0e-9
+
+
+# ------------------------------------------------------------
+# 9. Output & diagnostics
+# ------------------------------------------------------------
+output:
+  # Output every propagation step
+  full_rate: true
+
+  # Or output every N steps
+  stride: 5
+
+  # Print final summary to console
+  print_summary: true
+
+
+diagnostics:
+  # Focus CSV path (dt, v_pre, v_meas, ratio, NIS, etc.)
+  focus_csv_path: "out/diag/eskf2d_focus.csv"
+
+  # Record every N updates
+  record_every: 1
+
+  # Warning thresholds (diagnostic only)
+  ratio_warn: 4.0
+  vpre_warn: 1.2
+  nis_warn: 80.0
