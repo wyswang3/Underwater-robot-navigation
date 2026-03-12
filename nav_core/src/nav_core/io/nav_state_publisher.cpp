@@ -26,10 +26,12 @@
 
 #include "nav_core/io/nav_state_publisher.hpp"
 
+#include <algorithm>
 #include <cstring>   // std::memset, std::memcpy
 #include <utility>   // std::swap
 
 #include "shared/msg/nav_state.hpp"
+#include "shared/shm/nav_state_shm.hpp"
 
 #ifndef _WIN32
 #  include <fcntl.h>      // shm_open
@@ -43,14 +45,6 @@
 #endif
 
 namespace nav_core::io {
-
-// ============================ 内部布局定义 ============================
-
-// ShmLayout 完整定义（只在 cpp 内部可见）
-struct NavStatePublisher::ShmLayout {
-    ShmHeader             header;
-    shared::msg::NavState nav;
-};
 
 // ============================ 构造 / 析构 / 移动 ============================
 
@@ -156,7 +150,7 @@ bool NavStatePublisher::publish(const shared::msg::NavState& state)
     }
 
     ShmLayout* layout = shm_ptr_;
-    ShmHeader& hdr    = layout->header;
+    ShmHeader& hdr    = layout->hdr;
 
     // 2) 获取当前时间（mono_ns / wall_ns）
     MonoTimeNs mono_ns = 0;
@@ -205,7 +199,7 @@ bool NavStatePublisher::publish(const shared::msg::NavState& state)
     hdr.wall_ns = wall_ns;
 
     // 拷贝 NavState（trivially copyable，可用 memcpy）
-    std::memcpy(&layout->nav, &state, sizeof(shared::msg::NavState));
+    std::memcpy(&layout->payload, &state, sizeof(shared::msg::NavState));
 
     hdr.seq.fetch_add(1, std::memory_order_release); // 变为偶数：稳定快照
 
@@ -254,16 +248,16 @@ bool NavStatePublisher::init_shm(const NavStatePublisherConfig& cfg)
     shm_fd_  = fd;
     shm_ptr_ = static_cast<ShmLayout*>(addr);
 
-    // 初始化 header / nav
-    ShmHeader hdr{};  // 所有字段置零 / 默认值
-    std::memset(&shm_ptr_->nav, 0, sizeof(shared::msg::NavState));
+    // 初始化整个映射区，随后写入 canonical header metadata。
+    std::memset(static_cast<void*>(shm_ptr_), 0, shm_size_);
 
-    // magic = 'N' 'A' 'V' '1' → 0x4E415631
-    hdr.magic   = 0x4E415631u;
-    hdr.version = 1u;
+    ShmHeader& hdr = shm_ptr_->hdr;
+    hdr.magic         = shared::shm::kNavStateMagic;
+    hdr.layout_ver    = shared::shm::kNavStateLayoutVersion;
+    hdr.payload_ver   = shared::shm::kNavStatePayloadVersion;
+    hdr.payload_size  = static_cast<std::uint32_t>(sizeof(shared::msg::NavState));
+    hdr.payload_align = static_cast<std::uint32_t>(alignof(shared::msg::NavState));
     hdr.seq.store(0, std::memory_order_relaxed);
-
-    // 初始时间戳（非必需）
     hdr.mono_ns = 0;
     hdr.wall_ns = 0;
 
@@ -300,12 +294,14 @@ bool NavStatePublisher::init_shm(const NavStatePublisherConfig& cfg)
     shm_handle_ = hMap;
     shm_ptr_    = static_cast<ShmLayout*>(addr);
 
-    ShmHeader& hdr = shm_ptr_->header;
-    std::memset(&hdr, 0, sizeof(ShmHeader));
-    std::memset(&shm_ptr_->nav, 0, sizeof(shared::msg::NavState));
+    std::memset(static_cast<void*>(shm_ptr_), 0, shm_size_);
 
-    hdr.magic   = 0x4E415631u;
-    hdr.version = 1u;
+    ShmHeader& hdr = shm_ptr_->hdr;
+    hdr.magic         = shared::shm::kNavStateMagic;
+    hdr.layout_ver    = shared::shm::kNavStateLayoutVersion;
+    hdr.payload_ver   = shared::shm::kNavStatePayloadVersion;
+    hdr.payload_size  = static_cast<std::uint32_t>(sizeof(shared::msg::NavState));
+    hdr.payload_align = static_cast<std::uint32_t>(alignof(shared::msg::NavState));
     hdr.seq.store(0, std::memory_order_relaxed);
     hdr.mono_ns = 0;
     hdr.wall_ns = 0;

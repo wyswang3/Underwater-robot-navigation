@@ -18,6 +18,7 @@ endif()
 
 # 是否编译因子图 / 在线估计等实验模块（默认关闭）
 option(NAV_CORE_ENABLE_GRAPH "Build graph smoother / online estimator modules" OFF)
+option(NAV_CORE_BUILD_TESTS "Build nav_core unit tests" OFF)
 
 # =========================================
 # 2) 依赖库：Eigen / 线程
@@ -110,6 +111,7 @@ set(NAV_CORE_SOURCES
     src/nav_core/io/nav_state_publisher.cpp
 
     # ---- app ----
+    src/nav_core/app/nav_runtime_status.cpp
     src/nav_core/app/nav_daemon_config.cpp
 )
 
@@ -186,3 +188,13 @@ foreach(tgt uwnav_navd uwnav_dvl_selftest)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
 endforeach()
+
+if(NAV_CORE_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(test_nav_runtime_status
+        tests/test_nav_runtime_status.cpp
+    )
+    target_link_libraries(test_nav_runtime_status PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_runtime_status COMMAND test_nav_runtime_status)
+endif()

@@ -23,6 +23,7 @@
 #include <iostream>
 
 #include "nav_core/app/nav_daemon_config.hpp"
+#include "nav_core/app/nav_runtime_status.hpp"
 
 #include "nav_core/core/types.hpp"
 #include "nav_core/core/timebase.hpp"
@@ -385,38 +386,6 @@ bool init_bin_logger(const app::NavDaemonConfig& cfg,
     return true;
 }
 
-// ========== ESKF → NavState 的唯一出口 ==========
-inline void eskf_to_nav_state(const estimator::EskfFilter& eskf,
-                              smsg::NavState&              nav,
-                              MonoTimeNs                   t_ns)
-{
-    const auto st = eskf.state();
-
-    nav.t_ns = t_ns;
-
-    // 位置 [E, N, U]
-    nav.pos[0] = static_cast<float>(st.p_enu.x);
-    nav.pos[1] = static_cast<float>(st.p_enu.y);
-    nav.pos[2] = static_cast<float>(st.p_enu.z);
-
-    // 速度 [vE, vN, vU]
-    nav.vel[0] = static_cast<float>(st.v_enu.x);
-    nav.vel[1] = static_cast<float>(st.v_enu.y);
-    nav.vel[2] = static_cast<float>(st.v_enu.z);
-
-    // 姿态 rpy_nb_rad
-    nav.rpy[0] = static_cast<float>(st.rpy_nb_rad.x);
-    nav.rpy[1] = static_cast<float>(st.rpy_nb_rad.y);
-    nav.rpy[2] = static_cast<float>(st.rpy_nb_rad.z);
-
-    // U 向上，depth 向下为正
-    nav.depth  = static_cast<float>(-st.p_enu.z);
-
-    nav.health       = smsg::NavHealth::OK;
-    nav.status_flags = smsg::NAV_FLAG_IMU_OK;
-}
-
-
 // ========== 主循环：所有细节通过已有模块完成 ==========
 
 int run_main_loop(const app::NavDaemonConfig&    cfg,
@@ -451,6 +420,11 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
     MonoTimeNs    last_print_ns    = 0;
 
     static MonoTimeNs last_used_dvl_ns = 0;
+
+#if NAV_CORE_ENABLE_GRAPH
+    estimator::NavHealthMonitor health_monitor(cfg.estimator.health);
+    const bool health_monitor_enabled = cfg.estimator.enable_health;
+#endif
 
     while (!stop_flag.load(std::memory_order_relaxed)) {
         next_wakeup += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -504,7 +478,15 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                     }
                 } else {
                     // 4) ESKF 传播（注意 EskfConfig 要设定 imu.acc_is_linear=true）
-                    eskf.propagate_imu(samp_out);
+                    const bool imu_used = eskf.propagate_imu(samp_out);
+#if !NAV_CORE_ENABLE_GRAPH
+                    (void)imu_used;
+#endif
+#if NAV_CORE_ENABLE_GRAPH
+                    if (health_monitor_enabled && imu_used) {
+                        health_monitor.notify_imu_propagate(samp_out.mono_ns);
+                    }
+#endif
                 }
             }
         }
@@ -541,6 +523,20 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                             eskf.update_dvl_z(dvl_sample, &diag_z);
                         }
 
+#if NAV_CORE_ENABLE_GRAPH
+                        if (health_monitor_enabled) {
+                            if (dvl_sample.has_enu_vel) {
+                                health_monitor.notify_dvl_xy_update(
+                                    dvl_sample.mono_ns, diag_xy.nis, diag_xy.ok);
+                            }
+                            if (eskf.config().enable_dvl_z_update &&
+                                (dvl_sample.has_enu_vel || dvl_sample.has_altitude)) {
+                                health_monitor.notify_z_update(
+                                    dvl_sample.mono_ns, diag_z.nis, diag_z.ok);
+                            }
+                        }
+#endif
+
                         if (bin_logger) {
                             bin_logger->write(&dvl_sample, sizeof(dvl_sample));
                         }
@@ -558,19 +554,28 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
 
         // ---------- ESKF → NavState（唯一出口） ----------
         smsg::NavState nav{};
-        eskf_to_nav_state(eskf, nav, now_mono_ns);
+        const MonoTimeNs state_stamp_ns = eskf.last_propagate_time();
+        app::fill_nav_state_kinematics(eskf, nav, state_stamp_ns);
 
-        // 健康判定：IMU 超时 → INVALID；DVL 超时 → 清 DVL_OK 标志
-        if (imu_age_s > max_imu_age_s && max_imu_age_s > 0.0) {
-            nav.health       = smsg::NavHealth::INVALID;
-            nav.status_flags = smsg::NAV_FLAG_NONE;
-        } else {
-            if (dvl_age_s <= max_dvl_age_s || max_dvl_age_s <= 0.0) {
-                smsg::nav_flag_set(nav.status_flags, smsg::NavStatusFlags::NAV_FLAG_DVL_OK);
-            } else {
-                smsg::nav_flag_clear(nav.status_flags, smsg::NavStatusFlags::NAV_FLAG_DVL_OK);
-            }
+        app::NavPublishContext publish_ctx{};
+        publish_ctx.publish_mono_ns = now_mono_ns;
+        publish_ctx.state_stamp_ns = state_stamp_ns;
+        publish_ctx.last_imu_mono_ns = last_imu_ns;
+        publish_ctx.last_dvl_mono_ns = last_dvl_ns;
+        publish_ctx.max_imu_age_s = max_imu_age_s;
+        publish_ctx.max_dvl_age_s = max_dvl_age_s;
+        publish_ctx.imu_enabled = cfg.imu.enable;
+        publish_ctx.dvl_enabled = cfg.dvl.enable;
+        publish_ctx.imu_bias_ready = imu_pp.biasReady();
+        app::apply_nav_publish_semantics(
+            publish_ctx, app::eskf_state_is_finite(eskf), nav);
+
+#if NAV_CORE_ENABLE_GRAPH
+        if (health_monitor_enabled) {
+            health_monitor.update_sensor_heartbeat(now_mono_ns, last_imu_ns, last_dvl_ns);
+            health_monitor.update_online_state(nav);
         }
+#endif
 
         // ---------- 发布 NavState ----------
         if (nav_pub.ok()) {
@@ -597,13 +602,22 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                              "[nav_daemon] NAV t=%.1fs "
                              "E=%.3f N=%.3f U=%.3f depth=%.2f "
                              "vE=%.3f vN=%.3f vU=%.3f "
-                             "yaw=%.3f health=%d flags=0x%04X\n",
+                             "yaw=%.3f valid=%u stale=%u degraded=%u "
+                             "state=%u health=%u fault=%u age_ms=%u "
+                             "sensor_mask=0x%04X flags=0x%04X\n",
                              t_s,
                              nav.pos[0], nav.pos[1], nav.pos[2],
                              nav.depth,
                              nav.vel[0], nav.vel[1], nav.vel[2],
                              nav.rpy[2],
-                             static_cast<int>(nav.health),
+                             static_cast<unsigned>(nav.valid),
+                             static_cast<unsigned>(nav.stale),
+                             static_cast<unsigned>(nav.degraded),
+                             static_cast<unsigned>(nav.nav_state),
+                             static_cast<unsigned>(nav.health),
+                             static_cast<unsigned>(nav.fault_code),
+                             static_cast<unsigned>(nav.age_ms),
+                             static_cast<unsigned>(nav.sensor_mask),
                              static_cast<unsigned>(nav.status_flags));
             }
         }

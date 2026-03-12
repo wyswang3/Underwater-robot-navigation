@@ -29,12 +29,7 @@
 
 #include <nav_core/core/types.hpp>  // MonoTimeNs / SysTimeNs
 
-// 这里只需要前向声明，不需要完整定义，避免引入 shared 目录依赖
-namespace shared {
-namespace msg {
-struct NavState;
-} // namespace msg
-} // namespace shared
+#include "shared/shm/nav_state_shm.hpp"
 
 // 如果你暂时不想引入 io 命名空间，也可以保留 namespace nav_core，
 // 但从架构上更推荐放在 nav_core::io 下。
@@ -112,43 +107,11 @@ public:
 
 private:
     // ==================== 共享内存布局 ====================
-
-    /**
-     * @brief 共享内存头部（元信息 + seqlock）。
-     *
-     * 字段约定：
-     *   - magic   : 魔数，用于快速检测“这块 shm 是否为导航状态专用”；
-     *               建议值：'NAV1'（在 .cpp 中写入具体数值，如 0x4E415631）。
-     *   - version : 布局版本号，当前为 1；未来若 ShmLayout 变化，应 bump 版本。
-     *   - mono_ns : 写入该 NavState 时的单调时间（ns），用于估计延迟；
-     *   - wall_ns : 对应的系统墙钟时间（ns，可来自 clock_gettime(CLOCK_REALTIME)）；
-///   - seq     : seqlock 序号，奇数=写入中，偶数=稳定。
-     *
-     * 注意：读端必须使用 std::atomic 语义读取 seq，保证跨进程内存可见性。
-     */
-    struct ShmHeader {
-        std::uint32_t magic   = 0;  ///< 魔数标识（例如 'NAV1'）
-        std::uint32_t version = 0;  ///< 布局版本号（当前 = 1）
-
-        MonoTimeNs mono_ns = 0;     ///< 单调时钟时间戳（ns）
-        SysTimeNs  wall_ns = 0;     ///< 系统墙钟时间戳（ns）
-
-        // seqlock: odd = writing, even = stable
-        alignas(8) std::atomic<std::uint64_t> seq{0};
-    };
-
-    /// @brief 共享内存完整布局（头 + NavState）。
-    ///
-    /// 完整定义放在 .cpp 中，原因：
-    ///   - 此处只需要知道有这么一个类型，便于声明指针；
-    ///   - 避免在头文件中强行包含 shared/msg/nav_state.hpp，
-    ///     降低编译依赖；
-    ///   - 实际布局为：
-    ///       struct ShmLayout {
-    ///           ShmHeader          header;
-    ///           shared::msg::NavState nav;
-    ///       };
-    struct ShmLayout;
+    //
+    // 导航 SHM 契约已统一定义在 shared/shm/nav_state_shm.hpp；
+    // 发布器与消费端必须共用这一份定义，避免布局漂移。
+    using ShmHeader = shared::shm::ShmHeader;
+    using ShmLayout = shared::shm::ShmLayout;
 
     // shm 初始化 / 关闭的内部实现。
     bool init_shm(const NavStatePublisherConfig& cfg);
