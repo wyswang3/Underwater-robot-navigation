@@ -1,1 +1,0 @@
-/usr/lib/ccache/c++     CMakeFiles/uwnav_dvl_selftest.dir/src/nav_core/app/tools/DVL_selftest.cpp.o  -o bin/uwnav_dvl_selftest  libnav_core.a -lpthread /usr/lib/x86_64-linux-gnu/libyaml-cpp.so.0.6.2 -lrt 

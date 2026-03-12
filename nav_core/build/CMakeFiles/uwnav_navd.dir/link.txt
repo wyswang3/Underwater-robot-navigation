@@ -1,1 +1,0 @@
-/usr/lib/ccache/c++     CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon.cpp.o CMakeFiles/uwnav_navd.dir/src/nav_core/app/nav_daemon_runner.cpp.o  -o bin/uwnav_navd  libnav_core.a -lpthread /usr/lib/x86_64-linux-gnu/libyaml-cpp.so.0.6.2 -lrt 
