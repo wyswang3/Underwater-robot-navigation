@@ -211,4 +211,10 @@ if(NAV_CORE_BUILD_TESTS)
     )
     target_link_libraries(test_device_binding PRIVATE nav_core)
     add_test(NAME nav_core_test_device_binding COMMAND test_device_binding)
+
+    add_executable(test_serial_reconnect_integration
+        tests/test_serial_reconnect_integration.cpp
+    )
+    target_link_libraries(test_serial_reconnect_integration PRIVATE nav_core)
+    add_test(NAME nav_core_test_serial_reconnect_integration COMMAND test_serial_reconnect_integration)
 endif()

@@ -357,6 +357,10 @@ void DvlDriver::threadFunc() {
             continue;
         }
         if (n == 0) {
+            // 串口主端断开/USB 重枚举时，PTY/tty 读可能直接返回 EOF。
+            // 显式 closePort() 让上层监督逻辑能够进入重连状态，而不是继续盯着旧 fd。
+            std::cerr << "[DVL] read() returned EOF, treating device as disconnected\n";
+            closePort();
             continue;
         }
 

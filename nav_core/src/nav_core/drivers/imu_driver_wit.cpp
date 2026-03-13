@@ -431,12 +431,16 @@ void ImuDriverWit::threadFunc()
                 std::cerr << "[IMU] read() error: "
                           << std::strerror(errno) << "\n";
                 closePort();
+            } else if (n == 0) {
+                // PTY/USB 断开时 read() 可能返回 0。继续保留 fd 会让上层误判端口仍在线，
+                // 因此这里显式关闭串口，让 nav 主线程进入 RECONNECTING 路径。
+                std::cerr << "[IMU] read() returned EOF, treating device as disconnected\n";
+                closePort();
             } else if (n > 0) {
                 for (ssize_t i = 0; i < n; ++i) {
                     WitSerialDataIn(buf[i]);
                 }
             }
-            // n == 0: 暂时没有数据，忽略
         }
 
         // 控制循环节奏

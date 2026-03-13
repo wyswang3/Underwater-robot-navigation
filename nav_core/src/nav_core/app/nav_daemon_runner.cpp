@@ -647,6 +647,7 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                   estimator::EskfFilter&         eskf,
                   io::NavStatePublisher&         nav_pub,
                   nav_core::BinLogger*           sample_logger,
+                  nav_core::BinLogger*           nav_state_logger,
                   nav_core::BinLogger*           timing_logger,
                   std::atomic<bool>&             stop_flag)
 {
@@ -969,6 +970,10 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
             }
         }
 
+        if (nav_state_logger != nullptr) {
+            nav_state_logger->writePod(nav);
+        }
+
         write_timing_trace(
             timing_logger,
             io::TimingTraceKind::kNavPublished,
@@ -1079,6 +1084,16 @@ int run_nav_daemon(const NavDaemonConfig&       cfg,
                      "(不会写时间语义追踪日志，但不影响导航本身)\n");
     }
 
+    nav_core::BinLogger  nav_state_logger;
+    nav_core::BinLogger* nav_state_logger_ptr = nullptr;
+    if (init_named_bin_logger(cfg, "nav_state.bin", nav_state_logger)) {
+        nav_state_logger_ptr = &nav_state_logger;
+    } else {
+        std::fprintf(stderr,
+                     "[nav_daemon] WARNING: nav_state BinLogger init failed or disabled "
+                     "(不会写导航状态日志，但不影响导航本身)\n");
+    }
+
     std::fprintf(stderr,
                  "[nav_daemon] READY: device binders armed, ESKF online, loop=%.2f Hz\n",
                  cfg.loop.nav_loop_hz > 0.0 ? cfg.loop.nav_loop_hz : 20.0);
@@ -1089,6 +1104,7 @@ int run_nav_daemon(const NavDaemonConfig&       cfg,
                          imu_pp, dvl_pp,
                          eskf, nav_pub,
                          sample_logger_ptr,
+                         nav_state_logger_ptr,
                          timing_logger_ptr,
                          stop_flag);
 }
