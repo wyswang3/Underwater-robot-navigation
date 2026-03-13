@@ -114,6 +114,7 @@ set(NAV_CORE_SOURCES
     src/nav_core/app/device_binding.cpp
     src/nav_core/app/sample_timing.cpp
     src/nav_core/app/nav_runtime_status.cpp
+    src/nav_core/app/nav_state_replay.cpp
     src/nav_core/app/nav_daemon_config.cpp
 )
 
@@ -182,10 +183,15 @@ add_executable(uwnav_dvl_selftest
 )
 target_link_libraries(uwnav_dvl_selftest PRIVATE nav_core)
 
+add_executable(uwnav_nav_replay
+    src/nav_core/app/tools/nav_state_replay.cpp
+)
+target_link_libraries(uwnav_nav_replay PRIVATE nav_core)
+
 # 统一把可执行文件放到 build/bin 目录，方便在板子上运行：
 #   ./bin/uwnav_navd
 #   ./bin/uwnav_dvl_selftest
-foreach(tgt uwnav_navd uwnav_dvl_selftest)
+foreach(tgt uwnav_navd uwnav_dvl_selftest uwnav_nav_replay)
     set_target_properties(${tgt} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
@@ -217,6 +223,12 @@ if(NAV_CORE_BUILD_TESTS)
     )
     target_link_libraries(test_serial_reconnect_integration PRIVATE nav_core)
     add_test(NAME nav_core_test_serial_reconnect_integration COMMAND test_serial_reconnect_integration)
+
+    add_executable(test_nav_state_replay
+        tests/test_nav_state_replay.cpp
+    )
+    target_link_libraries(test_nav_state_replay PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_state_replay COMMAND test_nav_state_replay)
 
     add_executable(test_nav_diagnostic_fixture
         tests/test_nav_diagnostic_fixture.cpp

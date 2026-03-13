@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import pathlib
 import tempfile
 import unittest
@@ -17,6 +18,10 @@ import parse_nav_timing  # noqa: E402
 
 def write_text(path: pathlib.Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
+
+
+def write_nav_state_file(path: pathlib.Path, records: list[merge_robot_timeline.NavState]) -> None:
+    path.write_bytes(b"".join(bytes(record) for record in records))
 
 
 class MergeRobotTimelineTests(unittest.TestCase):
@@ -127,6 +132,118 @@ class MergeRobotTimelineTests(unittest.TestCase):
             self.assertEqual(len(selected), 1)
             self.assertEqual(selected[0]["command_status"], 5)
             self.assertIn("command_failed", selected[0]["tags"])
+
+    def test_bundle_export_keeps_anchor_ids_and_replay_input(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="merge_robot_timeline_bundle_") as td:
+            root = pathlib.Path(td)
+            nav_state = root / "nav_state.bin"
+            control_log = root / "control.csv"
+            telemetry_timeline = root / "telemetry_timeline.csv"
+            bundle_dir = root / "bundle"
+
+            ok = merge_robot_timeline.NavState()
+            ok.t_ns = 1_000_000_000
+            ok.valid = 1
+            ok.stale = 0
+            ok.degraded = 0
+            ok.nav_state = 2
+            ok.health = 1
+            ok.age_ms = 10
+
+            reconnecting = merge_robot_timeline.NavState()
+            reconnecting.t_ns = 1_040_000_000
+            reconnecting.valid = 0
+            reconnecting.stale = 0
+            reconnecting.degraded = 0
+            reconnecting.nav_state = 4
+            reconnecting.health = 3
+            reconnecting.age_ms = 20
+            reconnecting.fault_code = 12
+            reconnecting.status_flags = merge_robot_timeline.NAV_FLAG_IMU_RECONNECTING
+
+            mismatch = merge_robot_timeline.NavState()
+            mismatch.t_ns = 1_090_000_000
+            mismatch.valid = 0
+            mismatch.stale = 0
+            mismatch.degraded = 0
+            mismatch.nav_state = 4
+            mismatch.health = 3
+            mismatch.age_ms = 30
+            mismatch.fault_code = 14
+            mismatch.status_flags = merge_robot_timeline.NAV_FLAG_DVL_BIND_MISMATCH
+
+            write_nav_state_file(nav_state, [ok, reconnecting, mismatch])
+            write_text(
+                control_log,
+                "MonoNS,effective_mode,armed,failsafe,nav_valid,nav_stale,nav_degraded,"
+                "nav_age_ms,nav_fault_code,nav_status_flags\n"
+                "1045000000,Failsafe,1,1,0,0,0,20,12,1024\n"
+                "1095000000,Failsafe,1,1,0,0,0,30,14,512\n",
+            )
+            write_text(
+                telemetry_timeline,
+                "telemetry_stamp_ns,telemetry_seq,active_mode,armed,estop_latched,"
+                "failsafe_active,controller_name,desired_controller,nav_valid,nav_state,"
+                "nav_health,nav_stale,nav_degraded,nav_age_ms,nav_fault_code,"
+                "nav_status_flags,health_state,degraded,fault_state,last_fault_code,"
+                "stm32_link_state,pwm_link_state,heartbeat_age_ms,cmd_status,"
+                "cmd_fault_code,event_seq,event_code,event_fault_code\n"
+                "1046000000,1,4,1,0,1,pid,pid,0,1,3,0,0,20,12,1024,3,0,1,4,2,2,0,2,4,1,4,4\n"
+                "1096000000,2,4,1,0,1,pid,pid,0,1,3,0,0,30,14,512,3,0,1,4,2,2,0,2,4,2,4,4\n",
+            )
+
+            args = argparse.Namespace(
+                nav_timing=None,
+                nav_bin=None,
+                nav_state=nav_state,
+                control_log=control_log,
+                telemetry_timeline=telemetry_timeline,
+                telemetry_events=None,
+                sources=None,
+                events=["reconnecting", "mismatch"],
+                anchor_id=2,
+                window_before_ms=10,
+                window_after_ms=10,
+                from_ns=None,
+                to_ns=None,
+                fault_code=None,
+                command_status=None,
+                csv_out=None,
+                bundle_dir=bundle_dir,
+                limit=20,
+                json=False,
+            )
+
+            merged = merge_robot_timeline.merge_events(args)
+            selected = merge_robot_timeline.select_events(merged, args)
+            summary = {
+                "total_events": len(merged),
+                "selected_events": len(selected),
+                "sources": sorted({item["source"] for item in selected}),
+                "anchors": merge_robot_timeline.summarize_anchors(selected),
+                "filters": {},
+                "timeline": selected,
+            }
+            merge_robot_timeline.export_incident_bundle(bundle_dir, args, selected, summary)
+
+            self.assertEqual(len(selected), 3)
+            self.assertTrue(all(item["anchor_ids"] == [2] for item in selected))
+            self.assertTrue((bundle_dir / "incident_timeline.csv").exists())
+            self.assertTrue((bundle_dir / "nav_state_window.bin").exists())
+            self.assertTrue((bundle_dir / "control_window.csv").exists())
+            self.assertTrue((bundle_dir / "telemetry_timeline_window.csv").exists())
+
+            with (bundle_dir / "incident_summary.json").open(encoding="utf-8") as f:
+                bundle_summary = json.load(f)
+
+            self.assertEqual(bundle_summary["selected_window"]["from_ns"], 1_090_000_000)
+            self.assertEqual(bundle_summary["selected_window"]["to_ns"], 1_096_000_000)
+            self.assertEqual(bundle_summary["replay"]["input_file"], "nav_state_window.bin")
+            self.assertEqual(bundle_summary["anchors"][0]["anchor_id"], 2)
+            self.assertEqual(
+                bundle_summary["bundle_files"]["nav_state_window.bin"]["replay_entrypoint"],
+                True,
+            )
 
 
 if __name__ == "__main__":
