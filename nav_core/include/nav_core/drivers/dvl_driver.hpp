@@ -47,15 +47,17 @@ using DvlCommandBytes = dvl_protocol::CommandBytes;
  *
  * 说明：
  *   - DvlRawData 不做任何工程过滤，也不转换坐标系；
- *   - 仅仅是：“这一行 PD6/EPD6 报文” + “本机时间戳 (Mono/Sys)”；
+ *   - 仅仅是：“这一行 PD6/EPD6 报文” + “采样/接收时间元数据”；
  *   - 上层（例如 DVL_logger / 预处理模块）负责：
  *       * 根据 parsed.src / coord_frame 分类为 BI/BE/BD；
 ///       * 做质量门限 / 速度单位转换 / ENU 统一；
 ///       * 输出 CSV 供 Python 或 ESKF 使用。
  */
 struct DvlRawData {
-    MonoTimeNs    mono_ns{0};   ///< 本机单调时钟（steady_clock）时间 [ns]
-    SysTimeNs     est_ns{0};    ///< 估计的 UNIX 时间基 [ns]（可选，用于统一日志）
+    MonoTimeNs    sensor_time_ns{0};   ///< 样本对应采样时刻（steady ns）
+    MonoTimeNs    recv_mono_ns{0};     ///< 驱动线程收到/解码该帧时刻（steady ns）
+    MonoTimeNs    mono_ns{0};          ///< 规范化样本时间（steady ns）
+    SysTimeNs     est_ns{0};           ///< 兼容字段：当前与 mono_ns 保持一致
     DvlParsedLine parsed;       ///< 协议字段（来自 dvl_protocol::parse_pd6_line）
 
     // 便捷访问函数（避免上层频繁写 parsed.xxx）

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nav_core/app/sample_timing.hpp"
 #include "nav_core/core/types.hpp"
 #include "nav_core/estimator/eskf.hpp"
 #include "shared/msg/nav_state.hpp"
@@ -15,8 +16,8 @@ namespace nav_core::app {
 struct NavPublishContext {
     MonoTimeNs publish_mono_ns{0};
     MonoTimeNs state_stamp_ns{0};
-    MonoTimeNs last_imu_mono_ns{0};
-    MonoTimeNs last_dvl_mono_ns{0};
+    SampleTiming imu_timing{};
+    SampleTiming dvl_timing{};
 
     double max_imu_age_s{0.0};
     double max_dvl_age_s{0.0};

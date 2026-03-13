@@ -661,8 +661,11 @@ void ImuDriverWit::makeFrameFromRegs(std::uint32_t /*start_reg*/,
     // -------- 时间戳：使用统一 timebase::stamp --------
     auto ts = tb::stamp("imu0", tb::SensorKind::IMU);
 
-    out.mono_ns = ts.host_time_ns;        // 单调时间
-    out.est_ns  = ts.corrected_time_ns;   // 延迟补偿后的统一时间
+    out.recv_mono_ns   = ts.host_time_ns;
+    out.sensor_time_ns = ts.corrected_time_ns;
+    out.consume_mono_ns = 0;
+    out.mono_ns = (out.sensor_time_ns > 0) ? out.sensor_time_ns : out.recv_mono_ns;
+    out.est_ns  = out.mono_ns;   // 兼容字段：当前与规范化样本时间保持一致
 
     // -------- 填充 IMU 数据 --------
     out.lin_acc[0] = static_cast<float>(acc_mps2[0]);

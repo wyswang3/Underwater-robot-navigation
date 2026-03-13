@@ -111,6 +111,7 @@ set(NAV_CORE_SOURCES
     src/nav_core/io/nav_state_publisher.cpp
 
     # ---- app ----
+    src/nav_core/app/sample_timing.cpp
     src/nav_core/app/nav_runtime_status.cpp
     src/nav_core/app/nav_daemon_config.cpp
 )
@@ -197,4 +198,10 @@ if(NAV_CORE_BUILD_TESTS)
     )
     target_link_libraries(test_nav_runtime_status PRIVATE nav_core)
     add_test(NAME nav_core_test_nav_runtime_status COMMAND test_nav_runtime_status)
+
+    add_executable(test_sample_timing
+        tests/test_sample_timing.cpp
+    )
+    target_link_libraries(test_sample_timing PRIVATE nav_core)
+    add_test(NAME nav_core_test_sample_timing COMMAND test_sample_timing)
 endif()

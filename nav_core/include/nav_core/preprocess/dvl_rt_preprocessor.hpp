@@ -40,7 +40,7 @@ namespace nav_core::preprocess {
 //
 // 为了避免强绑定具体驱动实现，这里假定 DvlDriver 向上层提供一个
 // nav_core::DvlRawSample（在 core/types.hpp 中定义），大致包含：
-//   - 时间戳：mono_ns / est_ns
+//   - 时间戳：sensor_time_ns / recv_mono_ns / consume_mono_ns / mono_ns / est_ns
 //   - 各报文分支：BI / BE / BS / BD 原始字段（如 vel_inst, vel_earth, range, corr, flags 等）
 //   - mode / kind：当前帧属于 BI/BE/BS/BD 中的哪一种
 //
@@ -52,6 +52,9 @@ namespace nav_core::preprocess {
 // 若你的 core/types.hpp 中暂时没有 DvlRawSample，可以先按以下注释定义：
 //
 struct DvlRawSample {
+      MonoTimeNs sensor_time_ns{0};
+      MonoTimeNs recv_mono_ns{0};
+      MonoTimeNs consume_mono_ns{0};
       MonoTimeNs mono_ns{0};
       MonoTimeNs est_ns{0};
       std::uint8_t kind{0};     // 0=BI, 1=BE, 2=BS, 3=BD
@@ -80,8 +83,16 @@ struct DvlRawSample {
  *   - bottom_lock: 是否判定为“有效锁底”；
  *   - gated_ok: 当前样本是否通过门控；
  *   - reason_code: 若 gated_ok=false，可选的门控失败标志，便于诊断。
+ *
+ * 时间语义：
+ *   - sensor_time_ns / recv_mono_ns / consume_mono_ns 与原始 DvlRawSample 对齐；
+ *   - mono_ns 是统一用于 freshness / 排序 / 回放的样本时间；
+ *   - est_ns 当前仅作为 mono_ns 的兼容镜像保留。
  */
 struct DvlRtOutput {
+    MonoTimeNs sensor_time_ns{0};
+    MonoTimeNs recv_mono_ns{0};
+    MonoTimeNs consume_mono_ns{0};
     MonoTimeNs mono_ns{0};
     MonoTimeNs est_ns{0};
 

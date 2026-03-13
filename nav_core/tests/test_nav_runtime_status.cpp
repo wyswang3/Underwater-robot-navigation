@@ -121,7 +121,8 @@ int test_aligning_nav_stays_invalid()
     auto nav = make_nav_snapshot(eskf, 0);
     nav_core::app::NavPublishContext ctx{};
     ctx.publish_mono_ns = 2'000'000'000ll;
-    ctx.last_imu_mono_ns = 1'950'000'000ll;
+    ctx.imu_timing.sensor_time_ns = 1'950'000'000ll;
+    ctx.imu_timing.recv_mono_ns = 1'951'000'000ll;
     ctx.max_imu_age_s = 0.2;
     ctx.max_dvl_age_s = 3.0;
     ctx.imu_enabled = true;
@@ -149,8 +150,12 @@ int test_imu_stale_nav_becomes_invalid()
     nav_core::app::NavPublishContext ctx{};
     ctx.publish_mono_ns = 1'500'000'000ll;
     ctx.state_stamp_ns = kStampNs;
-    ctx.last_imu_mono_ns = 1'000'000'000ll;
-    ctx.last_dvl_mono_ns = 1'400'000'000ll;
+    ctx.imu_timing.sensor_time_ns = 1'000'000'000ll;
+    ctx.imu_timing.recv_mono_ns = 1'010'000'000ll;
+    ctx.imu_timing.consume_mono_ns = 1'020'000'000ll;
+    ctx.dvl_timing.sensor_time_ns = 1'400'000'000ll;
+    ctx.dvl_timing.recv_mono_ns = 1'410'000'000ll;
+    ctx.dvl_timing.consume_mono_ns = 1'420'000'000ll;
     ctx.max_imu_age_s = 0.2;
     ctx.max_dvl_age_s = 3.0;
     ctx.imu_enabled = true;
@@ -179,8 +184,9 @@ int test_dvl_loss_is_explicitly_degraded()
     nav_core::app::NavPublishContext ctx{};
     ctx.publish_mono_ns = 3'050'000'000ll;
     ctx.state_stamp_ns = kStampNs;
-    ctx.last_imu_mono_ns = 3'040'000'000ll;
-    ctx.last_dvl_mono_ns = 0;
+    ctx.imu_timing.sensor_time_ns = 3'040'000'000ll;
+    ctx.imu_timing.recv_mono_ns = 3'041'000'000ll;
+    ctx.imu_timing.consume_mono_ns = 3'042'000'000ll;
     ctx.max_imu_age_s = 0.2;
     ctx.max_dvl_age_s = 3.0;
     ctx.imu_enabled = true;

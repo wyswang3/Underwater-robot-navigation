@@ -232,6 +232,52 @@ static_assert(std::is_trivially_copyable_v<EskfLogPacket>,
 
 
 // ============================================================================
+// 1.y 时间语义追踪日志包（P0 baseline）
+// ============================================================================
+
+enum class TimingTraceKind : std::uint16_t {
+    kImuConsumed = 1,
+    kDvlConsumed = 2,
+    kNavPublished = 3,
+};
+
+enum TimingTraceFlags : std::uint16_t {
+    kTimingTraceNone      = 0,
+    kTimingTraceFresh     = 1u << 0,
+    kTimingTraceAccepted  = 1u << 1,
+    kTimingTraceValid     = 1u << 2,
+    kTimingTraceStale     = 1u << 3,
+    kTimingTraceDegraded  = 1u << 4,
+};
+
+/**
+ * @brief 统一记录“采样时刻 / 接收时刻 / 消费时刻 / 发布时间”的时间追踪包。
+ *
+ * 用途：
+ *   - P0 阶段先把时间语义写实，后续 P1 回放工具可直接基于该文件检查
+ *     stale 传播、乱序样本、主线程消费年龄与发布年龄是否一致。
+ *   - 该结构只记录时间与最小语义，不承载完整传感器数值。
+ */
+struct TimingTracePacketV1
+{
+    std::uint32_t version{1};
+    std::uint16_t kind{0};
+    std::uint16_t flags{kTimingTraceNone};
+
+    MonoTimeNs sensor_time_ns{0};
+    MonoTimeNs recv_mono_ns{0};
+    MonoTimeNs consume_mono_ns{0};
+    MonoTimeNs publish_mono_ns{0};
+
+    std::uint32_t age_ms{0xFFFFFFFFu};
+    std::uint32_t fault_code{0};
+};
+
+static_assert(std::is_trivially_copyable_v<TimingTracePacketV1>,
+              "TimingTracePacketV1 must be trivially copyable");
+
+
+// ============================================================================
 // 2. 新版 ESKF 监控日志包 —— 健康监控 / 调参专用
 //    不影响旧 V1 解析；新代码优先使用这些结构。
 // ============================================================================

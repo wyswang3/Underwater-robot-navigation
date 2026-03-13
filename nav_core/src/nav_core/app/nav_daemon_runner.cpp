@@ -24,6 +24,7 @@
 
 #include "nav_core/app/nav_daemon_config.hpp"
 #include "nav_core/app/nav_runtime_status.hpp"
+#include "nav_core/app/sample_timing.hpp"
 
 #include "nav_core/core/types.hpp"
 #include "nav_core/core/timebase.hpp"
@@ -39,6 +40,7 @@
 
 #include "nav_core/io/nav_state_publisher.hpp"
 #include "nav_core/io/bin_logger.hpp"
+#include "nav_core/io/log_packets.hpp"
 
 #include "shared/msg/nav_state.hpp"
 
@@ -60,6 +62,7 @@ namespace smsg       = shared::msg;
 using DvlSample      = nav_core::DvlFrame;    // 方便后面写 update_dvl_xy
 using ProtoTrackType = nav_core::dvl_protocol::TrackType;               // = dvl_protocol::TrackType
 using drivers::DvlCoordFrame;                // = dvl_protocol::CoordFrame
+using app::SampleTiming;
 
 
 // ========== 简单时间工具 ==========
@@ -86,7 +89,10 @@ inline SysTimeNs system_now_ns()
 
 inline void imu_frame_to_sample_raw(const ImuFrame& in, ImuSample& out)
 {
-    // 时间戳直接拷贝
+    // 时间戳直接拷贝：主线程只允许在消费路径补 consume_mono_ns。
+    out.sensor_time_ns = in.sensor_time_ns;
+    out.recv_mono_ns = in.recv_mono_ns;
+    out.consume_mono_ns = in.consume_mono_ns;
     out.mono_ns = in.mono_ns;
     out.est_ns  = in.est_ns;
 
@@ -182,6 +188,9 @@ bool init_dvl(const app::NavDaemonConfig& cfg,
     auto on_raw = [&shared](const DvlRawData& raw) {
         DvlRawSample sample{};
 
+        sample.sensor_time_ns = raw.sensor_time_ns;
+        sample.recv_mono_ns = raw.recv_mono_ns;
+        sample.consume_mono_ns = 0;
         sample.mono_ns = raw.mono_ns;
         sample.est_ns  = raw.est_ns;
 
@@ -261,6 +270,9 @@ bool init_dvl(const app::NavDaemonConfig& cfg,
 inline void dvl_rt_output_to_sample(const preprocess::DvlRtOutput& in,
                                     DvlSample&                    out)
 {
+    out.sensor_time_ns = in.sensor_time_ns;
+    out.recv_mono_ns = in.recv_mono_ns;
+    out.consume_mono_ns = in.consume_mono_ns;
     out.mono_ns = in.mono_ns;
     out.est_ns  = in.est_ns;
 
@@ -315,6 +327,46 @@ inline void dvl_rt_output_to_sample(const preprocess::DvlRtOutput& in,
     out.quality = 0;
 }
 
+inline SampleTiming sample_timing_from(const ImuFrame& sample) noexcept
+{
+    return SampleTiming{sample.mono_ns, sample.recv_mono_ns, sample.consume_mono_ns};
+}
+
+inline SampleTiming sample_timing_from(const preprocess::DvlRawSample& sample) noexcept
+{
+    return SampleTiming{sample.mono_ns, sample.recv_mono_ns, sample.consume_mono_ns};
+}
+
+inline SampleTiming sample_timing_from(const DvlSample& sample) noexcept
+{
+    return SampleTiming{sample.mono_ns, sample.recv_mono_ns, sample.consume_mono_ns};
+}
+
+inline void write_timing_trace(nav_core::BinLogger*        logger,
+                               io::TimingTraceKind         kind,
+                               const SampleTiming&         timing,
+                               MonoTimeNs                  publish_mono_ns,
+                               std::uint32_t               age_ms,
+                               std::uint16_t               flags,
+                               shared::msg::NavFaultCode   fault_code =
+                                   shared::msg::NavFaultCode::kNone)
+{
+    if (logger == nullptr) {
+        return;
+    }
+
+    io::TimingTracePacketV1 pkt{};
+    pkt.kind = static_cast<std::uint16_t>(kind);
+    pkt.flags = flags;
+    pkt.sensor_time_ns = timing.sensor_time_ns;
+    pkt.recv_mono_ns = timing.recv_mono_ns;
+    pkt.consume_mono_ns = timing.consume_mono_ns;
+    pkt.publish_mono_ns = publish_mono_ns;
+    pkt.age_ms = age_ms;
+    pkt.fault_code = static_cast<std::uint32_t>(fault_code);
+    logger->writePod(pkt);
+}
+
 // ========== NavStatePublisher 初始化 ==========
 
 bool init_nav_state_publisher(const app::NavDaemonConfig& cfg,
@@ -341,13 +393,14 @@ bool init_nav_state_publisher(const app::NavDaemonConfig& cfg,
 
 // ========== BinLogger 初始化（使用 nav_core::BinLogger 简单版本） ==========
 
-bool init_bin_logger(const app::NavDaemonConfig& cfg,
-                     nav_core::BinLogger&        logger)
+bool init_named_bin_logger(const app::NavDaemonConfig& cfg,
+                           const char*                 filename,
+                           nav_core::BinLogger&        logger)
 {
     const auto& lcfg = cfg.logging;
-    if (!lcfg.enable) {
+    if (!lcfg.enable || filename == nullptr || filename[0] == '\0') {
         std::fprintf(stderr,
-                     "[nav_daemon] bin_logger disabled by config.logging.enable=false\n");
+                     "[nav_daemon] bin_logger disabled by config or invalid filename\n");
         return false;
     }
 
@@ -370,7 +423,7 @@ bool init_bin_logger(const app::NavDaemonConfig& cfg,
     }
     base /= "nav";
 
-    fs::path file = base / "nav.bin";
+    fs::path file = base / filename;
 
     // BinLogger::open 自己会递归创建目录（ensureDirForFile），这里不强求 create_directories。
     if (!logger.open(file.string(), /*append=*/true)) {
@@ -396,7 +449,8 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                   preprocess::DvlRtPreprocessor& dvl_pp,
                   estimator::EskfFilter&         eskf,
                   io::NavStatePublisher&         nav_pub,
-                  nav_core::BinLogger*           bin_logger,
+                  nav_core::BinLogger*           sample_logger,
+                  nav_core::BinLogger*           timing_logger,
                   std::atomic<bool>&             stop_flag)
 {
     const double loop_hz   = (cfg.loop.nav_loop_hz > 0.0) ? cfg.loop.nav_loop_hz : 20.0;
@@ -412,14 +466,17 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                  "(IMU=%s, DVL=%s, logging=%s)\n",
                  cfg.imu.enable ? "ENABLED" : "DISABLED",
                  cfg.dvl.enable ? "ENABLED" : "DISABLED",
-                 (bin_logger ? "ON" : "OFF"));
+                 (sample_logger || timing_logger) ? "ON" : "OFF");
 
     auto          next_wakeup    = std::chrono::steady_clock::now();
     std::uint64_t print_counter  = 0;
     const double  print_interval_s = 10.0;
     MonoTimeNs    last_print_ns    = 0;
-
-    static MonoTimeNs last_used_dvl_ns = 0;
+    MonoTimeNs    last_used_imu_ns     = 0;
+    MonoTimeNs    last_used_dvl_ns     = 0;
+    std::optional<ImuSample> last_consumed_nav_imu;
+    SampleTiming            last_consumed_imu_timing{};
+    SampleTiming            last_consumed_dvl_timing{};
 
 #if NAV_CORE_ENABLE_GRAPH
     estimator::NavHealthMonitor health_monitor(cfg.estimator.health);
@@ -431,7 +488,6 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
             std::chrono::duration<double>(loop_dt_s));
 
         const MonoTimeNs now_mono_ns = monotonic_now_ns();
-        const SysTimeNs  now_wall_ns = system_now_ns();
 
         std::optional<ImuFrame>                 imu_frame;
         std::optional<preprocess::DvlRawSample> dvl_raw;
@@ -448,27 +504,28 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
             ++shared_state.loop_counter;
         }
 
+#if !NAV_CORE_ENABLE_GRAPH
+        (void)last_imu_ns;
+        (void)last_dvl_ns;
+#endif
+
         double imu_age_s = 0.0;
         double dvl_age_s = 0.0;
 
-        // ---------- IMU 管线：ImuFrame -> ImuSample(raw) -> ImuRtPreprocessor -> ESKF ----------
+        // ---------- IMU 管线：只消费“新且 fresh”的样本，禁止重复传播旧快照 ----------
         if (imu_frame.has_value()) {
-            if (last_imu_ns > 0) {
-                imu_age_s = (now_mono_ns - last_imu_ns) * 1e-9;
+            const ImuFrame& frame_in = *imu_frame;
+            if (frame_in.mono_ns > 0 && now_mono_ns >= frame_in.mono_ns) {
+                imu_age_s = static_cast<double>(now_mono_ns - frame_in.mono_ns) * 1e-9;
             }
 
-            if (imu_age_s <= max_imu_age_s || max_imu_age_s <= 0.0) {
-                // 1) 驱动回调出来的原始帧（传感器坐标系 RFU）
-                const ImuFrame& frame_in = *imu_frame;
-
-                // 2) 构造 raw ImuSample（仍然是“传感器坐标系 + 原始数据”）
+            if (app::is_sample_fresh(now_mono_ns, frame_in.mono_ns, max_imu_age_s) &&
+                app::should_consume_sample(frame_in.mono_ns, last_used_imu_ns)) {
                 ImuSample samp_in{};
                 imu_frame_to_sample_raw(frame_in, samp_in);
-                if (samp_in.est_ns == 0) {
-                    samp_in.est_ns = now_wall_ns;
-                }
+                samp_in.consume_mono_ns = now_mono_ns;
+                samp_in.est_ns = samp_in.mono_ns;
 
-                // 3) 预处理输出：体坐标系 B=FRD + 去 bias + 扣重力 + yaw 滤波
                 ImuSample samp_out{};
                 const bool ok = imu_pp.process(samp_in, samp_out);
                 if (!ok) {
@@ -478,8 +535,12 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                                      "(可能是 NaN / 无效欧拉角 / 静止窗尚未建立 bias)\n");
                     }
                 } else {
-                    // 4) ESKF 传播（注意 EskfConfig 要设定 imu.acc_is_linear=true）
+                    samp_out.consume_mono_ns = samp_in.consume_mono_ns;
+                    samp_out.est_ns = samp_out.mono_ns;
                     latest_nav_imu = samp_out;
+                    last_consumed_nav_imu = samp_out;
+                    last_consumed_imu_timing = sample_timing_from(samp_out);
+                    last_used_imu_ns = samp_out.mono_ns;
                     const bool imu_used = eskf.propagate_imu(samp_out);
 #if !NAV_CORE_ENABLE_GRAPH
                     (void)imu_used;
@@ -489,30 +550,58 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                         health_monitor.notify_imu_propagate(samp_out.mono_ns);
                     }
 #endif
+                    write_timing_trace(
+                        timing_logger,
+                        io::TimingTraceKind::kImuConsumed,
+                        last_consumed_imu_timing,
+                        0,
+                        app::compute_age_ms(now_mono_ns, samp_out.mono_ns),
+                        io::kTimingTraceFresh | io::kTimingTraceAccepted);
                 }
+                last_used_imu_ns = frame_in.mono_ns;
+            } else if (!app::is_sample_fresh(now_mono_ns, frame_in.mono_ns, max_imu_age_s) &&
+                       (print_counter % 200) == 0) {
+                std::fprintf(stderr,
+                             "[nav_daemon] WARNING: IMU sample age=%.3f > max_imu_age_s=%.3f, "
+                             "skip stale sample\n",
+                             imu_age_s, max_imu_age_s);
+            } else if (!app::should_consume_sample(frame_in.mono_ns, last_used_imu_ns) &&
+                       frame_in.mono_ns < last_used_imu_ns &&
+                       (print_counter % 200) == 0) {
+                std::fprintf(stderr,
+                             "[nav_daemon] WARNING: IMU sample out-of-order "
+                             "(sample=%lld last_used=%lld), drop\n",
+                             static_cast<long long>(frame_in.mono_ns),
+                             static_cast<long long>(last_used_imu_ns));
             }
         }
 
-        // ---------- DVL 管线：DvlRawSample -> DvlRtPreprocessor -> DvlSample -> ESKF 更新 ----------
+        if (!latest_nav_imu.has_value() &&
+            last_consumed_nav_imu.has_value() &&
+            app::is_sample_fresh(now_mono_ns, last_consumed_imu_timing, max_imu_age_s)) {
+            latest_nav_imu = last_consumed_nav_imu;
+        }
+
+        // ---------- DVL 管线：只消费“新且 fresh”的样本，禁止乱序重复更新 ----------
         if (dvl_raw.has_value()) {
-            if (last_dvl_ns > 0) {
-                dvl_age_s = (now_mono_ns - last_dvl_ns) * 1e-9;
+            if (dvl_raw->mono_ns > 0 && now_mono_ns >= dvl_raw->mono_ns) {
+                dvl_age_s = static_cast<double>(now_mono_ns - dvl_raw->mono_ns) * 1e-9;
             }
 
-            if (dvl_age_s <= max_dvl_age_s || max_dvl_age_s <= 0.0) {
-                const preprocess::DvlRawSample& raw_in = *dvl_raw;
+            if (app::is_sample_fresh(now_mono_ns, dvl_raw->mono_ns, max_dvl_age_s)) {
+                preprocess::DvlRawSample raw_in = *dvl_raw;
 
-                // 只在“新帧”到达时才调用预处理 & 更新 ESKF
-                if (raw_in.mono_ns > last_used_dvl_ns) {
+                if (app::should_consume_sample(raw_in.mono_ns, last_used_dvl_ns)) {
+                    raw_in.consume_mono_ns = now_mono_ns;
                     preprocess::DvlRtOutput dvl_out{};
                     const bool ok = dvl_pp.process(raw_in, dvl_out);
 
                     if (ok && dvl_out.gated_ok) {
-                        // 1) DvlRtOutput -> DvlSample（ESKF 接口所需）
                         DvlSample dvl_sample{};
                         dvl_rt_output_to_sample(dvl_out, dvl_sample);
 
-                        // 2) ESKF 更新（XY 水平速度 + Z/深度）
+                        last_consumed_dvl_timing = sample_timing_from(dvl_sample);
+
                         estimator::EskfUpdateDiagDvlXY diag_xy{};
                         estimator::EskfUpdateDiagDvlZ  diag_z{};
 
@@ -539,12 +628,26 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                         }
 #endif
 
-                        if (bin_logger) {
-                            bin_logger->write(&dvl_sample, sizeof(dvl_sample));
+                        if (sample_logger) {
+                            sample_logger->write(&dvl_sample, sizeof(dvl_sample));
                         }
+
+                        write_timing_trace(
+                            timing_logger,
+                            io::TimingTraceKind::kDvlConsumed,
+                            last_consumed_dvl_timing,
+                            0,
+                            app::compute_age_ms(now_mono_ns, dvl_sample.mono_ns),
+                            io::kTimingTraceFresh | io::kTimingTraceAccepted);
                     }
 
                     last_used_dvl_ns = raw_in.mono_ns;
+                } else if (raw_in.mono_ns < last_used_dvl_ns && (print_counter % 200) == 0) {
+                    std::fprintf(stderr,
+                                 "[nav_daemon] WARNING: DVL sample out-of-order "
+                                 "(sample=%lld last_used=%lld), drop\n",
+                                 static_cast<long long>(raw_in.mono_ns),
+                                 static_cast<long long>(last_used_dvl_ns));
                 }
             } else if ((print_counter % 200) == 0) {
                 std::fprintf(stderr,
@@ -566,8 +669,8 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
         app::NavPublishContext publish_ctx{};
         publish_ctx.publish_mono_ns = now_mono_ns;
         publish_ctx.state_stamp_ns = state_stamp_ns;
-        publish_ctx.last_imu_mono_ns = last_imu_ns;
-        publish_ctx.last_dvl_mono_ns = last_dvl_ns;
+        publish_ctx.imu_timing = last_consumed_imu_timing;
+        publish_ctx.dvl_timing = last_consumed_dvl_timing;
         publish_ctx.max_imu_age_s = max_imu_age_s;
         publish_ctx.max_dvl_age_s = max_dvl_age_s;
         publish_ctx.imu_enabled = cfg.imu.enable;
@@ -591,6 +694,18 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                              "(请检查共享内存是否被消费端正确读取)\n");
             }
         }
+
+        write_timing_trace(
+            timing_logger,
+            io::TimingTraceKind::kNavPublished,
+            SampleTiming{state_stamp_ns, last_consumed_imu_timing.recv_mono_ns, now_mono_ns},
+            now_mono_ns,
+            nav.age_ms,
+            static_cast<std::uint16_t>(
+                (nav.valid ? io::kTimingTraceValid : io::kTimingTraceNone) |
+                (nav.stale ? io::kTimingTraceStale : io::kTimingTraceNone) |
+                (nav.degraded ? io::kTimingTraceDegraded : io::kTimingTraceNone)),
+            nav.fault_code);
 
         // ---------- 每 10 秒输出一次当前导航结果 ----------
         {
@@ -684,14 +799,24 @@ int run_nav_daemon(const NavDaemonConfig&       cfg,
     }
 
     // BinLogger
-    nav_core::BinLogger  bin_logger;
-    nav_core::BinLogger* bin_logger_ptr = nullptr;
-    if (init_bin_logger(cfg, bin_logger)) {
-        bin_logger_ptr = &bin_logger;
+    nav_core::BinLogger  sample_logger;
+    nav_core::BinLogger* sample_logger_ptr = nullptr;
+    if (init_named_bin_logger(cfg, "nav.bin", sample_logger)) {
+        sample_logger_ptr = &sample_logger;
     } else {
         std::fprintf(stderr,
-                     "[nav_daemon] WARNING: BinLogger init failed or disabled "
-                     "(不会写二进制日志，但不影响导航本身)\n");
+                     "[nav_daemon] WARNING: sample BinLogger init failed or disabled "
+                     "(不会写处理后的 DVL 样本日志，但不影响导航本身)\n");
+    }
+
+    nav_core::BinLogger  timing_logger;
+    nav_core::BinLogger* timing_logger_ptr = nullptr;
+    if (init_named_bin_logger(cfg, "nav_timing.bin", timing_logger)) {
+        timing_logger_ptr = &timing_logger;
+    } else {
+        std::fprintf(stderr,
+                     "[nav_daemon] WARNING: timing BinLogger init failed or disabled "
+                     "(不会写时间语义追踪日志，但不影响导航本身)\n");
     }
 
     std::fprintf(stderr,
@@ -703,7 +828,8 @@ int run_nav_daemon(const NavDaemonConfig&       cfg,
                          imu_driver, dvl_driver,
                          imu_pp, dvl_pp,
                          eskf, nav_pub,
-                         bin_logger_ptr,
+                         sample_logger_ptr,
+                         timing_logger_ptr,
                          stop_flag);
 }
 

@@ -12,40 +12,9 @@ using shared::msg::NavFaultCode;
 using shared::msg::NavHealth;
 using shared::msg::NavRunState;
 
-constexpr std::uint32_t kAgeUnknownMs = 0xFFFFFFFFu;
-
 inline bool is_finite3(const nav_core::Vec3d& v) noexcept
 {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
-}
-
-inline bool age_within_limit(MonoTimeNs now_ns,
-                             MonoTimeNs sample_ns,
-                             double     max_age_s) noexcept
-{
-    if (sample_ns <= 0) {
-        return false;
-    }
-    if (max_age_s <= 0.0) {
-        return true;
-    }
-    if (now_ns < sample_ns) {
-        return false;
-    }
-    const double age_s = static_cast<double>(now_ns - sample_ns) * 1e-9;
-    return age_s <= max_age_s;
-}
-
-inline std::uint32_t compute_age_ms(MonoTimeNs now_ns, MonoTimeNs stamp_ns) noexcept
-{
-    if (stamp_ns <= 0 || now_ns < stamp_ns) {
-        return kAgeUnknownMs;
-    }
-    const std::uint64_t age_ms64 =
-        static_cast<std::uint64_t>(now_ns - stamp_ns) / 1000000ull;
-    return (age_ms64 > std::numeric_limits<std::uint32_t>::max())
-        ? std::numeric_limits<std::uint32_t>::max()
-        : static_cast<std::uint32_t>(age_ms64);
 }
 
 } // namespace
@@ -117,16 +86,16 @@ void apply_nav_publish_semantics(const NavPublishContext& ctx,
     nav.sensor_mask = shared::msg::NAV_SENSOR_NONE;
     nav.status_flags = shared::msg::NAV_FLAG_NONE;
 
-    const bool imu_seen = ctx.last_imu_mono_ns > 0;
+    const bool imu_seen = ctx.imu_timing.sample_mono_ns() > 0;
     const bool have_state = ctx.state_stamp_ns > 0;
     const bool imu_fresh = ctx.imu_enabled &&
-                           age_within_limit(ctx.publish_mono_ns,
-                                            ctx.last_imu_mono_ns,
-                                            ctx.max_imu_age_s);
+                           is_sample_fresh(ctx.publish_mono_ns,
+                                           ctx.imu_timing,
+                                           ctx.max_imu_age_s);
     const bool dvl_fresh = ctx.dvl_enabled &&
-                           age_within_limit(ctx.publish_mono_ns,
-                                            ctx.last_dvl_mono_ns,
-                                            ctx.max_dvl_age_s);
+                           is_sample_fresh(ctx.publish_mono_ns,
+                                           ctx.dvl_timing,
+                                           ctx.max_dvl_age_s);
 
     if (imu_fresh) {
         shared::msg::nav_sensor_set(nav.sensor_mask, shared::msg::NAV_SENSOR_IMU);
