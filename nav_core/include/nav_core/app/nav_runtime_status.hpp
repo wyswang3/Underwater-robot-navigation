@@ -36,12 +36,20 @@ bool eskf_state_is_finite(const estimator::EskfFilter& eskf) noexcept;
 /**
  * @brief 将 ESKF 名义状态复制到 NavState 的运动学字段。
  *
+ * 约定：
+ *   - 位姿/速度来自 ESKF 名义状态；
+ *   - omega_b / acc_b 必须表达“当前最新的机体系角速度/线加速度量测”，
+ *     不能错误复用 ESKF 内部 bias 状态；
+ *   - 当当前循环没有可用 IMU 量测时，omega_b / acc_b 退化为 0，由
+ *     apply_nav_publish_semantics() 再决定该帧是否可信。
+ *
  * 本函数只做数值映射，不填充 valid/stale/fault 等工程语义；
  * 这些语义统一由 apply_nav_publish_semantics() 决定。
  */
 void fill_nav_state_kinematics(const estimator::EskfFilter& eskf,
                                shared::msg::NavState&       nav,
-                               MonoTimeNs                   state_stamp_ns) noexcept;
+                               MonoTimeNs                   state_stamp_ns,
+                               const ImuSample*             latest_imu_sample = nullptr) noexcept;
 
 /**
  * @brief 根据运行时上下文显式填充 NavState 的可信度/新鲜度/故障语义。

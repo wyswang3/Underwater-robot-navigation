@@ -62,7 +62,8 @@ bool eskf_state_is_finite(const estimator::EskfFilter& eskf) noexcept
 
 void fill_nav_state_kinematics(const estimator::EskfFilter& eskf,
                                shared::msg::NavState&       nav,
-                               MonoTimeNs                   state_stamp_ns) noexcept
+                               MonoTimeNs                   state_stamp_ns,
+                               const ImuSample*             latest_imu_sample) noexcept
 {
     const auto st = eskf.state();
 
@@ -82,13 +83,24 @@ void fill_nav_state_kinematics(const estimator::EskfFilter& eskf,
 
     nav.depth = -st.p_enu.z;
 
-    nav.omega_b[0] = st.bg_rad_s.x;
-    nav.omega_b[1] = st.bg_rad_s.y;
-    nav.omega_b[2] = st.bg_rad_s.z;
+    // Body kinematics are control-facing measured quantities, not ESKF bias states.
+    if (latest_imu_sample != nullptr) {
+        nav.omega_b[0] = static_cast<double>(latest_imu_sample->ang_vel[0]);
+        nav.omega_b[1] = static_cast<double>(latest_imu_sample->ang_vel[1]);
+        nav.omega_b[2] = static_cast<double>(latest_imu_sample->ang_vel[2]);
 
-    nav.acc_b[0] = st.ba_mps2.x;
-    nav.acc_b[1] = st.ba_mps2.y;
-    nav.acc_b[2] = st.ba_mps2.z;
+        nav.acc_b[0] = static_cast<double>(latest_imu_sample->lin_acc[0]);
+        nav.acc_b[1] = static_cast<double>(latest_imu_sample->lin_acc[1]);
+        nav.acc_b[2] = static_cast<double>(latest_imu_sample->lin_acc[2]);
+    } else {
+        nav.omega_b[0] = 0.0;
+        nav.omega_b[1] = 0.0;
+        nav.omega_b[2] = 0.0;
+
+        nav.acc_b[0] = 0.0;
+        nav.acc_b[1] = 0.0;
+        nav.acc_b[2] = 0.0;
+    }
 }
 
 void apply_nav_publish_semantics(const NavPublishContext& ctx,

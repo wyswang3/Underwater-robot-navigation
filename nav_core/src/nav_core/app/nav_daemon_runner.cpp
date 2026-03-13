@@ -435,6 +435,7 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
 
         std::optional<ImuFrame>                 imu_frame;
         std::optional<preprocess::DvlRawSample> dvl_raw;
+        std::optional<ImuSample>                latest_nav_imu;
         MonoTimeNs last_imu_ns = 0;
         MonoTimeNs last_dvl_ns = 0;
 
@@ -478,6 +479,7 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                     }
                 } else {
                     // 4) ESKF 传播（注意 EskfConfig 要设定 imu.acc_is_linear=true）
+                    latest_nav_imu = samp_out;
                     const bool imu_used = eskf.propagate_imu(samp_out);
 #if !NAV_CORE_ENABLE_GRAPH
                     (void)imu_used;
@@ -555,7 +557,11 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
         // ---------- ESKF → NavState（唯一出口） ----------
         smsg::NavState nav{};
         const MonoTimeNs state_stamp_ns = eskf.last_propagate_time();
-        app::fill_nav_state_kinematics(eskf, nav, state_stamp_ns);
+        app::fill_nav_state_kinematics(
+            eskf,
+            nav,
+            state_stamp_ns,
+            latest_nav_imu.has_value() ? &(*latest_nav_imu) : nullptr);
 
         app::NavPublishContext publish_ctx{};
         publish_ctx.publish_mono_ns = now_mono_ns;

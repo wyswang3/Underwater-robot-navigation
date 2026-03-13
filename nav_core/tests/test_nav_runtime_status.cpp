@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 
@@ -27,12 +28,64 @@ namespace {
         }                                                                                         \
     } while (0)
 
+#define TEST_NEAR(a, b, eps)                                                                      \
+    do {                                                                                          \
+        const auto _va = static_cast<double>(a);                                                  \
+        const auto _vb = static_cast<double>(b);                                                  \
+        const auto _ve = static_cast<double>(eps);                                                \
+        if (std::fabs(_va - _vb) > _ve) {                                                         \
+            std::cerr << "[FAIL] " << __FILE__ << ":" << __LINE__                                 \
+                      << " NEAR(" #a ", " #b ", " #eps ") failed. got=" << _va                    \
+                      << " expect=" << _vb << " eps=" << _ve << "\n";                             \
+            return 1;                                                                             \
+        }                                                                                         \
+    } while (0)
+
 shared::msg::NavState make_nav_snapshot(nav_core::estimator::EskfFilter& eskf,
-                                        nav_core::MonoTimeNs             stamp_ns)
+                                        nav_core::MonoTimeNs             stamp_ns,
+                                        const nav_core::ImuSample*       imu_sample = nullptr)
 {
     shared::msg::NavState nav{};
-    nav_core::app::fill_nav_state_kinematics(eskf, nav, stamp_ns);
+    nav_core::app::fill_nav_state_kinematics(eskf, nav, stamp_ns, imu_sample);
     return nav;
+}
+
+int test_nav_body_kinematics_use_latest_imu_measurement()
+{
+    nav_core::estimator::EskfConfig cfg{};
+    nav_core::estimator::EskfFilter eskf(cfg);
+
+    nav_core::ImuSample imu{};
+    imu.ang_vel[0] = 0.1f;
+    imu.ang_vel[1] = -0.2f;
+    imu.ang_vel[2] = 0.3f;
+    imu.lin_acc[0] = 1.0f;
+    imu.lin_acc[1] = 2.0f;
+    imu.lin_acc[2] = -3.0f;
+
+    const auto nav = make_nav_snapshot(eskf, 42, &imu);
+    TEST_NEAR(nav.omega_b[0], 0.1, 1e-6);
+    TEST_NEAR(nav.omega_b[1], -0.2, 1e-6);
+    TEST_NEAR(nav.omega_b[2], 0.3, 1e-6);
+    TEST_NEAR(nav.acc_b[0], 1.0, 1e-6);
+    TEST_NEAR(nav.acc_b[1], 2.0, 1e-6);
+    TEST_NEAR(nav.acc_b[2], -3.0, 1e-6);
+    return 0;
+}
+
+int test_nav_body_kinematics_zero_when_no_imu_measurement()
+{
+    nav_core::estimator::EskfConfig cfg{};
+    nav_core::estimator::EskfFilter eskf(cfg);
+
+    const auto nav = make_nav_snapshot(eskf, 42, nullptr);
+    TEST_NEAR(nav.omega_b[0], 0.0, 1e-9);
+    TEST_NEAR(nav.omega_b[1], 0.0, 1e-9);
+    TEST_NEAR(nav.omega_b[2], 0.0, 1e-9);
+    TEST_NEAR(nav.acc_b[0], 0.0, 1e-9);
+    TEST_NEAR(nav.acc_b[1], 0.0, 1e-9);
+    TEST_NEAR(nav.acc_b[2], 0.0, 1e-9);
+    return 0;
 }
 
 int test_uninitialized_nav_is_not_publishable()
@@ -161,6 +214,10 @@ int main()
     rc = test_imu_stale_nav_becomes_invalid();
     if (rc != 0) return rc;
     rc = test_dvl_loss_is_explicitly_degraded();
+    if (rc != 0) return rc;
+    rc = test_nav_body_kinematics_use_latest_imu_measurement();
+    if (rc != 0) return rc;
+    rc = test_nav_body_kinematics_zero_when_no_imu_measurement();
     if (rc != 0) return rc;
 
     std::cout << "[test_nav_runtime_status] all tests passed.\n";
