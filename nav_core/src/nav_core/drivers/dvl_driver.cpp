@@ -128,6 +128,7 @@ bool DvlDriver::init(const DvlConfig& cfg,
 
     stop_requested_.store(false);
     running_.store(false);
+    port_open_.store(false);
 
     n_lines_.store(0);
     n_parsed_ok_.store(0);
@@ -233,6 +234,7 @@ void DvlDriver::stop() noexcept {
 
 bool DvlDriver::openPort() {
     if (fd_ >= 0) {
+        port_open_.store(true);
         return true;
     }
 
@@ -240,6 +242,7 @@ bool DvlDriver::openPort() {
     if (fd_ < 0) {
         std::cerr << "[DVL] open(" << port_ << ") failed: "
                   << std::strerror(errno) << "\n";
+        port_open_.store(false);
         return false;
     }
 
@@ -249,6 +252,7 @@ bool DvlDriver::openPort() {
                   << std::strerror(errno) << "\n";
         ::close(fd_);
         fd_ = -1;
+        port_open_.store(false);
         return false;
     }
 
@@ -278,11 +282,13 @@ bool DvlDriver::openPort() {
                   << std::strerror(errno) << "\n";
         ::close(fd_);
         fd_ = -1;
+        port_open_.store(false);
         return false;
     }
 
     std::cerr << "[DVL] serial opened: " << port_
               << " @" << baud_ << "\n";
+    port_open_.store(true);
     return true;
 }
 
@@ -292,6 +298,7 @@ void DvlDriver::closePort() noexcept {
         fd_ = -1;
         std::cerr << "[DVL] serial closed\n";
     }
+    port_open_.store(false);
 }
 
 // ============================================================================

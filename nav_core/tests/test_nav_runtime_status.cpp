@@ -106,7 +106,7 @@ int test_uninitialized_nav_is_not_publishable()
 
     TEST_EQ(nav.nav_state, shared::msg::NavRunState::kUninitialized);
     TEST_EQ(nav.health, shared::msg::NavHealth::UNINITIALIZED);
-    TEST_EQ(nav.fault_code, shared::msg::NavFaultCode::kImuNoData);
+    TEST_EQ(nav.fault_code, shared::msg::NavFaultCode::kImuDeviceNotFound);
     TEST_CHECK(nav.valid == 0);
     TEST_CHECK(nav.stale == 0);
     TEST_EQ(nav.status_flags, shared::msg::NAV_FLAG_NONE);
@@ -136,6 +136,32 @@ int test_aligning_nav_stays_invalid()
     TEST_EQ(nav.fault_code, shared::msg::NavFaultCode::kAlignmentPending);
     TEST_CHECK(nav.valid == 0);
     TEST_CHECK(nav.stale == 0);
+    return 0;
+}
+
+int test_device_mismatch_sets_explicit_fault_and_flag()
+{
+    nav_core::estimator::EskfConfig cfg{};
+    nav_core::estimator::EskfFilter eskf(cfg);
+
+    auto nav = make_nav_snapshot(eskf, 0);
+    nav_core::app::NavPublishContext ctx{};
+    ctx.publish_mono_ns = 2'000'000'000ll;
+    ctx.max_imu_age_s = 0.2;
+    ctx.max_dvl_age_s = 3.0;
+    ctx.imu_enabled = true;
+    ctx.dvl_enabled = true;
+    ctx.imu_bias_ready = false;
+    ctx.imu_device_state = nav_core::app::DeviceConnectionState::MISMATCH;
+    ctx.dvl_device_state = nav_core::app::DeviceConnectionState::RECONNECTING;
+
+    nav_core::app::apply_nav_publish_semantics(ctx, true, nav);
+
+    TEST_EQ(nav.fault_code, shared::msg::NavFaultCode::kImuDeviceMismatch);
+    TEST_CHECK(shared::msg::nav_flag_has(nav.status_flags,
+                                         shared::msg::NAV_FLAG_IMU_BIND_MISMATCH));
+    TEST_CHECK(shared::msg::nav_flag_has(nav.status_flags,
+                                         shared::msg::NAV_FLAG_DVL_RECONNECTING));
     return 0;
 }
 
@@ -216,6 +242,8 @@ int main()
     rc = test_uninitialized_nav_is_not_publishable();
     if (rc != 0) return rc;
     rc = test_aligning_nav_stays_invalid();
+    if (rc != 0) return rc;
+    rc = test_device_mismatch_sets_explicit_fault_and_flag();
     if (rc != 0) return rc;
     rc = test_imu_stale_nav_becomes_invalid();
     if (rc != 0) return rc;

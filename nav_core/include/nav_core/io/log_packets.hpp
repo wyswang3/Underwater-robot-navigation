@@ -239,6 +239,10 @@ enum class TimingTraceKind : std::uint16_t {
     kImuConsumed = 1,
     kDvlConsumed = 2,
     kNavPublished = 3,
+    kImuRejected = 4,
+    kDvlRejected = 5,
+    kImuDeviceState = 6,
+    kDvlDeviceState = 7,
 };
 
 enum TimingTraceFlags : std::uint16_t {
@@ -248,6 +252,11 @@ enum TimingTraceFlags : std::uint16_t {
     kTimingTraceValid     = 1u << 2,
     kTimingTraceStale     = 1u << 3,
     kTimingTraceDegraded  = 1u << 4,
+    kTimingTraceRejected  = 1u << 5,
+    kTimingTraceOutOfOrder = 1u << 6,
+    kTimingTraceDeviceOnline = 1u << 7,
+    kTimingTraceDeviceMismatch = 1u << 8,
+    kTimingTraceDeviceReconnecting = 1u << 9,
 };
 
 /**
@@ -275,6 +284,8 @@ struct TimingTracePacketV1
 
 static_assert(std::is_trivially_copyable_v<TimingTracePacketV1>,
               "TimingTracePacketV1 must be trivially copyable");
+static_assert(sizeof(TimingTracePacketV1) == 48,
+              "TimingTracePacketV1 ABI changed; update parser and bump version");
 
 
 // ============================================================================

@@ -54,6 +54,31 @@ void load_scalar(const YAML::Node& parent,
     }
 }
 
+void load_string_list(const YAML::Node& parent,
+                      const char*       key,
+                      std::vector<std::string>& dst)
+{
+    if (!parent || !parent.IsMap()) {
+        return;
+    }
+    const YAML::Node node = parent[key];
+    if (!node || node.IsNull() || !node.IsSequence()) {
+        return;
+    }
+
+    std::vector<std::string> values;
+    values.reserve(node.size());
+    for (const auto& item : node) {
+        try {
+            values.push_back(item.as<std::string>());
+        } catch (const YAML::Exception& e) {
+            log_warn(std::string("failed to parse string list key '") + key + "': " + e.what());
+            return;
+        }
+    }
+    dst = std::move(values);
+}
+
 /// 获取子节点（不存在则返回空 Node）
 inline YAML::Node get_child(const YAML::Node& parent, const char* key)
 {
@@ -123,6 +148,18 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
                 load_scalar(drv_n, "port",       out_cfg.imu.driver.port);
                 load_scalar(drv_n, "baud",       out_cfg.imu.driver.baud);
                 load_scalar(drv_n, "slave_addr", out_cfg.imu.driver.slave_addr);
+
+                YAML::Node binding_n = get_child(drv_n, "binding");
+                if (binding_n) {
+                    auto& b = out_cfg.imu.driver.binding;
+                    load_string_list(binding_n, "candidate_paths", b.candidate_paths);
+                    load_scalar(binding_n, "expected_by_id_substring", b.expected_by_id_substring);
+                    load_scalar(binding_n, "expected_vid", b.expected_vid);
+                    load_scalar(binding_n, "expected_pid", b.expected_pid);
+                    load_scalar(binding_n, "expected_serial", b.expected_serial);
+                    load_scalar(binding_n, "offline_timeout_ms", b.offline_timeout_ms);
+                    load_scalar(binding_n, "reconnect_backoff_ms", b.reconnect_backoff_ms);
+                }
 
                 // 2.1.1 低层 filter（ImuFilterConfig），给驱动用
                 YAML::Node filt_n = get_child(drv_n, "filter");
@@ -208,6 +245,17 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
             load_scalar(drv_n, "baud",              dcfg.baud);
             load_scalar(drv_n, "auto_reconnect",    dcfg.auto_reconnect);
             load_scalar(drv_n, "send_startup_cmds", dcfg.send_startup_cmds);
+            YAML::Node binding_n = get_child(drv_n, "binding");
+            if (binding_n) {
+                auto& b = dcfg.binding;
+                load_string_list(binding_n, "candidate_paths", b.candidate_paths);
+                load_scalar(binding_n, "expected_by_id_substring", b.expected_by_id_substring);
+                load_scalar(binding_n, "expected_vid", b.expected_vid);
+                load_scalar(binding_n, "expected_pid", b.expected_pid);
+                load_scalar(binding_n, "expected_serial", b.expected_serial);
+                load_scalar(binding_n, "offline_timeout_ms", b.offline_timeout_ms);
+                load_scalar(binding_n, "reconnect_backoff_ms", b.reconnect_backoff_ms);
+            }
 
             // 新版字段：ping_rate / avg_count
             // （如 YAML 中缺失，则保持结构体默认值）
@@ -276,8 +324,6 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
             // 如需在 YAML 中配置新的参数，可以在这里按实际 struct 成员名补充。
             YAML::Node h_n = get_child(est_n, "health");
             if (h_n) {
-                auto& hcfg = est_cfg.health;
-
             // 由于当前 NavHealthConfig 中尚未定义新的可配置字段，
             // 这里先预留接口。如果未来在 nav_health_monitor.hpp /
             // 相关头文件中补充了成员，例如：

@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 
+#include "nav_core/drivers/serial_binding.hpp"
 #include "nav_core/core/types.hpp"            // MonoTimeNs / SysTimeNs
 #include "nav_core/drivers/dvl_protocol.hpp"  // TrackType / CoordFrame / ParsedLine / CommandBytes
 
@@ -93,6 +94,7 @@ struct DvlRawData {
 struct DvlConfig {
     std::string port;              ///< 串口路径，如 "/dev/ttyUSB0"
     int         baud{115200};      ///< 串口波特率
+    SerialBindingConfig binding{}; ///< 稳定路径/候选路径/身份校验/超时配置
 
     bool auto_reconnect{false};    ///< 预留：是否启用自动重连（当前未实现）
     bool send_startup_cmds{true};  ///< 是否在 start() 时自动下发 CZ/PR/PM/CS
@@ -172,6 +174,9 @@ public:
 
     /// @brief 当前是否在运行（后台线程处于 active 状态）。
     [[nodiscard]] bool running() const noexcept { return running_.load(); }
+
+    /// @brief 串口是否已打开。
+    [[nodiscard]] bool isPortOpen() const noexcept { return port_open_.load(); }
 
     // ==================== 连接健康判定 ====================
 
@@ -266,6 +271,7 @@ private:
     std::thread       th_;         ///< 后台读线程
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> port_open_{false};
 
     RawCallback on_raw_{};         ///< 原始帧回调
 

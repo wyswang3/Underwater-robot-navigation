@@ -41,6 +41,7 @@
 #include <string>
 #include <thread>
 
+#include "nav_core/drivers/serial_binding.hpp"
 #include "nav_core/core/types.hpp"  // ImuFrame / ImuRawRegs / ImuFilterConfig
 
 namespace nav_core::drivers {
@@ -49,6 +50,7 @@ struct ImuConfig {
     std::string  port;
     int          baud{230400};
     std::uint8_t slave_addr{0x50};
+    SerialBindingConfig binding{};
 
     ImuFilterConfig filter{};
 

@@ -124,29 +124,170 @@ struct SharedSensorState {
     std::uint64_t loop_counter{0};
 };
 
-// ========== 驱动初始化 ==========
+struct ManagedDeviceRuntime {
+    app::DeviceBinder binder;
+    app::DeviceConnectionState last_reported_state{app::DeviceConnectionState::DISCONNECTED};
+    MonoTimeNs last_reported_transition_ns{-1};
+};
 
-bool init_imu(const app::NavDaemonConfig& cfg,
-              SharedSensorState&          shared_state,
-              drivers::ImuDriverWit&      imu_driver)
+// ========== 设备绑定 / 连接监督工具 ==========
+
+inline std::int64_t offline_timeout_ns(const drivers::SerialBindingConfig& cfg) noexcept
 {
-    if (!cfg.imu.enable) {
-        std::fprintf(stderr, "[nav_daemon] IMU disabled by config\n");
-        return true;
-    }
+    return static_cast<std::int64_t>(cfg.offline_timeout_ms) * 1000000ll;
+}
 
-    drivers::ImuConfig dcfg = cfg.imu.driver;
+void clear_imu_shared_state(SharedSensorState& shared_state)
+{
+    std::lock_guard<std::mutex> lock(shared_state.m);
+    shared_state.last_imu.reset();
+    shared_state.last_imu_mono_ns = 0;
+}
 
-    auto on_frame = [&shared_state](const ImuFrame& frame) {
+void clear_dvl_shared_state(SharedSensorState& shared_state)
+{
+    std::lock_guard<std::mutex> lock(shared_state.m);
+    shared_state.last_dvl_raw.reset();
+    shared_state.last_dvl_mono_ns = 0;
+}
+
+drivers::ImuDriverWit::FrameCallback make_imu_frame_callback(SharedSensorState& shared_state)
+{
+    return [&shared_state](const ImuFrame& frame) {
         MonoTimeNs mono_ns = frame.mono_ns;
         if (mono_ns <= 0) {
             mono_ns = monotonic_now_ns();
         }
+
         std::lock_guard<std::mutex> lock(shared_state.m);
-        shared_state.last_imu         = frame;
+        shared_state.last_imu = frame;
         shared_state.last_imu_mono_ns = mono_ns;
     };
+}
 
+drivers::DvlDriver::RawCallback make_dvl_raw_callback(SharedSensorState& shared)
+{
+    using drivers::DvlRawData;
+    using preprocess::DvlRawSample;
+
+    return [&shared](const DvlRawData& raw) {
+        DvlRawSample sample{};
+
+        sample.sensor_time_ns = raw.sensor_time_ns;
+        sample.recv_mono_ns = raw.recv_mono_ns;
+        sample.consume_mono_ns = 0;
+        sample.mono_ns = raw.mono_ns;
+        sample.est_ns = raw.est_ns;
+
+        const auto& p = raw.parsed;
+
+        std::uint8_t kind = 0;
+        if (p.src == "BI") {
+            kind = 0;
+        } else if (p.src == "BE") {
+            kind = 1;
+        } else if (p.src == "BS") {
+            kind = 2;
+        } else if (p.src == "BD") {
+            kind = 3;
+        }
+        sample.kind = kind;
+        sample.bottom_lock = p.bottom_lock;
+
+        sample.vel_inst_mps.x = 0.f;
+        sample.vel_inst_mps.y = 0.f;
+        sample.vel_inst_mps.z = 0.f;
+        sample.vel_earth_mps.x = 0.f;
+        sample.vel_earth_mps.y = 0.f;
+        sample.vel_earth_mps.z = 0.f;
+
+        if (p.coord_frame == DvlCoordFrame::Earth) {
+            sample.vel_earth_mps.x = static_cast<float>(p.ve_mps());
+            sample.vel_earth_mps.y = static_cast<float>(p.vn_mps());
+            sample.vel_earth_mps.z = static_cast<float>(p.vu_mps());
+        } else {
+            sample.vel_inst_mps.x = static_cast<float>(p.ve_mps());
+            sample.vel_inst_mps.y = static_cast<float>(p.vn_mps());
+            sample.vel_inst_mps.z = static_cast<float>(p.vu_mps());
+        }
+
+        std::lock_guard<std::mutex> lock(shared.m);
+        shared.last_dvl_raw = sample;
+        shared.last_dvl_mono_ns = sample.mono_ns;
+    };
+}
+
+std::uint16_t device_trace_flags(app::DeviceConnectionState state) noexcept
+{
+    switch (state) {
+    case app::DeviceConnectionState::ONLINE:
+        return io::kTimingTraceDeviceOnline;
+    case app::DeviceConnectionState::MISMATCH:
+        return io::kTimingTraceDeviceMismatch;
+    case app::DeviceConnectionState::PROBING:
+    case app::DeviceConnectionState::CONNECTING:
+    case app::DeviceConnectionState::ERROR_BACKOFF:
+    case app::DeviceConnectionState::RECONNECTING:
+        return io::kTimingTraceDeviceReconnecting;
+    case app::DeviceConnectionState::DISCONNECTED:
+    default:
+        return io::kTimingTraceNone;
+    }
+}
+
+void report_device_transition(const char*               label,
+                              io::TimingTraceKind       trace_kind,
+                              ManagedDeviceRuntime&     runtime,
+                              nav_core::BinLogger*      timing_logger)
+{
+    const auto& status = runtime.binder.status();
+    if (status.last_transition_ns == runtime.last_reported_transition_ns &&
+        status.state == runtime.last_reported_state) {
+        return;
+    }
+
+    runtime.last_reported_transition_ns = status.last_transition_ns;
+    runtime.last_reported_state = status.state;
+
+    std::fprintf(stderr,
+                 "[nav_daemon] %s state=%s path=%s reason=%s\n",
+                 label,
+                 app::device_state_name(status.state),
+                 status.active_path.empty() ? "<none>" : status.active_path.c_str(),
+                 status.reason.empty() ? "<none>" : status.reason.c_str());
+
+    if (timing_logger != nullptr) {
+        io::TimingTracePacketV1 pkt{};
+        pkt.kind = static_cast<std::uint16_t>(trace_kind);
+        pkt.flags = device_trace_flags(status.state);
+        pkt.publish_mono_ns = status.last_transition_ns;
+        pkt.age_ms = app::kAgeUnknownMs;
+        pkt.fault_code = static_cast<std::uint32_t>(status.state);
+        timing_logger->writePod(pkt);
+    }
+}
+
+void reset_eskf_to_config_defaults(estimator::EskfFilter& eskf)
+{
+    const auto cfg = eskf.config();
+    estimator::EskfNominalState x0{};
+    x0.p_enu = nav_core::Vec3d{cfg.init_E_m, cfg.init_N_m, cfg.init_U_m};
+    x0.v_enu = nav_core::Vec3d{cfg.init_vE_mps, cfg.init_vN_mps, cfg.init_vU_mps};
+    x0.rpy_nb_rad = nav_core::Vec3d{0.0, 0.0, cfg.init_yaw_rad};
+    x0.ba_mps2 = nav_core::Vec3d{0.0, 0.0, 0.0};
+    x0.bg_rad_s = nav_core::Vec3d{0.0, 0.0, cfg.init_bgz_rad_s};
+    eskf.reset(x0);
+}
+
+bool start_imu_driver_on_path(const app::NavDaemonConfig& cfg,
+                              SharedSensorState&          shared_state,
+                              drivers::ImuDriverWit&      imu_driver,
+                              const std::string&          path)
+{
+    drivers::ImuConfig dcfg = cfg.imu.driver;
+    dcfg.port = path;
+
+    const auto on_frame = make_imu_frame_callback(shared_state);
     drivers::ImuDriverWit::RawCallback on_raw;  // 不用，留空即可
 
     if (!imu_driver.init(dcfg, on_frame, on_raw)) {
@@ -164,87 +305,20 @@ bool init_imu(const app::NavDaemonConfig& cfg,
         return false;
     }
 
-    std::fprintf(stderr,
-                 "[nav_daemon] IMU driver started on %s @ %d\n",
+    std::fprintf(stderr, "[nav_daemon] IMU driver started on %s @ %d\n",
                  dcfg.port.c_str(), dcfg.baud);
     return true;
 }
 
-bool init_dvl(const app::NavDaemonConfig& cfg,
-              SharedSensorState&          shared,
-              drivers::DvlDriver&         dvl)
+bool start_dvl_driver_on_path(const app::NavDaemonConfig& cfg,
+                              SharedSensorState&          shared,
+                              drivers::DvlDriver&         dvl,
+                              const std::string&          path)
 {
-    if (!cfg.dvl.enable) {
-        std::fprintf(stderr, "[nav_daemon] DVL disabled by config\n");
-        return true;
-    }
-
-    using drivers::DvlRawData;
-    using preprocess::DvlRawSample;
-
     drivers::DvlConfig dcfg = cfg.dvl.driver;
+    dcfg.port = path;
 
-    // ★ RawCallback：DvlRawData → DvlRawSample → SharedSensorState
-    auto on_raw = [&shared](const DvlRawData& raw) {
-        DvlRawSample sample{};
-
-        sample.sensor_time_ns = raw.sensor_time_ns;
-        sample.recv_mono_ns = raw.recv_mono_ns;
-        sample.consume_mono_ns = 0;
-        sample.mono_ns = raw.mono_ns;
-        sample.est_ns  = raw.est_ns;
-
-        const auto& p = raw.parsed;
-
-        // ---- kind: 根据帧类型字符串做一个简单映射 ----
-        std::uint8_t kind = 0;
-        if (p.src == "BI") {
-        kind = 0;
-        } else if (p.src == "BE") {
-        kind = 1;
-        } else if (p.src == "BS") {
-        kind = 2;
-        } else if (p.src == "BD") {
-        kind = 3;
-        } else {
-            // 将来要支持 WI/WE/WD 时再细化
-            kind = 0;
-        }
-        sample.kind = kind;
-
-        // ---- bottom_lock / 质量状态 ----
-        sample.bottom_lock = p.bottom_lock;
-
-        // 【如果 DvlRawSample 还有 range_m/corr/fom/status 等字段，这里可以继续补映射】
-
-        // ---- 速度：根据 CoordFrame 决定填 Earth 还是 Instrument ----
-        // 先清零 Vec3f（三个分量）
-        sample.vel_inst_mps.x  = 0.f;
-        sample.vel_inst_mps.y  = 0.f;
-        sample.vel_inst_mps.z  = 0.f;
-        sample.vel_earth_mps.x = 0.f;
-        sample.vel_earth_mps.y = 0.f;
-        sample.vel_earth_mps.z = 0.f;
-
-        if (p.coord_frame == DvlCoordFrame::Earth) {
-            // ENU 速度直接填 vel_earth_mps
-            sample.vel_earth_mps.x = static_cast<float>(p.ve_mps());
-            sample.vel_earth_mps.y = static_cast<float>(p.vn_mps());
-            sample.vel_earth_mps.z = static_cast<float>(p.vu_mps());
-        } else {
-            // Instrument / Ship 帧走 vel_inst_mps，后面再用安装角/姿态旋转
-            sample.vel_inst_mps.x = static_cast<float>(p.ve_mps());
-            sample.vel_inst_mps.y = static_cast<float>(p.vn_mps());
-            sample.vel_inst_mps.z = static_cast<float>(p.vu_mps());
-        }
-
-        // ---- 写入共享状态（供主循环使用）----
-        {
-            std::lock_guard<std::mutex> lock(shared.m);
-            shared.last_dvl_raw     = sample;
-            shared.last_dvl_mono_ns = sample.mono_ns;
-        }
-    };
+    const auto on_raw = make_dvl_raw_callback(shared);
 
     if (!dvl.init(dcfg, on_raw)) {
         std::fprintf(stderr,
@@ -260,10 +334,133 @@ bool init_dvl(const app::NavDaemonConfig& cfg,
         return false;
     }
 
-    std::fprintf(stderr,
-                 "[nav_daemon] DVL driver started on %s @ %d\n",
+    std::fprintf(stderr, "[nav_daemon] DVL driver started on %s @ %d\n",
                  dcfg.port.c_str(), dcfg.baud);
     return true;
+}
+
+bool service_imu_device(const app::NavDaemonConfig&    cfg,
+                        SharedSensorState&             shared_state,
+                        drivers::ImuDriverWit&         imu_driver,
+                        ManagedDeviceRuntime&          runtime,
+                        nav_core::BinLogger*           timing_logger,
+                        MonoTimeNs                     now_mono_ns)
+{
+    bool reset_pipeline = false;
+    const auto timeout_ns = offline_timeout_ns(cfg.imu.driver.binding);
+
+    if (runtime.binder.status().state == app::DeviceConnectionState::ONLINE) {
+        bool offline = false;
+        std::string reason;
+
+        if (!imu_driver.isRunning()) {
+            offline = true;
+            reason = "driver thread stopped";
+        } else if (!imu_driver.isPortOpen()) {
+            offline = true;
+            reason = "serial port closed";
+        } else if (timeout_ns > 0) {
+            if (!imu_driver.hasEverReceivedFrame()) {
+                if (runtime.binder.status().last_transition_ns > 0 &&
+                    now_mono_ns - runtime.binder.status().last_transition_ns > timeout_ns) {
+                    offline = true;
+                    reason = "no IMU frame after connect";
+                }
+            } else {
+                const MonoTimeNs last_frame_ns = imu_driver.lastFrameMonoNs();
+                if (last_frame_ns > 0 && now_mono_ns - last_frame_ns > timeout_ns) {
+                    offline = true;
+                    reason = "IMU frame timeout";
+                }
+            }
+        }
+
+        if (offline) {
+            imu_driver.stop();
+            clear_imu_shared_state(shared_state);
+            runtime.binder.mark_disconnected(now_mono_ns, reason);
+            reset_pipeline = true;
+        }
+    }
+
+    if (runtime.binder.should_probe(now_mono_ns)) {
+        const auto device = runtime.binder.probe(now_mono_ns);
+        if (device.has_value()) {
+            imu_driver.stop();
+            clear_imu_shared_state(shared_state);
+
+            if (!start_imu_driver_on_path(cfg, shared_state, imu_driver, device->path)) {
+                runtime.binder.mark_connect_failure(now_mono_ns, "driver start failed");
+            } else {
+                runtime.binder.mark_connect_success(now_mono_ns, *device);
+                reset_pipeline = true;
+            }
+        }
+    }
+
+    report_device_transition("IMU", io::TimingTraceKind::kImuDeviceState, runtime, timing_logger);
+    return reset_pipeline;
+}
+
+bool service_dvl_device(const app::NavDaemonConfig& cfg,
+                        SharedSensorState&          shared_state,
+                        drivers::DvlDriver&         dvl_driver,
+                        ManagedDeviceRuntime&       runtime,
+                        nav_core::BinLogger*        timing_logger,
+                        MonoTimeNs                  now_mono_ns)
+{
+    bool reset_cache = false;
+    const auto timeout_ns = offline_timeout_ns(cfg.dvl.driver.binding);
+
+    if (runtime.binder.status().state == app::DeviceConnectionState::ONLINE) {
+        bool offline = false;
+        std::string reason;
+
+        if (!dvl_driver.running()) {
+            offline = true;
+            reason = "driver thread stopped";
+        } else if (!dvl_driver.isPortOpen()) {
+            offline = true;
+            reason = "serial port closed";
+        } else if (timeout_ns > 0) {
+            const MonoTimeNs last_rx_ns = dvl_driver.lastRxMonoNs();
+            if (last_rx_ns <= 0) {
+                if (runtime.binder.status().last_transition_ns > 0 &&
+                    now_mono_ns - runtime.binder.status().last_transition_ns > timeout_ns) {
+                    offline = true;
+                    reason = "no DVL frame after connect";
+                }
+            } else if (now_mono_ns - last_rx_ns > timeout_ns) {
+                offline = true;
+                reason = "DVL frame timeout";
+            }
+        }
+
+        if (offline) {
+            dvl_driver.stop();
+            clear_dvl_shared_state(shared_state);
+            runtime.binder.mark_disconnected(now_mono_ns, reason);
+            reset_cache = true;
+        }
+    }
+
+    if (runtime.binder.should_probe(now_mono_ns)) {
+        const auto device = runtime.binder.probe(now_mono_ns);
+        if (device.has_value()) {
+            dvl_driver.stop();
+            clear_dvl_shared_state(shared_state);
+
+            if (!start_dvl_driver_on_path(cfg, shared_state, dvl_driver, device->path)) {
+                runtime.binder.mark_connect_failure(now_mono_ns, "driver start failed");
+            } else {
+                runtime.binder.mark_connect_success(now_mono_ns, *device);
+                reset_cache = true;
+            }
+        }
+    }
+
+    report_device_transition("DVL", io::TimingTraceKind::kDvlDeviceState, runtime, timing_logger);
+    return reset_cache;
 }
 
 // 将实时预处理结果 DvlRtOutput 映射为 ESKF 所需的 DvlSample（= DvlFrame）
@@ -477,6 +674,10 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
     std::optional<ImuSample> last_consumed_nav_imu;
     SampleTiming            last_consumed_imu_timing{};
     SampleTiming            last_consumed_dvl_timing{};
+    ManagedDeviceRuntime    imu_runtime{
+        app::DeviceBinder("imu", cfg.imu.driver.port, cfg.imu.driver.binding)};
+    ManagedDeviceRuntime    dvl_runtime{
+        app::DeviceBinder("dvl", cfg.dvl.driver.port, cfg.dvl.driver.binding)};
 
 #if NAV_CORE_ENABLE_GRAPH
     estimator::NavHealthMonitor health_monitor(cfg.estimator.health);
@@ -488,6 +689,30 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
             std::chrono::duration<double>(loop_dt_s));
 
         const MonoTimeNs now_mono_ns = monotonic_now_ns();
+
+        if (cfg.imu.enable &&
+            service_imu_device(cfg, shared_state, imu_driver, imu_runtime, timing_logger,
+                               now_mono_ns)) {
+            imu_pp.reset();
+            reset_eskf_to_config_defaults(eskf);
+            last_consumed_nav_imu.reset();
+            last_consumed_imu_timing = SampleTiming{};
+            last_used_imu_ns = 0;
+            last_consumed_dvl_timing = SampleTiming{};
+            last_used_dvl_ns = 0;
+            std::fprintf(stderr,
+                         "[nav_daemon] IMU connectivity changed; reset aligner and ESKF baseline\n");
+        }
+
+        if (cfg.dvl.enable &&
+            service_dvl_device(cfg, shared_state, dvl_driver, dvl_runtime, timing_logger,
+                               now_mono_ns)) {
+            dvl_pp.reset();
+            last_consumed_dvl_timing = SampleTiming{};
+            last_used_dvl_ns = 0;
+            std::fprintf(stderr,
+                         "[nav_daemon] DVL connectivity changed; clear DVL freshness cache\n");
+        }
 
         std::optional<ImuFrame>                 imu_frame;
         std::optional<preprocess::DvlRawSample> dvl_raw;
@@ -529,6 +754,13 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                 ImuSample samp_out{};
                 const bool ok = imu_pp.process(samp_in, samp_out);
                 if (!ok) {
+                    write_timing_trace(
+                        timing_logger,
+                        io::TimingTraceKind::kImuRejected,
+                        sample_timing_from(samp_in),
+                        0,
+                        app::compute_age_ms(now_mono_ns, samp_in.mono_ns),
+                        io::kTimingTraceRejected);
                     if ((print_counter % 50) == 0) {
                         std::fprintf(stderr,
                                      "[nav_daemon] WARNING: ImuRtPreprocessor rejected a sample "
@@ -561,6 +793,13 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                 last_used_imu_ns = frame_in.mono_ns;
             } else if (!app::is_sample_fresh(now_mono_ns, frame_in.mono_ns, max_imu_age_s) &&
                        (print_counter % 200) == 0) {
+                write_timing_trace(
+                    timing_logger,
+                    io::TimingTraceKind::kImuRejected,
+                    sample_timing_from(frame_in),
+                    0,
+                    app::compute_age_ms(now_mono_ns, frame_in.mono_ns),
+                    io::kTimingTraceRejected | io::kTimingTraceStale);
                 std::fprintf(stderr,
                              "[nav_daemon] WARNING: IMU sample age=%.3f > max_imu_age_s=%.3f, "
                              "skip stale sample\n",
@@ -568,6 +807,13 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
             } else if (!app::should_consume_sample(frame_in.mono_ns, last_used_imu_ns) &&
                        frame_in.mono_ns < last_used_imu_ns &&
                        (print_counter % 200) == 0) {
+                write_timing_trace(
+                    timing_logger,
+                    io::TimingTraceKind::kImuRejected,
+                    sample_timing_from(frame_in),
+                    0,
+                    app::compute_age_ms(now_mono_ns, frame_in.mono_ns),
+                    io::kTimingTraceRejected | io::kTimingTraceOutOfOrder);
                 std::fprintf(stderr,
                              "[nav_daemon] WARNING: IMU sample out-of-order "
                              "(sample=%lld last_used=%lld), drop\n",
@@ -639,10 +885,25 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                             0,
                             app::compute_age_ms(now_mono_ns, dvl_sample.mono_ns),
                             io::kTimingTraceFresh | io::kTimingTraceAccepted);
+                    } else {
+                        write_timing_trace(
+                            timing_logger,
+                            io::TimingTraceKind::kDvlRejected,
+                            sample_timing_from(raw_in),
+                            0,
+                            app::compute_age_ms(now_mono_ns, raw_in.mono_ns),
+                            io::kTimingTraceRejected);
                     }
 
                     last_used_dvl_ns = raw_in.mono_ns;
                 } else if (raw_in.mono_ns < last_used_dvl_ns && (print_counter % 200) == 0) {
+                    write_timing_trace(
+                        timing_logger,
+                        io::TimingTraceKind::kDvlRejected,
+                        sample_timing_from(raw_in),
+                        0,
+                        app::compute_age_ms(now_mono_ns, raw_in.mono_ns),
+                        io::kTimingTraceRejected | io::kTimingTraceOutOfOrder);
                     std::fprintf(stderr,
                                  "[nav_daemon] WARNING: DVL sample out-of-order "
                                  "(sample=%lld last_used=%lld), drop\n",
@@ -650,6 +911,13 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                                  static_cast<long long>(last_used_dvl_ns));
                 }
             } else if ((print_counter % 200) == 0) {
+                write_timing_trace(
+                    timing_logger,
+                    io::TimingTraceKind::kDvlRejected,
+                    sample_timing_from(*dvl_raw),
+                    0,
+                    app::compute_age_ms(now_mono_ns, dvl_raw->mono_ns),
+                    io::kTimingTraceRejected | io::kTimingTraceStale);
                 std::fprintf(stderr,
                              "[nav_daemon] WARNING: DVL age=%.3f > max_dvl_age_s=%.3f, "
                              "treat as offline\n",
@@ -676,6 +944,12 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
         publish_ctx.imu_enabled = cfg.imu.enable;
         publish_ctx.dvl_enabled = cfg.dvl.enable;
         publish_ctx.imu_bias_ready = imu_pp.biasReady();
+        publish_ctx.imu_device_state = cfg.imu.enable
+            ? imu_runtime.binder.status().state
+            : app::DeviceConnectionState::DISCONNECTED;
+        publish_ctx.dvl_device_state = cfg.dvl.enable
+            ? dvl_runtime.binder.status().state
+            : app::DeviceConnectionState::DISCONNECTED;
         app::apply_nav_publish_semantics(
             publish_ctx, app::eskf_state_is_finite(eskf), nav);
 
@@ -770,20 +1044,6 @@ int run_nav_daemon(const NavDaemonConfig&       cfg,
     drivers::ImuDriverWit imu_driver;
     drivers::DvlDriver    dvl_driver;
 
-    if (!init_imu(cfg, shared_state, imu_driver)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] FATAL: IMU init failed "
-                     "(检查 nav_daemon.yaml.imu.driver.* 配置与硬件连接)\n");
-        return 1;
-    }
-    if (!init_dvl(cfg, shared_state, dvl_driver)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] FATAL: DVL init failed "
-                     "(检查 nav_daemon.yaml.dvl.driver.* 配置与硬件连接)\n");
-        imu_driver.stop();
-        return 1;
-    }
-
     // ==== 实时预处理器 + ESKF ====
     preprocess::ImuRtPreprocessor imu_pp(cfg.imu.rt_preproc);
     preprocess::DvlRtPreprocessor dvl_pp(cfg.dvl.rt_preproc);
@@ -820,7 +1080,7 @@ int run_nav_daemon(const NavDaemonConfig&       cfg,
     }
 
     std::fprintf(stderr,
-                 "[nav_daemon] READY: IMU+DVL drivers started, ESKF online, loop=%.2f Hz\n",
+                 "[nav_daemon] READY: device binders armed, ESKF online, loop=%.2f Hz\n",
                  cfg.loop.nav_loop_hz > 0.0 ? cfg.loop.nav_loop_hz : 20.0);
 
     // 主循环

@@ -12,6 +12,47 @@ using shared::msg::NavFaultCode;
 using shared::msg::NavHealth;
 using shared::msg::NavRunState;
 
+NavFaultCode imu_fault_for_device_state(DeviceConnectionState state) noexcept
+{
+    switch (state) {
+    case DeviceConnectionState::MISMATCH:
+        return NavFaultCode::kImuDeviceMismatch;
+    case DeviceConnectionState::RECONNECTING:
+    case DeviceConnectionState::ERROR_BACKOFF:
+        return NavFaultCode::kImuDisconnected;
+    case DeviceConnectionState::DISCONNECTED:
+    case DeviceConnectionState::PROBING:
+    case DeviceConnectionState::CONNECTING:
+    default:
+        return NavFaultCode::kImuDeviceNotFound;
+    }
+}
+
+void apply_device_flags(DeviceConnectionState state,
+                        shared::msg::NavStatusFlags online_flag,
+                        shared::msg::NavStatusFlags mismatch_flag,
+                        shared::msg::NavStatusFlags reconnect_flag,
+                        std::uint16_t&              status_flags) noexcept
+{
+    switch (state) {
+    case DeviceConnectionState::ONLINE:
+        shared::msg::nav_flag_set(status_flags, online_flag);
+        break;
+    case DeviceConnectionState::MISMATCH:
+        shared::msg::nav_flag_set(status_flags, mismatch_flag);
+        break;
+    case DeviceConnectionState::PROBING:
+    case DeviceConnectionState::CONNECTING:
+    case DeviceConnectionState::ERROR_BACKOFF:
+    case DeviceConnectionState::RECONNECTING:
+        shared::msg::nav_flag_set(status_flags, reconnect_flag);
+        break;
+    case DeviceConnectionState::DISCONNECTED:
+    default:
+        break;
+    }
+}
+
 inline bool is_finite3(const nav_core::Vec3d& v) noexcept
 {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
@@ -97,6 +138,17 @@ void apply_nav_publish_semantics(const NavPublishContext& ctx,
                                            ctx.dvl_timing,
                                            ctx.max_dvl_age_s);
 
+    apply_device_flags(ctx.imu_device_state,
+                       shared::msg::NAV_FLAG_IMU_DEVICE_ONLINE,
+                       shared::msg::NAV_FLAG_IMU_BIND_MISMATCH,
+                       shared::msg::NAV_FLAG_IMU_RECONNECTING,
+                       nav.status_flags);
+    apply_device_flags(ctx.dvl_device_state,
+                       shared::msg::NAV_FLAG_DVL_DEVICE_ONLINE,
+                       shared::msg::NAV_FLAG_DVL_BIND_MISMATCH,
+                       shared::msg::NAV_FLAG_DVL_RECONNECTING,
+                       nav.status_flags);
+
     if (imu_fresh) {
         shared::msg::nav_sensor_set(nav.sensor_mask, shared::msg::NAV_SENSOR_IMU);
         shared::msg::nav_flag_set(nav.status_flags, shared::msg::NAV_FLAG_IMU_OK);
@@ -112,7 +164,9 @@ void apply_nav_publish_semantics(const NavPublishContext& ctx,
     if (!ctx.imu_enabled || !imu_seen) {
         nav.nav_state = NavRunState::kUninitialized;
         nav.health = NavHealth::UNINITIALIZED;
-        nav.fault_code = NavFaultCode::kImuNoData;
+        nav.fault_code = ctx.imu_enabled
+            ? imu_fault_for_device_state(ctx.imu_device_state)
+            : NavFaultCode::kImuNoData;
         return;
     }
 

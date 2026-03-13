@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nav_core/app/device_binding.hpp"
 #include "nav_core/app/sample_timing.hpp"
 #include "nav_core/core/types.hpp"
 #include "nav_core/estimator/eskf.hpp"
@@ -18,6 +19,8 @@ struct NavPublishContext {
     MonoTimeNs state_stamp_ns{0};
     SampleTiming imu_timing{};
     SampleTiming dvl_timing{};
+    DeviceConnectionState imu_device_state{DeviceConnectionState::DISCONNECTED};
+    DeviceConnectionState dvl_device_state{DeviceConnectionState::DISCONNECTED};
 
     double max_imu_age_s{0.0};
     double max_dvl_age_s{0.0};
