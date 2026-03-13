@@ -217,4 +217,10 @@ if(NAV_CORE_BUILD_TESTS)
     )
     target_link_libraries(test_serial_reconnect_integration PRIVATE nav_core)
     add_test(NAME nav_core_test_serial_reconnect_integration COMMAND test_serial_reconnect_integration)
+
+    add_executable(test_nav_diagnostic_fixture
+        tests/test_nav_diagnostic_fixture.cpp
+    )
+    target_link_libraries(test_nav_diagnostic_fixture PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_diagnostic_fixture COMMAND test_nav_diagnostic_fixture)
 endif()
