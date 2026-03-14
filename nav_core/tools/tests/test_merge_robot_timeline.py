@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
 import json
 import pathlib
 import tempfile
@@ -243,6 +244,89 @@ class MergeRobotTimelineTests(unittest.TestCase):
             self.assertEqual(
                 bundle_summary["bundle_files"]["nav_state_window.bin"]["replay_entrypoint"],
                 True,
+            )
+
+    def test_bundle_export_falls_back_to_constant_zero_t_ns_nav_state(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="merge_robot_timeline_constant_nav_") as td:
+            root = pathlib.Path(td)
+            nav_state = root / "nav_state.bin"
+            control_log = root / "control.csv"
+            bundle_dir = root / "bundle"
+
+            invalid = merge_robot_timeline.NavState()
+            invalid.t_ns = 0
+            invalid.valid = 0
+            invalid.stale = 0
+            invalid.degraded = 0
+            invalid.nav_state = 0
+            invalid.health = 0
+            invalid.age_ms = 0xFFFFFFFF
+            invalid.fault_code = 10
+
+            write_nav_state_file(nav_state, [invalid, invalid, invalid])
+            write_text(
+                control_log,
+                "MonoNS,effective_mode,armed,failsafe,nav_valid,nav_stale,nav_degraded,"
+                "nav_age_ms,nav_fault_code,nav_status_flags\n"
+                "2000000000,Failsafe,0,0,0,1,1,4294967295,10,0\n",
+            )
+
+            args = argparse.Namespace(
+                nav_timing=None,
+                nav_bin=None,
+                nav_state=nav_state,
+                control_log=control_log,
+                telemetry_timeline=None,
+                telemetry_events=None,
+                sources=None,
+                events=None,
+                anchor_id=None,
+                window_before_ms=0,
+                window_after_ms=0,
+                from_ns=None,
+                to_ns=None,
+                fault_code=None,
+                command_status=None,
+                csv_out=None,
+                bundle_dir=bundle_dir,
+                limit=20,
+                json=False,
+            )
+
+            selected = [
+                merge_robot_timeline.make_event(
+                    2_000_000_000,
+                    "control",
+                    "mode=Failsafe armed=0 failsafe=0 nav_valid=0 nav_stale=1 nav_fault=10",
+                    tags=["invalid", "stale", "nav_fault"],
+                    fault_code=10,
+                )
+            ]
+            summary = {
+                "total_events": 1,
+                "selected_events": 1,
+                "sources": ["control"],
+                "anchors": [],
+                "filters": {},
+                "timeline": selected,
+            }
+
+            merge_robot_timeline.export_incident_bundle(bundle_dir, args, selected, summary)
+
+            nav_state_window = bundle_dir / "nav_state_window.bin"
+            self.assertTrue(nav_state_window.exists())
+            self.assertEqual(nav_state_window.stat().st_size, ctypes.sizeof(merge_robot_timeline.NavState))
+
+            with (bundle_dir / "incident_summary.json").open(encoding="utf-8") as f:
+                bundle_summary = json.load(f)
+
+            self.assertEqual(
+                bundle_summary["bundle_files"]["nav_state_window.bin"]["selection_mode"],
+                "constant_zero_t_ns_fallback",
+            )
+            self.assertEqual(
+                bundle_summary["bundle_files"]["nav_state_window.bin"]["source_records"],
+                3,
             )
 
 

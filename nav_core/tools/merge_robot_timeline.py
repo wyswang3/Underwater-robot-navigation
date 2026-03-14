@@ -583,6 +583,75 @@ def write_nav_timing_slice(
     return len(rows)
 
 
+def nav_state_semantic_signature(record: NavState) -> tuple:
+    """Project NavState to replay-relevant fields, ignoring padding bytes."""
+
+    return (
+        int(record.t_ns),
+        tuple(float(value) for value in record.pos),
+        tuple(float(value) for value in record.vel),
+        tuple(float(value) for value in record.rpy),
+        float(record.depth),
+        tuple(float(value) for value in record.omega_b),
+        tuple(float(value) for value in record.acc_b),
+        int(record.age_ms),
+        int(record.valid),
+        int(record.stale),
+        int(record.degraded),
+        int(record.nav_state),
+        int(record.health),
+        int(record.fault_code),
+        int(record.sensor_mask),
+        int(record.status_flags),
+    )
+
+
+def write_nav_state_replay_slice(
+    src_path: pathlib.Path,
+    out_path: pathlib.Path,
+    start_ns: int,
+    end_ns: int,
+) -> Optional[dict[str, int | str]]:
+    """Export a replayable NavState slice for the selected incident window.
+
+    Normal incident windows use `NavState::t_ns` as the selection key. Real bench
+    captures on the fully invalid/no-device path can keep `t_ns == 0` forever
+    because the estimator never produced a valid state stamp. In that case replay
+    timing cannot be reconstructed from the log itself, but downstream
+    propagation/failsafe verification still benefits from one representative
+    snapshot. The fallback therefore exports a single constant frame only when:
+      - the normal time-window slice is empty,
+      - every record has `t_ns == 0`, and
+      - every record is byte-identical.
+    """
+
+    records = read_binary_records(src_path, NavState)
+    in_window = [record for record in records if start_ns <= int(record.t_ns) <= end_ns]
+    if in_window:
+        out_path.write_bytes(b"".join(bytes(record) for record in in_window))
+        return {
+            "records": len(in_window),
+            "selection_mode": "time_window",
+        }
+
+    if not records:
+        return None
+
+    first_record = records[0]
+    if any(int(record.t_ns) != 0 for record in records):
+        return None
+    first_signature = nav_state_semantic_signature(first_record)
+    if any(nav_state_semantic_signature(record) != first_signature for record in records[1:]):
+        return None
+
+    out_path.write_bytes(bytes(first_record))
+    return {
+        "records": 1,
+        "selection_mode": "constant_zero_t_ns_fallback",
+        "source_records": len(records),
+    }
+
+
 def export_incident_bundle(
     bundle_dir: pathlib.Path,
     args: argparse.Namespace,
@@ -626,19 +695,17 @@ def export_incident_bundle(
             bundle_files["nav_bin_window.bin"] = {"kind": "nav_bin_binary", "records": count}
 
     if args.nav_state:
-        count = write_binary_slice(
+        nav_state_meta = write_nav_state_replay_slice(
             args.nav_state,
-            NavState,
             bundle_dir / "nav_state_window.bin",
             start_ns,
             end_ns,
-            lambda record: record.t_ns,
         )
-        if count:
+        if nav_state_meta:
             bundle_files["nav_state_window.bin"] = {
                 "kind": "nav_state_binary",
-                "records": count,
                 "replay_entrypoint": True,
+                **nav_state_meta,
             }
 
     if args.control_log:
