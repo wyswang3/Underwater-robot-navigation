@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Optional
 
 from uwnav.io.timebase import SensorKind, stamp
+from uwnav.io.acquisition_diagnostics import SensorRunDiagnostics
 from uwnav.drivers.dvl.hover_h1000.io import (
     DVLSerialInterface,
     DVLLogger,
@@ -439,14 +440,37 @@ def main():
     logging.info(f"[DVL] data_root={data_root}")
     logging.info(f"[DVL] 今日目录={day_dvl_dir}")
 
+    diag = SensorRunDiagnostics(day_dvl_dir, "dvl_capture", SENSOR_ID)
+    diag.set_meta("port", args.port)
+    diag.set_meta("baud", args.baud)
+    diag.set_meta("parity", args.parity)
+    diag.set_meta("stopbits", args.stopbits)
+    diag.set_meta("raw_only", args.raw_only)
+    diag.set_meta("ping_rate", args.ping_rate)
+    diag.set_meta("avg_count", args.avg_count)
+    diag.set_meta("data_root", str(data_root))
+
+    port_path = Path(args.port)
+    if not port_path.exists():
+        diag.warn_once(
+            "dvl_serial_path_missing",
+            "configured DVL serial path does not exist before open",
+            port=args.port,
+        )
+
     # 日志器：完整 raw + parsed 日志
     dvl_logger = DVLLogger(str(day_dvl_dir))
     # TB：主导航 + 水团
     nav_writer = NavStateWriterTB(day_dvl_dir)
     water_writer = WaterMassWriterTB(day_dvl_dir)
 
+    diag.note_file("raw_lines_csv", dvl_logger.raw_file.name)
+    diag.note_file("parsed_csv", dvl_logger.parsed_file.name)
+    diag.note_file("nav_state_tb_csv", nav_writer._path)
+    diag.note_file("watermass_tb_csv", water_writer._path)
+
     # 统计
-    stats = {"raw": 0, "parsed": 0, "start_t": time.time()}
+    stats = {"raw": 0, "parsed": 0, "watermass": 0, "nav": 0, "start_t": time.time()}
     last_stat_t = time.time()
 
     # 退出竞态保护：如果 stop_listening 不能保证 join，
@@ -455,6 +479,7 @@ def main():
 
     # TB 落盘开关：safe_start 完成之后才置 True
     started_tb = {"ok": False}
+    runtime_error = {"msg": ""}
 
     def _safe_call(tag: str, fn, *a, **kw):
         """回调里用：任何异常都不能把监听线程打崩。"""
@@ -462,7 +487,17 @@ def main():
             return fn(*a, **kw)
         except Exception as e:
             logging.warning(f"[DVL][{tag}] callback error: {e}")
+            diag.warn(
+                "dvl_callback_write_error",
+                "dvl callback write failed",
+                tag=tag,
+                error=str(e),
+            )
             return None
+
+    def _on_driver_event(level: str, code: str, message: str, **details):
+        diag.bump(f"event_{level}")
+        diag.event(level, code, message, **details)
 
     # ---- 回调 ----
     def on_raw(_ts_unused: float, line: str, note: str):
@@ -475,6 +510,11 @@ def main():
 
         _safe_call("RAW_STORE", dvl_logger.store_raw_line, est_s, line, note)
         stats["raw"] += 1
+        diag.bump("raw_lines")
+        if note.startswith("CMD"):
+            diag.bump("cmd_lines")
+        elif note == "RESP":
+            diag.bump("resp_lines")
 
     def on_parsed(d: DVLData):
         if closing["v"]:
@@ -496,6 +536,17 @@ def main():
             _safe_call("WATER_TB", water_writer.write_sample, mono_ns, est_ns, d)
 
         stats["parsed"] += 1
+        diag.bump("parsed_frames")
+        if d.is_water_mass:
+            stats["watermass"] += 1
+            diag.bump("watermass_frames")
+        else:
+            stats["nav"] += 1
+            diag.bump("nav_frames")
+        if d.valid is False:
+            diag.bump("invalid_flag_frames")
+        elif d.valid is None:
+            diag.bump("unknown_valid_frames")
 
     # DVL 串口接口
     dvl = DVLSerialInterface(
@@ -510,11 +561,17 @@ def main():
         no_rts=args.no_rts,
         on_raw=on_raw,
         on_parsed=None if args.raw_only else on_parsed,
+        on_event=_on_driver_event,
     )
 
     # 先启动监听，确保命令/应答也被 raw 记录
     if not dvl.start_listening(raw_only=args.raw_only):
         logging.error("[DVL] start_listening 失败，退出。")
+        diag.finalize(
+            "open_failed",
+            "dvl start_listening failed before any capture",
+            driver_stats=dvl.stats_dict(),
+        )
         closing["v"] = True
         dvl_logger.close()
         nav_writer.close()
@@ -534,10 +591,17 @@ def main():
             sleep_after_cs=0.5,
         )
         started_tb["ok"] = True
+        diag.info(
+            "dvl_safe_start_ok",
+            "dvl safe_start finished",
+            ping_rate=args.ping_rate,
+            avg_count=args.avg_count,
+        )
         logging.info("[DVL] safe_start 完成，开始记录 TB 状态数据。")
     except Exception as e:
         logging.error(f"[DVL] safe_start 失败：{e}")
         logging.error("[DVL] 为安全起见，立即退出程序。")
+        diag.error("dvl_safe_start_failed", "dvl safe_start failed", error=str(e))
         closing["v"] = True
         try:
             dvl.stop_listening()
@@ -546,6 +610,11 @@ def main():
         dvl_logger.close()
         nav_writer.close()
         water_writer.close()
+        diag.finalize(
+            "safe_start_failed",
+            f"dvl safe_start failed: {e}",
+            driver_stats=dvl.stats_dict(),
+        )
         return
     # =============================================
 
@@ -571,17 +640,20 @@ def main():
 
                     if args.raw_only:
                         logging.info(
-                            f"[STAT] raw={stats['raw']} ({raw_rate:.1f}/s), parsed=disabled"
+                            f"[STAT] raw={stats['raw']} ({raw_rate:.1f}/s), parsed=disabled, driver=({dvl.stats()})"
                         )
                     else:
                         parsed_rate = stats["parsed"] / dt if dt > 0 else 0.0
                         logging.info(
                             f"[STAT] raw={stats['raw']} ({raw_rate:.1f}/s), "
-                            f"parsed={stats['parsed']} ({parsed_rate:.1f}/s)"
+                            f"parsed={stats['parsed']} ({parsed_rate:.1f}/s), driver=({dvl.stats()})"
                         )
                     last_stat_t = now
     except KeyboardInterrupt:
         logging.info("[DVL] KeyboardInterrupt，准备退出…")
+    except Exception as e:
+        runtime_error["msg"] = str(e)
+        logging.error(f"[DVL] 运行时异常：{e}", exc_info=True)
     finally:
         # 先置位，避免 close 后回调仍写文件
         closing["v"] = True
@@ -593,17 +665,46 @@ def main():
             dvl.write_cmd_try("CZ", None)
         except Exception as e:
             logging.warning(f"[DVL] CZ 发送失败：{e}")
+            diag.warn("dvl_safe_stop_failed", "dvl CZ on stop failed", error=str(e))
         time.sleep(0.5)
         # ====================================
 
         try:
             dvl.stop_listening()
-        except Exception:
-            pass
+        except Exception as e:
+            diag.warn("dvl_stop_listening_failed", "dvl stop_listening failed", error=str(e))
 
         dvl_logger.close()
         nav_writer.close()
         water_writer.close()
+
+        driver_stats = dvl.stats_dict()
+        diag.set_meta("driver_stats", driver_stats)
+
+        if runtime_error["msg"]:
+            status = "runtime_error"
+            message = f"dvl logger runtime error: {runtime_error['msg']}"
+        elif stats["raw"] == 0:
+            status = "empty_capture"
+            message = "dvl capture finished without any raw line"
+            diag.warn("dvl_empty_capture", message, port=args.port)
+        elif (not args.raw_only) and stats["parsed"] == 0:
+            status = "no_parsed_frames"
+            message = "dvl capture got raw lines but parsed zero frame"
+            diag.warn("dvl_no_parsed_frames", message)
+        else:
+            status = "ok"
+            message = "dvl capture finished with data"
+
+        diag.finalize(
+            status,
+            message,
+            raw_count=stats["raw"],
+            parsed_count=stats["parsed"],
+            nav_count=stats["nav"],
+            watermass_count=stats["watermass"],
+            runtime_s=round(max(0.0, time.time() - stats["start_t"]), 3),
+        )
         logging.info("[DVL] logger 完整退出。")
 
 

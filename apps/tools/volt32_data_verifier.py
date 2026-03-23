@@ -8,7 +8,7 @@ apps/tools/volt32_data_verifier.py  (timebase 统一版, 对齐 IMU)
 - 串口读取 16/32 通道电压采集板行数据
 - 聚合 CH0..CH{N-1} 成一帧
 - 使用统一时间基 uwnav.io.timebase：
-      ts = stamp("imu0", SensorKind.IMU)
+      ts = stamp("volt0", SensorKind.OTHER)
       → ts.host_time_ns  (MonoNS)
       → ts.corrected_time_ns (EstNS)
 - 输出 CSV 列格式：
@@ -29,6 +29,7 @@ from uwnav.drivers.imu.WitHighModbus.serial_io_tools import (
     SerialReaderThread,
 )
 from uwnav.io.data_paths import get_sensor_outdir
+from uwnav.io.channel_frames import ChannelFrameBuffer, parse_channel_line
 
 
 # ===================== 配置 =====================
@@ -229,7 +230,7 @@ def main():
     )
 
     shutdown = threading.Event()
-    buf = ChannelBuffer(N_CHANNELS)
+    buf = ChannelFrameBuffer(n_channels=N_CHANNELS)
     sniff_n = 0
     total_frames = 0
 
@@ -240,16 +241,15 @@ def main():
             print(f"[RAW] {payload!r}")
             sniff_n += 1
 
-        parsed = buf.parse_line(payload)
-        if not parsed:
+        parsed = parse_channel_line(payload)
+        if parsed is None:
             return
-        ch_key, v = parsed
-        row_vals = buf.update(ch_key, v)
+        row_vals = buf.update(parsed)
         if row_vals is None:
             return
 
-        # ---------- ★统一时间基：复用 IMU 时间轴★ ----------
-        ts = stamp("imu0", SensorKind.IMU)
+        # ---------- ★统一时间基：Volt32 使用独立 key/kind，避免串到 IMU 时间轴★ ----------
+        ts = stamp("volt0", SensorKind.OTHER)
         mono_ns = ts.host_time_ns
         est_ns  = ts.corrected_time_ns
         mono_s  = mono_ns / 1e9
