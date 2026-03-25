@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import shlex
 import signal
 import subprocess
@@ -25,11 +26,17 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Dict, List, Optional, Sequence
+from typing import BinaryIO, Dict, List, Optional, Sequence
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from uwnav.io.acquisition_diagnostics import SensorRunDiagnostics
+
+
+OUTPUT_INHERIT = "inherit"
+OUTPUT_CAPTURE = "capture"
+OUTPUT_QUIET = "quiet"
+DEFAULT_CHILD_LOG_TAIL_LINES = 20
 
 
 @dataclass
@@ -43,6 +50,10 @@ class RunningChild:
     name: str
     command: List[str]
     process: subprocess.Popen
+    stdout_log_path: Optional[Path] = None
+    stderr_log_path: Optional[Path] = None
+    stdout_handle: Optional[BinaryIO] = None
+    stderr_handle: Optional[BinaryIO] = None
 
 
 def repo_root() -> Path:
@@ -79,6 +90,70 @@ def _quoted(cmd: Sequence[str]) -> str:
     return " ".join(shlex.quote(part) for part in cmd)
 
 
+def _read_text_tail(path: Optional[Path], max_lines: int, *, max_bytes: int = 16 * 1024) -> str:
+    if path is None or max_lines <= 0 or not path.exists():
+        return ""
+
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes), os.SEEK_SET)
+            data = handle.read()
+    except OSError:
+        return ""
+
+    text = data.decode("utf-8", errors="replace")
+    return "\n".join(text.splitlines()[-max_lines:]).strip()
+
+
+def _close_child_handles(child: RunningChild) -> None:
+    for handle in (child.stdout_handle, child.stderr_handle):
+        if handle is None:
+            continue
+        try:
+            handle.flush()
+        except OSError:
+            pass
+        try:
+            handle.close()
+        except OSError:
+            pass
+    child.stdout_handle = None
+    child.stderr_handle = None
+
+
+def _child_log_paths(out_dir: Path, run_id: str, child_name: str) -> Dict[str, Path]:
+    root = out_dir / "child_logs" / run_id / child_name
+    return {
+        "root": root,
+        "stdout": root / "stdout.log",
+        "stderr": root / "stderr.log",
+    }
+
+
+def _child_output_snapshot(child: RunningChild, tail_lines: int) -> Dict[str, str]:
+    for handle in (child.stdout_handle, child.stderr_handle):
+        if handle is not None:
+            try:
+                handle.flush()
+            except OSError:
+                pass
+
+    details: Dict[str, str] = {}
+    if child.stdout_log_path is not None:
+        details["stdout_log"] = str(child.stdout_log_path)
+        stdout_tail = _read_text_tail(child.stdout_log_path, tail_lines)
+        if stdout_tail:
+            details["stdout_tail"] = stdout_tail
+    if child.stderr_log_path is not None:
+        details["stderr_log"] = str(child.stderr_log_path)
+        stderr_tail = _read_text_tail(child.stderr_log_path, tail_lines)
+        if stderr_tail:
+            details["stderr_tail"] = stderr_tail
+    return details
+
+
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="One-shot launcher for IMU / DVL / Volt32 acquisition scripts"
@@ -92,6 +167,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--data-root", default=None, help="统一 data 根目录，默认 <repo_root>/data")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARN", "ERROR"], help="launcher 日志等级")
     ap.add_argument("--child-log-level", default="INFO", choices=["DEBUG", "INFO", "WARN", "ERROR"], help="子脚本日志等级")
+    ap.add_argument("--child-output", default=OUTPUT_CAPTURE, choices=[OUTPUT_INHERIT, OUTPUT_CAPTURE, OUTPUT_QUIET], help="子脚本 stdout/stderr 处理方式，默认 capture")
+    ap.add_argument("--child-log-tail-lines", type=int, default=DEFAULT_CHILD_LOG_TAIL_LINES, help="子脚本失败时写入 summary/events 的日志尾部行数")
     ap.add_argument("--child-stat-every", type=float, default=5.0, help="透传给子脚本的统计打印周期，默认 5 秒")
     ap.add_argument("--launcher-stat-every", type=float, default=5.0, help="launcher 自身统计打印周期，默认 5 秒")
     ap.add_argument("--run-seconds", type=float, default=0.0, help="仅用于 smoke/test；>0 时到时自动发起停机")
@@ -172,19 +249,32 @@ def build_child_specs(args: argparse.Namespace, data_root: Path) -> List[ChildSp
     return child_specs
 
 
-def _write_manifest(out_dir: Path, child_specs: Sequence[ChildSpec], args: argparse.Namespace) -> Path:
+def _write_manifest(out_dir: Path, child_specs: Sequence[ChildSpec], args: argparse.Namespace, *, run_id: str) -> Path:
     ts = time.strftime("%Y%m%d_%H%M%S")
     path = out_dir / f"sensor_launcher_manifest_{ts}.json"
+    child_logs_root = out_dir / "child_logs" / run_id if args.child_output == OUTPUT_CAPTURE else None
     payload = {
+        "run_id": run_id,
         "created_wall_time": time.strftime("%Y-%m-%d %H:%M:%S"),
         "repo_root": str(repo_root()),
         "data_root": str(Path(args.data_root).resolve()) if args.data_root else str(default_data_root()),
         "selected_sensors": list(args.sensors),
+        "child_output": args.child_output,
+        "child_log_tail_lines": args.child_log_tail_lines,
+        "child_logs_root": str(child_logs_root) if child_logs_root is not None else None,
         "children": [
             {
                 "name": child.name,
                 "command": child.command,
                 "command_shell": _quoted(child.command),
+                "log_files": (
+                    {
+                        "stdout": str(_child_log_paths(out_dir, run_id, child.name)["stdout"]),
+                        "stderr": str(_child_log_paths(out_dir, run_id, child.name)["stderr"]),
+                    }
+                    if args.child_output == OUTPUT_CAPTURE
+                    else None
+                ),
             }
             for child in child_specs
         ],
@@ -193,22 +283,81 @@ def _write_manifest(out_dir: Path, child_specs: Sequence[ChildSpec], args: argpa
     return path
 
 
-def _launch_children(child_specs: Sequence[ChildSpec], diag: SensorRunDiagnostics) -> List[RunningChild]:
+def _launch_children(child_specs: Sequence[ChildSpec], diag: SensorRunDiagnostics, launcher_dir: Path, child_output: str, stop_timeout_s: float) -> List[RunningChild]:
     running: List[RunningChild] = []
     for child in child_specs:
+        stdout = None
+        stderr = None
+        stdout_log_path: Optional[Path] = None
+        stderr_log_path: Optional[Path] = None
+        stdout_handle: Optional[BinaryIO] = None
+        stderr_handle: Optional[BinaryIO] = None
+
+        if child_output == OUTPUT_CAPTURE:
+            log_paths = _child_log_paths(launcher_dir, diag.run_id, child.name)
+            log_paths["root"].mkdir(parents=True, exist_ok=True)
+            stdout_log_path = log_paths["stdout"]
+            stderr_log_path = log_paths["stderr"]
+            stdout_handle = stdout_log_path.open("ab")
+            stderr_handle = stderr_log_path.open("ab")
+            stdout = stdout_handle
+            stderr = stderr_handle
+            diag.note_file(f"{child.name}_stdout_log", stdout_log_path)
+            diag.note_file(f"{child.name}_stderr_log", stderr_log_path)
+        elif child_output == OUTPUT_QUIET:
+            stdout = subprocess.DEVNULL
+            stderr = subprocess.DEVNULL
+
         diag.info(
             "launcher_child_starting",
             "launcher is starting child capture script",
             sensor=child.name,
             command=child.command,
+            output_mode=child_output,
+            stdout_log=str(stdout_log_path) if stdout_log_path is not None else "",
+            stderr_log=str(stderr_log_path) if stderr_log_path is not None else "",
         )
-        process = subprocess.Popen(child.command, cwd=str(repo_root()))
-        running.append(RunningChild(name=child.name, command=child.command, process=process))
+        try:
+            process = subprocess.Popen(
+                child.command,
+                cwd=str(repo_root()),
+                stdout=stdout,
+                stderr=stderr,
+            )
+        except OSError as exc:
+            for handle in (stdout_handle, stderr_handle):
+                if handle is not None:
+                    handle.close()
+            diag.error(
+                "launcher_child_start_failed",
+                "launcher failed to start child capture script",
+                sensor=child.name,
+                error=str(exc),
+                output_mode=child_output,
+                stdout_log=str(stdout_log_path) if stdout_log_path is not None else "",
+                stderr_log=str(stderr_log_path) if stderr_log_path is not None else "",
+            )
+            _stop_children(running, diag, timeout_s=stop_timeout_s)
+            raise
+
+        running_child = RunningChild(
+            name=child.name,
+            command=child.command,
+            process=process,
+            stdout_log_path=stdout_log_path,
+            stderr_log_path=stderr_log_path,
+            stdout_handle=stdout_handle,
+            stderr_handle=stderr_handle,
+        )
+        running.append(running_child)
         diag.info(
             "launcher_child_started",
             "launcher started child capture script",
             sensor=child.name,
             pid=process.pid,
+            output_mode=child_output,
+            stdout_log=str(stdout_log_path) if stdout_log_path is not None else "",
+            stderr_log=str(stderr_log_path) if stderr_log_path is not None else "",
         )
     return running
 
@@ -230,6 +379,7 @@ def _stop_children(children: Sequence[RunningChild], diag: SensorRunDiagnostics,
     deadline = time.time() + max(0.1, float(timeout_s))
     for child in children:
         if child.name in exit_codes:
+            _close_child_handles(child)
             continue
         remaining = max(0.1, deadline - time.time())
         try:
@@ -238,6 +388,8 @@ def _stop_children(children: Sequence[RunningChild], diag: SensorRunDiagnostics,
             diag.warn("launcher_child_kill", "child did not exit after SIGTERM; sending SIGKILL", sensor=child.name, pid=child.process.pid)
             child.process.kill()
             exit_codes[child.name] = child.process.wait(timeout=1.0)
+        finally:
+            _close_child_handles(child)
 
     return exit_codes
 
@@ -259,6 +411,8 @@ def main() -> int:
     diag.set_meta("selected_sensors", list(args.sensors))
     diag.set_meta("data_root", str(data_root))
     diag.set_meta("child_log_level", args.child_log_level)
+    diag.set_meta("child_output", args.child_output)
+    diag.set_meta("child_log_tail_lines", args.child_log_tail_lines)
     diag.set_meta("child_stat_every", args.child_stat_every)
     diag.set_meta("stop_timeout_s", args.stop_timeout_s)
     diag.set_meta("run_seconds", args.run_seconds)
@@ -269,10 +423,25 @@ def main() -> int:
         logging.error("[LAUNCHER] 没有可启动的传感器。")
         return 2
 
-    manifest_path = _write_manifest(launcher_dir, child_specs, args)
+    if args.child_output == OUTPUT_CAPTURE:
+        diag.set_meta("child_logs_root", str(launcher_dir / "child_logs" / diag.run_id))
+
+    manifest_path = _write_manifest(launcher_dir, child_specs, args, run_id=diag.run_id)
     diag.note_file("manifest_json", manifest_path)
 
-    running_children = _launch_children(child_specs, diag)
+    try:
+        running_children = _launch_children(child_specs, diag, launcher_dir, args.child_output, args.stop_timeout_s)
+    except OSError as exc:
+        diag.finalize(
+            "start_failed",
+            f"launcher failed to start one or more child capture scripts: {exc}",
+            runtime_s=0.0,
+            stop_reason="start_failed",
+            child_count=0,
+        )
+        logging.error("[LAUNCHER] failed to start child capture scripts: %s", exc)
+        return 1
+
     stop_flag = {"requested": False, "reason": "signal"}
     start_t = time.time()
     last_stat_t = start_t
@@ -311,6 +480,7 @@ def main() -> int:
                     "child capture script exited before launcher stop was requested",
                     sensor=child.name,
                     exit_code=rc,
+                    **_child_output_snapshot(child, args.child_log_tail_lines),
                 )
                 stop_flag["requested"] = True
                 stop_flag["reason"] = f"child_failed_{child.name}"

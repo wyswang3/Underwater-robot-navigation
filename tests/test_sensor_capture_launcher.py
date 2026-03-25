@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -22,6 +23,8 @@ class SensorCaptureLauncherTests(unittest.TestCase):
             sensors=["imu", "dvl", "volt"],
             data_root=None,
             child_log_level="INFO",
+            child_output="capture",
+            child_log_tail_lines=12,
             child_stat_every=3.0,
             imu_port="/dev/ttyIMU",
             imu_baud=230400,
@@ -48,16 +51,21 @@ class SensorCaptureLauncherTests(unittest.TestCase):
         self.assertTrue(any("DVL_logger.py" in part for part in specs[1].command))
         self.assertTrue(any("Volt32_logger.py" in part for part in specs[2].command))
 
-    def test_write_manifest_records_selected_sensors(self) -> None:
+    def test_write_manifest_records_selected_sensors_and_child_logs(self) -> None:
         args = self._make_args()
         with tempfile.TemporaryDirectory() as tmpdir:
             specs = MODULE.build_child_specs(args, Path(tmpdir))
-            manifest = MODULE._write_manifest(Path(tmpdir), specs, args)
-            payload = manifest.read_text(encoding="utf-8")
-            self.assertIn('"selected_sensors"', payload)
-            self.assertIn('"imu"', payload)
-            self.assertIn('"dvl"', payload)
-            self.assertIn('"volt"', payload)
+            manifest = MODULE._write_manifest(Path(tmpdir), specs, args, run_id="launcher_test_run")
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual("capture", payload["child_output"])
+            self.assertEqual(12, payload["child_log_tail_lines"])
+            self.assertIn("selected_sensors", payload)
+            self.assertIn("imu", payload["selected_sensors"])
+            self.assertIn("dvl", payload["selected_sensors"])
+            self.assertIn("volt", payload["selected_sensors"])
+            self.assertTrue(payload["child_logs_root"].endswith("launcher_test_run"))
+            self.assertTrue(payload["children"][0]["log_files"]["stdout"].endswith("stdout.log"))
+            self.assertTrue(payload["children"][0]["log_files"]["stderr"].endswith("stderr.log"))
 
 
 if __name__ == "__main__":
