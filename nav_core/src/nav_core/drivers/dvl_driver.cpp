@@ -1,21 +1,23 @@
 // nav_core/src/drivers/dvl_driver.cpp
 //
-// Hover H1000 DVL 串口驱动 + 文本协议解析 + 基本质量过滤
+// Hover H1000 DVL 串口驱动 + 文本协议解析
 //
-// 职责：
+// 当前职责：
 //   - 串口 IO + 后台线程：按行读取 PD6/EPD6 文本；
 //   - 调用 nav_core::dvl_protocol 解析为 ParsedLine；
 //   - 使用统一时间基 (nav_core::core::timebase) 打时间戳；
-//   - 应用 DvlFilterConfig 做基础门控，生成 DvlFrame；
-//   - 维护位移/深度最近有效值，空洞时回填；
-//   - 发送 CZ / CS / PR / PM 等厂商定义命令。
+//   - 将带时间戳的 DvlRawData 通过 RawCallback 推给上层（例如 DVL_logger）；
+//   - 负责发送 CZ / CS / PR / PM 等命令；
+//   - 提供简单的 isAlive() 链路健康判定。
 //
 // 不负责：
-//   - ESKF / 轨迹估计 / ZUPT / 噪声地板等高层逻辑。
+//   - DvlFrame 生成、导航级过滤、坐标系转换、ESKF/轨迹估计、ZUPT、噪声地板等。
+//   - BI/BE/BD 分类保存与预处理由上层 Python / 预处理模块完成。
 
 #include <nav_core/drivers/dvl_driver.hpp>
 #include <nav_core/core/timebase.hpp>
 #include <nav_core/drivers/dvl_protocol.hpp>
+#include <nav_core/preprocess/dvl_rt_preprocessor.hpp> 
 
 #include <algorithm>
 #include <cerrno>
@@ -42,12 +44,11 @@ namespace dp = nav_core::dvl_protocol;
 // ============================================================================
 
 namespace {
+constexpr int kDefaultPingRate = 10;  ///< DVL 默认发射呼率
+constexpr int kDefaultAvgCount = 10;  ///< DVL 默认平均次数
 
-inline bool isFinite(double x) noexcept {
-    return std::isfinite(x);
-}
-
-speed_t baudToTermios(int baud) {
+// 波特率转换：int → termios speed_t
+inline speed_t baudToTermios(int baud) {
     switch (baud) {
         case 9600:   return B9600;
         case 19200:  return B19200;
@@ -83,6 +84,8 @@ inline std::string trim(const std::string& s) {
         --e;
     }
     return s.substr(b, e - b);
+    // ★ 默认发射呼率 / 平均次数：都设为 10
+
 }
 
 } // namespace
@@ -94,23 +97,19 @@ inline std::string trim(const std::string& s) {
 DvlDriver::DvlDriver() = default;
 
 DvlDriver::DvlDriver(const DvlConfig& cfg,
-                     FrameCallback    on_frame,
                      RawCallback      on_raw)
 {
-    init(cfg, std::move(on_frame), std::move(on_raw));
+    init(cfg, std::move(on_raw));
 }
 
-DvlDriver::DvlDriver(const std::string&     port,
-                     int                    baud,
-                     const DvlFilterConfig& filter,
-                     FrameCallback          on_frame,
-                     RawCallback            on_raw)
+DvlDriver::DvlDriver(const std::string& port,
+                     int                baud,
+                     RawCallback        on_raw)
 {
     DvlConfig cfg;
-    cfg.port   = port;
-    cfg.baud   = baud;
-    cfg.filter = filter;
-    init(cfg, std::move(on_frame), std::move(on_raw));
+    cfg.port = port;
+    cfg.baud = baud;
+    init(cfg, std::move(on_raw));
 }
 
 DvlDriver::~DvlDriver() {
@@ -118,19 +117,12 @@ DvlDriver::~DvlDriver() {
 }
 
 bool DvlDriver::init(const DvlConfig& cfg,
-                     FrameCallback    on_frame,
                      RawCallback      on_raw)
 {
-    cfg_      = cfg;
-    port_     = cfg.port;
-    baud_     = cfg.baud;
-    on_frame_ = std::move(on_frame);
-    on_raw_   = std::move(on_raw);
-
-    {
-        std::lock_guard<std::mutex> lk(filter_mutex_);
-        filter_cfg_ = cfg.filter;
-    }
+    cfg_    = cfg;
+    port_   = cfg.port;
+    baud_   = cfg.baud;
+    on_raw_ = std::move(on_raw);
 
     fd_ = -1;
 
@@ -140,22 +132,13 @@ bool DvlDriver::init(const DvlConfig& cfg,
     n_lines_.store(0);
     n_parsed_ok_.store(0);
     n_parsed_fail_.store(0);
-    n_filtered_out_.store(0);
     last_rx_mono_ns_.store(0);
-
-    // 最近有效 ENU 位移/深度缓存初始化
-    last_dist_enu_m_[0] = 0.0;
-    last_dist_enu_m_[1] = 0.0;
-    last_dist_enu_m_[2] = 0.0;
-    last_depth_m_       = 0.0;
-    has_last_dist_      = false;
-    has_last_depth_     = false;
 
     return true;
 }
 
 // ============================================================================
-// start / stop / filter config
+// start / stop
 // ============================================================================
 
 bool DvlDriver::start() {
@@ -173,26 +156,34 @@ bool DvlDriver::start() {
         return false;
     }
 
-    // 上电后的“安全初始化序列”：CZ -> PR10 -> PM10 -> CS
-    // 这里完全使用厂商命令格式，不自创协议。
-    {
-        // 确保停机，避免空气中 ping
+    // 上电后的安全初始化序列（可选）：
+    // CZ -> CS -> PR(ping_rate) -> PM(avg_count) 
+    if (cfg_.send_startup_cmds) {
+        // 1) 确保停机，避免空气中 ping
         if (!sendCommandCZ()) {
             std::cerr << "[DVL] WARN: send CZ failed during start()\n";
         }
-        // 启动工作
+        // 2) 启动 ping
         if (!sendCommandCS()) {
             std::cerr << "[DVL] WARN: send CS failed during start()\n";
         }
 
-        // 设置发射呼率 = 10
-        if (!sendCommandPR(10)) {
-            std::cerr << "[DVL] WARN: send PR10 failed during start()\n";
+        // 3) 设置发射呼率（优先用配置；<=0 则回退到默认 10）
+        const int ping_rate = (cfg_.ping_rate > 0)
+                                ? cfg_.ping_rate
+                                : kDefaultPingRate;
+        if (!sendCommandPR(ping_rate)) {
+            std::cerr << "[DVL] WARN: send PR" << ping_rate
+                      << " failed during start()\n";
         }
 
-        // 设置平均次数 = 10
-        if (!sendCommandPM(10)) {
-            std::cerr << "[DVL] WARN: send PM10 failed during start()\n";
+        // 4) 设置平均次数
+         const int avg_count = (cfg_.avg_count > 0)
+                                ? cfg_.avg_count
+                                : kDefaultAvgCount;
+        if (!sendCommandPM(avg_count)) {
+            std::cerr << "[DVL] WARN: send PM" << avg_count
+                      << " failed during start()\n";
         }
 
     }
@@ -217,7 +208,14 @@ void DvlDriver::stop() noexcept {
 
     stop_requested_.store(true);
 
-    // 提前关闭串口，打断 select/read
+    // 停止前尽量再发一次 CZ 确保停机（若串口已断开则会失败）
+    if (fd_ >= 0) {
+        if (!sendCommandCZ()) {
+            std::cerr << "[DVL] WARN: send CZ failed during stop()\n";
+        }
+    }
+
+    // 关闭串口打断 select/read
     closePort();
 
     if (th_.joinable()) {
@@ -226,24 +224,7 @@ void DvlDriver::stop() noexcept {
 
     running_.store(false);
 
-    // 退出前再发一遍 CZ 确保停机（若串口已断开则会失败）
-    if (fd_ >= 0) {
-        if (!sendCommandCZ()) {
-            std::cerr << "[DVL] WARN: send CZ failed during stop()\n";
-        }
-    }
-
     std::cerr << "[DVL] stopped\n";
-}
-
-void DvlDriver::setFilterConfig(const DvlFilterConfig& cfg) {
-    std::lock_guard<std::mutex> lk(filter_mutex_);
-    filter_cfg_ = cfg;
-}
-
-DvlFilterConfig DvlDriver::filterConfig() const {
-    std::lock_guard<std::mutex> lk(filter_mutex_);
-    return filter_cfg_;
 }
 
 // ============================================================================
@@ -278,6 +259,7 @@ bool DvlDriver::openPort() {
     cfsetospeed(&tio, s);
 
     tio.c_cflag |= (CLOCAL | CREAD);
+
     const tcflag_t csize_mask  = CSIZE;
     const tcflag_t parenb_mask = PARENB;
     const tcflag_t cstopb_mask = CSTOPB;
@@ -390,7 +372,7 @@ void DvlDriver::threadFunc() {
 
             n_lines_++;
 
-            // 只尝试解析 PD6/EPD6 速度/距离帧，其它行（TS/SA 等）直接忽略
+            // 尝试解析 PD6/EPD6 速度/距离帧，其它行（TS/SA 等）parse_pd6_line 会返回 false
             dp::ParsedLine parsed{};
             if (!dp::parse_pd6_line(one, parsed)) {
                 n_parsed_fail_++;
@@ -408,7 +390,7 @@ void DvlDriver::threadFunc() {
 
             last_rx_mono_ns_.store(raw.mono_ns);
 
-            // 5) 进入过滤 + 回调
+            // 5) 直接回调 Raw（不再在驱动内做过滤/Frame 生成）
             handleRawSample(raw);
         }
     }
@@ -417,167 +399,17 @@ void DvlDriver::threadFunc() {
               << "lines="         << n_lines_.load()
               << ", parsed_ok="   << n_parsed_ok_.load()
               << ", parsed_fail=" << n_parsed_fail_.load()
-              << ", filtered_out="<< n_filtered_out_.load()
               << "\n";
 }
 
 // ============================================================================
-// 过滤入口：Raw → Frame + 回调
+// Raw 回调
 // ============================================================================
 
 void DvlDriver::handleRawSample(const DvlRawData& raw) {
     if (on_raw_) {
         on_raw_(raw);
     }
-
-    DvlFrame frame{};
-    if (passFilter(raw, frame)) {
-        if (on_frame_) {
-            on_frame_(frame);
-        }
-    } else {
-        n_filtered_out_++;
-    }
-}
-
-// ============================================================================
-// 过滤逻辑：DvlRawData → DvlFrame
-// ============================================================================
-//
-// 策略：
-//   1) 只接受 valid == A（cfg.only_valid_flag 为真时）；
-//   2) 三轴速度有限性 / 幅值；
-//   3) 高度（离底距离）在 [min_altitude_m, max_altitude_m]；
-//   4) 位移/深度字段若当前帧无效，用最近一次有效值回填；
-//   5) 时间戳直接用 raw.mono_ns / raw.est_ns。
-//
-bool DvlDriver::passFilter(const DvlRawData& raw, DvlFrame& out_frame) {
-    const auto& p = raw.parsed;
-
-    // 0) 取一份过滤配置
-    DvlFilterConfig cfg;
-    {
-        std::lock_guard<std::mutex> lk(filter_mutex_);
-        cfg = filter_cfg_;
-    }
-
-    // 1) A/V 有效标志
-    if (cfg.only_valid_flag) {
-        if (p.valid != 1) {
-            return false;
-        }
-    }
-
-    // 2) 速度（无论坐标系）先转成 m/s 做门控
-    const double vx = p.ve_mps();
-    const double vy = p.vn_mps();
-    const double vz = p.vu_mps();
-
-    if (cfg.require_all_axes) {
-        if (!isFinite(vx) || !isFinite(vy) || !isFinite(vz)) {
-            return false;
-        }
-    }
-
-    if (cfg.max_abs_vel_mps > 0.0f) {
-        if (std::fabs(vx) > cfg.max_abs_vel_mps ||
-            std::fabs(vy) > cfg.max_abs_vel_mps ||
-            std::fabs(vz) > cfg.max_abs_vel_mps) {
-            return false;
-        }
-    }
-
-    // 3) 高度门控（使用 parsed.depth_m 作为离底高度 / 深度）
-    double altitude = p.depth_m;  // 约定：解析层已按 m 输出
-    if (cfg.enable_altitude) {
-        if (isFinite(altitude)) {
-            if (cfg.max_altitude_m > 0.0f &&
-                altitude > cfg.max_altitude_m) {
-                return false;
-            }
-            if (cfg.min_altitude_m > 0.0f &&
-                altitude < cfg.min_altitude_m) {
-                return false;
-            }
-        }
-    }
-
-    // 4) 质量门控（占位，可按需要扩展）
-    if (cfg.min_quality > 0) {
-        if (p.quality < cfg.min_quality) {
-            return false;
-        }
-    }
-
-    // ---------- 填充输出帧 ----------
-
-    out_frame.mono_ns = raw.mono_ns;
-    out_frame.est_ns  = raw.est_ns;
-
-    using nav_core::dvl_protocol::TrackType;
-
-    // p.track_type 是 dvl_protocol::TrackType
-    const auto raw_tt = static_cast<std::uint8_t>(p.track_type);
-    out_frame.track_type = static_cast<nav_core::DvlTrackType>(raw_tt);
-
-    out_frame.bottom_lock = p.bottom_lock;
-
-    // 4.1 速度写入坐标系对应字段
-    if (p.coord_frame == dp::CoordFrame::Earth) {
-        out_frame.vel_enu_mps[0] = static_cast<float>(vx);
-        out_frame.vel_enu_mps[1] = static_cast<float>(vy);
-        out_frame.vel_enu_mps[2] = static_cast<float>(vz);
-        out_frame.has_enu_vel    = true;
-    } else if (p.coord_frame == dp::CoordFrame::Ship ||
-               p.coord_frame == dp::CoordFrame::Instrument) {
-        out_frame.vel_body_mps[0] = static_cast<float>(vx);
-        out_frame.vel_body_mps[1] = static_cast<float>(vy);
-        out_frame.vel_body_mps[2] = static_cast<float>(vz);
-        out_frame.has_body_vel    = true;
-    }
-
-    // 4.2 位移 & 深度：使用“最近一次有效值”策略
-    bool have_current_dist =
-        isFinite(p.e_m) && isFinite(p.n_m) && isFinite(p.u_m);
-    bool have_current_depth = isFinite(p.depth_m);
-
-    if (have_current_dist) {
-        last_dist_enu_m_[0] = p.e_m;
-        last_dist_enu_m_[1] = p.n_m;
-        last_dist_enu_m_[2] = p.u_m;
-        has_last_dist_      = true;
-    }
-
-    if (have_current_depth) {
-        last_depth_m_   = p.depth_m;
-        has_last_depth_ = true;
-    }
-
-    if (has_last_dist_) {
-        out_frame.dist_enu_m[0] = static_cast<float>(last_dist_enu_m_[0]);
-        out_frame.dist_enu_m[1] = static_cast<float>(last_dist_enu_m_[1]);
-        out_frame.dist_enu_m[2] = static_cast<float>(last_dist_enu_m_[2]);
-        out_frame.has_dist_enu  = true;
-    } else {
-        // 尚无任何有效位移，填 0 但 has_dist_enu=false
-        out_frame.dist_enu_m[0] = 0.f;
-        out_frame.dist_enu_m[1] = 0.f;
-        out_frame.dist_enu_m[2] = 0.f;
-        out_frame.has_dist_enu  = false;
-    }
-
-    if (has_last_depth_) {
-        out_frame.altitude_m = static_cast<float>(last_depth_m_);
-    } else {
-        out_frame.altitude_m = 0.f;
-    }
-
-    // 4.3 质量 / 有效标志
-    out_frame.fom     = static_cast<float>(p.quality); // 或按需缩放
-    out_frame.quality = p.quality;
-    out_frame.valid   = true;
-
-    return true;
 }
 
 // ============================================================================
@@ -602,16 +434,7 @@ int DvlDriver::writeBytes(const std::uint8_t* buf, std::size_t len) {
     return static_cast<int>(n);
 }
 
-bool DvlDriver::sendRawCommand16(const std::string& ascii_cmd) {
-    const dp::CommandBytes bytes = dp::make_command_from_ascii(ascii_cmd);
-    const int n = writeBytes(bytes.data(), bytes.size());
-    return (n == static_cast<int>(bytes.size()));
-}
-
-// 私有工具函数实现
-bool DvlDriver::sendCommand(const dp::CommandBytes& bytes, const char* /*tag*/)
-{
-    // 防御：空命令直接视为失败，避免 writeBytes(…, 0) 这种无意义调用
+bool DvlDriver::sendCommand(const DvlCommandBytes& bytes, const char* /*tag*/) {
     if (bytes.empty()) {
         return false;
     }
@@ -619,39 +442,92 @@ bool DvlDriver::sendCommand(const dp::CommandBytes& bytes, const char* /*tag*/)
     const std::size_t expected = bytes.size();
     const int n = writeBytes(bytes.data(), expected);
 
-    // 串口写失败（通常约定为负数），直接返回 false
     if (n < 0) {
         return false;
     }
-
-    // 若底层只写出部分字节，也视为失败（目前策略是“要么全发成功，要么失败”）
     return static_cast<std::size_t>(n) == expected;
 }
 
-// -------------------- 对外接口 --------------------
-
-bool DvlDriver::sendCommandCZ()
-{
+bool DvlDriver::sendCommandCZ() {
     const dp::CommandBytes bytes = dp::make_command_cz();
     return sendCommand(bytes, "CZ");
 }
 
-bool DvlDriver::sendCommandCS()
-{
+bool DvlDriver::sendCommandCS() {
     const dp::CommandBytes bytes = dp::make_command_cs();
     return sendCommand(bytes, "CS");
 }
 
-bool DvlDriver::sendCommandPR(int ping_rate)
-{
+bool DvlDriver::sendCommandPR(int ping_rate) {
     const dp::CommandBytes bytes = dp::make_command_pr(ping_rate);
     return sendCommand(bytes, "PR");
 }
 
-bool DvlDriver::sendCommandPM(int avg_count)
-{
+bool DvlDriver::sendCommandPM(int avg_count) {
     const dp::CommandBytes bytes = dp::make_command_pm(avg_count);
     return sendCommand(bytes, "PM");
+}
+// ============================================================================
+// DvlRawData -> preprocess::DvlRawSample 桥接工具
+// ============================================================================
+
+bool makeDvlRawSample(const DvlRawData& in,
+                      ::nav_core::preprocess::DvlRawSample& out)
+{
+    using ::nav_core::preprocess::DvlRawSample;
+
+    const dp::ParsedLine& pl = in.parsed;
+
+    // 只支持 BI/BE/BS/BD 这四种导航相关帧，其他帧返回 false 让上层跳过
+    std::uint8_t kind = 0xFF;
+    if      (pl.src == "BI") kind = 0;  // Instrument / BottomTrack 速度
+    else if (pl.src == "BE") kind = 1;  // Earth / BottomTrack 速度
+    else if (pl.src == "BS") kind = 2;  // Ship / BottomTrack 速度（预留）
+    else if (pl.src == "BD") kind = 3;  // Earth / 位移帧（累计距离）
+    else {
+        return false;   // 例如 WI/WE/WD/TS/SA 等暂不参与导航预处理
+    }
+
+    out = DvlRawSample{};  // 全部清零
+
+    // 时间戳
+    out.mono_ns = in.mono_ns;
+    out.est_ns  = in.est_ns;
+
+    // 基本标志
+    out.kind        = kind;
+    out.bottom_lock = pl.bottom_lock;
+    out.fom         = static_cast<float>(pl.quality);
+    out.status      = 0u;  // 如未来在 ParsedLine 中解析 status bit，可在这里填充
+
+    // Beam 距离 / 相关系数：当前协议解析层未提供 beam-level 数据，先清零占位
+    for (int i = 0; i < 4; ++i) {
+        out.range_m[i] = 0.0f;
+        out.corr[i]    = 0.0f;
+    }
+
+    // 速度分量：
+    // 1) Instrument / Ship frame → vel_inst_mps（仪器/船体坐标系速度）
+    if (pl.coord_frame == dp::CoordFrame::Instrument ||
+        pl.coord_frame == dp::CoordFrame::Ship)
+    {
+        if (pl.has_e) out.vel_inst_mps.x = static_cast<float>(pl.ve_mps());
+        if (pl.has_n) out.vel_inst_mps.y = static_cast<float>(pl.vn_mps());
+        if (pl.has_u) out.vel_inst_mps.z = static_cast<float>(pl.vu_mps());
+    }
+
+    // 2) Earth frame → vel_earth_mps（ENU: [vE, vN, vU]）
+    if (pl.coord_frame == dp::CoordFrame::Earth) {
+        if (pl.has_e) out.vel_earth_mps.x = static_cast<float>(pl.ve_mps());
+        if (pl.has_n) out.vel_earth_mps.y = static_cast<float>(pl.vn_mps());
+        if (pl.has_u) out.vel_earth_mps.z = static_cast<float>(pl.vu_mps());
+    }
+
+    // 位移 / 深度：目前 DvlRawSample 只预留了 range/corr，不直接放 ENU 位移；
+    // 如后续需要 BD 的累计 ENU 距离，可考虑扩展 DvlRawSample 结构体。
+    // 这里先不对 e_m/n_m/u_m/depth_m 做更多映射，保持语义简单。
+
+    return true;
 }
 
 } // namespace nav_core::drivers

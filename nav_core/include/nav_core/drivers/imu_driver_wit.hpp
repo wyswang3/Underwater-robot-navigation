@@ -6,47 +6,31 @@
 // 设计目标：
 //   - 将厂家 Wit C SDK（全局寄存器数组 + C 回调）的细节封装在 .cpp 中；
 //   - 对上层（nav_core::estimator / nav_core::io）暴露统一的 IMU 采样接口：
-//       * ImuFrame / ImuSample（见 nav_core/types.hpp）；
+//       * ImuFrame / ImuSample（见 nav_core/core/types.hpp）；
 //       * ImuRawRegs（可选，用于调试寄存器更新）；
 //   - 提供“线程化串口采集 + 回调模式”：
 //       * 驱动内部启动一个采集线程，按固定频率轮询寄存器并喂给 Wit SDK；
 //       * Wit SDK 通过 C 回调通知寄存器更新，由驱动解析成 ImuFrame 并调用上层回调；
 //   - 当前实现只支持单实例（受 Wit SDK 全局状态限制）。
 //
-// 典型使用流程：
-// @code
-// using namespace nav_core;
-// using namespace nav_core::drivers;
+// 统一单位约定（与 nav_core/core/types.hpp 保持一致）：
+//   - ImuFrame::lin_acc: m/s^2   （线加速度，[ax, ay, az]，IMU 自身坐标系）
+//   - ImuFrame::ang_vel: rad/s   （角速度，[wx, wy, wz]，IMU 自身坐标系）
+//   - ImuFrame::euler:   rad     （欧拉角，[roll, pitch, yaw]）
 //
-// ImuConfig cfg;
-// cfg.port       = "/dev/ttyUSB0";
-// cfg.baud       = 230400;
-// cfg.slave_addr = 0x50;
-// cfg.filter     = ImuFilterConfig{};  // 可按需调整阈值
+// 厂家原始寄存器 sReg[] 的典型换算关系（默认配置）：
+//   - 加速度寄存器：sReg[AX..AZ] ∈ [-32768, 32767]
+//       acc_g = sReg * (acc_range_g / 32768)
+//       acc_mps2 = acc_g * raw_g_to_mps2
+//   - 角速度寄存器：sReg[GX..GZ] ∈ [-32768, 32767]
+//       gyro_deg_s = sReg * (gyro_range_dps / 32768)
+//       gyro_rad_s = gyro_deg_s * π / 180
+//   - 姿态角寄存器：sReg[Roll..Yaw] ∈ [-32768, 32767]
+//       angle_deg = sReg * 180 / 32768
+//       angle_rad = angle_deg * π / 180
 //
-// ImuDriverWit imu;
-// bool ok = imu.init(cfg,
-//                    [](const ImuFrame& frame) {
-//                        // 处理标准化 IMU 帧（用于导航 / 记录）
-//                    },
-//                    nullptr  // 若不需要原始寄存器回调，可传 nullptr
-// );
-// if (!ok) {
-//     // 处理初始化失败（串口/SDK 等）
-// }
-//
-// if (!imu.start()) {
-//     // 处理启动失败
-// }
-//
-// // ... 程序运行中，回调会被持续调用 ...
-//
-// imu.stop();  // 安全结束：停止采集线程，关闭串口
-// @endcode
-//
-// 实现说明：
-//   - 具体串口读写 / Wit SDK 调用 / sReg[] 解析逻辑在 .cpp 中实现；
-//   - 本头文件只定义：配置结构、回调类型、类接口与线程模型约定。
+// 这些换算会在 ImuDriverWit 内部完成，对外层（ESKF / 因子图等）完全屏蔽
+// 厂家“counts / g / deg”的语义差异，上层统一消费 SI 单位。
 //
 
 #pragma once
@@ -61,228 +45,156 @@
 
 namespace nav_core::drivers {
 
-/// @brief IMU 驱动配置（串口+协议+过滤）。
-///
-/// 说明：
-///   - port: 串口设备路径（如 "/dev/ttyUSB0"、"/dev/ttyS1"）；
-///   - baud: 串口波特率（HWT9073-485 通常为 230400）；
-///   - slave_addr: Modbus 从机地址（厂家一般默认 0x50）；
-///   - filter: 基本过滤配置（见 ImuFilterConfig），用于去除明显异常帧。
 struct ImuConfig {
-    std::string  port;                  ///< 串口设备路径，例如 "/dev/ttyUSB0"
-    int          baud{230400};          ///< 波特率
-    std::uint8_t slave_addr{0x50};      ///< Modbus 从机地址
+    std::string  port;
+    int          baud{230400};
+    std::uint8_t slave_addr{0x50};
 
-    ImuFilterConfig filter{};           ///< IMU 基本过滤配置
+    ImuFilterConfig filter{};
+
+    // ===== 单位转换相关配置 =====
+    float acc_range_g{16.0f};       ///< 加速度量程 ±acc_range_g g
+    float gyro_range_dps{2000.0f};  ///< 角速度量程 ±gyro_range_dps °/s
+    float raw_g_to_mps2{9.78f};     ///< 1 g → m/s²（与 Python 工程保持一致）
 };
 
-/// @brief 基于 WitMotion HWT9073-485 (Modbus-RTU) 的 IMU 驱动。
-///
-/// 职责：
-///   - 管理串口打开/关闭；
-///   - 封装 Wit C SDK 初始化、寄存器回调、串口写回调；
-///   - 在后台线程中循环：
-///       * 向 IMU 发送读寄存器命令；
-///       * 从串口读回数据并喂给 WitSerialDataIn；
-///       * 在寄存器更新时解析为 ImuFrame，并调用上层回调；
-///   - 对外只暴露统一的 ImuFrame / ImuRawRegs，不暴露 sReg[] 与原始 C 接口。
-///
-/// 限制：
-///   - Wit SDK 使用全局寄存器数组 sReg[] 与全局回调，因此当前实现为
-///     “单实例设计”：
-///       * 在一个进程中只应创建一个 ImuDriverWit 对象；
-///       * 内部通过静态指针 s_instance_ 将 C 回调桥接到当前实例；
-///   - 非线程安全：不支持多个线程同时调用 init/start/stop，
-///     需由上层串行管理生命周期。
 class ImuDriverWit {
 public:
-    /// @brief 标准化 IMU 帧回调类型。
     using FrameCallback = std::function<void(const ImuFrame&)>;
-
-    /// @brief 原始寄存器更新信息回调类型（可选，用于调试/统计）。
     using RawCallback   = std::function<void(const ImuRawRegs&)>;
 
-    /// @brief 默认构造（不做任何初始化，需显式调用 init()）。
     ImuDriverWit();
-
-    /// @brief 使用配置 + 回调构造（内部调用 init，但不会自动 start）。
-    ///
-    /// 等价于：
-    /// @code
-    /// ImuDriverWit imu;
-    /// imu.init(cfg, on_frame, on_raw);
-    /// @endcode
     ImuDriverWit(const ImuConfig& cfg,
-                 FrameCallback on_frame,
-                 RawCallback   on_raw = nullptr);
-
-    /// @brief 兼容旧接口的构造函数。
-    ///
-    /// 等价于构造 ImuConfig 后调用 ImuDriverWit(cfg, ...)：
-    /// @code
-    /// ImuConfig cfg{port, baud, slave_addr, filter};
-    /// ImuDriverWit imu(cfg, on_frame, on_raw);
-    /// @endcode
+                 FrameCallback    on_frame,
+                 RawCallback      on_raw = nullptr);
     ImuDriverWit(const std::string&      port,
                  int                     baud,
-                 std::uint8_t           slave_addr,
-                 const ImuFilterConfig& filter,
-                 FrameCallback          on_frame,
-                 RawCallback            on_raw = nullptr);
-
-    /// @brief 析构函数：若线程仍在运行，将自动调用 stop()。
+                 std::uint8_t            slave_addr,
+                 const ImuFilterConfig&  filter,
+                 FrameCallback           on_frame,
+                 RawCallback             on_raw = nullptr);
     ~ImuDriverWit();
 
-    // 禁止拷贝，允许移动（如有需要可后续实现移动构造/赋值）
     ImuDriverWit(const ImuDriverWit&)            = delete;
     ImuDriverWit& operator=(const ImuDriverWit&) = delete;
 
     // ==================== 生命周期管理 ====================
 
-    /**
-     * @brief 初始化驱动（配置串口与回调，不启动采集线程）。
-     *
-     * @param cfg       串口与过滤配置
-     * @param on_frame  标准化 IMU 帧回调（必需，不能为空）
-     * @param on_raw    可选：原始寄存器更新信息回调（用于调试/统计）
-     * @return true     初始化成功（配置缓存就绪，可以 start）
-     * @return false    初始化失败（参数非法 / 回调为空等）
-     *
-     * 注意：
-     *   - 不会打开串口、不调用 Wit SDK，只是保存配置与回调；
-     *   - 若需检查串口是否存在，请在 start() 中实现具体打开与错误报告。
-     */
     bool init(const ImuConfig& cfg,
               FrameCallback    on_frame,
               RawCallback      on_raw = nullptr);
 
-    /// @brief 启动 IMU 驱动线程（打开串口，初始化 Wit SDK，开始轮询）。
-    ///
-    /// @return true  启动成功（线程已开始运行）
-    /// @return false 启动失败（例如串口打开失败 / SDK 初始化失败）
-    ///
-    /// 线程模型：
-    ///   - 内部创建一个后台线程，执行 threadFunc() 主循环；
-    ///   - 该线程会定期向 IMU 发送查询命令，并处理串口返回数据；
-    ///   - 在寄存器更新时，通过回调向上层推送 ImuFrame / ImuRawRegs。
     bool start();
-
-    /// @brief 停止 IMU 驱动线程（安全关停）。
-    ///
-    /// 行为：
-    ///   - 通知线程退出（设置 stop_requested_ / running_ 标志）；
-    ///   - 等待采集线程结束（join）；
-///   - 关闭串口，释放 Wit SDK 相关资源；
-///   - 在析构函数中会自动调用，无需重复调用。
     void stop();
 
     // ==================== 运行时配置 ====================
 
-    /// @brief 设置过滤配置（线程安全：内部按值拷贝）。
-    ///
-    /// 说明：
-    ///   - 可在运行过程中动态调整基本过滤参数（max_abs_accel / max_abs_gyro 等），
-///     - 内部会在采集线程中按最新配置执行过滤逻辑。
-    void setFilterConfig(const ImuFilterConfig& cfg);
-
-    /// @brief 获取当前过滤配置（按值返回）。
+    void         setFilterConfig(const ImuFilterConfig& cfg);
     ImuFilterConfig filterConfig() const;
 
-private:
-    // ==================== 串口管理（仅在 .cpp 中实现） ====================
+    // ==================== 运行状态与健康检查 ====================
 
-    /// @brief 打开串口并配置波特率等参数。
+    /// @brief 采集线程是否在运行（start 成功且尚未 stop）。
+    bool isRunning() const noexcept;
+
+    /// @brief 串口是否已成功打开。
     ///
-    /// @return true  串口打开成功
-    /// @return false 串口打开失败（路径不存在 / 权限不足等）
-    bool openPort();
+    /// 说明：
+    ///   - 返回 true 表示 openPort() 成功，底层 fd_ 有效；
+    ///   - 若返回 false，说明当前无法与 IMU 通信（端口不存在/权限不足等）。
+    bool isPortOpen() const noexcept;
 
-    /// @brief 关闭串口（若已打开）。
+    /// @brief 自 start() 以来是否至少收到过一帧 ImuFrame（无论 valid 与否）。
+    ///
+    /// 用途：
+    ///   - 区分“串口打开了但没数据”（IMU 掉线 / 线路问题）
+    ///   - 与 isPortOpen() 联合用于启动阶段自检：
+    ///       * isPortOpen()==true && hasEverReceivedFrame()==true
+    ///         ⇒ 串口确实连着一个在说话的 IMU。
+    bool hasEverReceivedFrame() const noexcept;
+
+    /// @brief 自 start() 以来是否至少收到过一帧有效 ImuFrame（valid==true）。
+    ///
+    /// 用途：
+    ///   - 快速判断“有没有收到通过基本过滤的 IMU 数据”，
+    ///   - 如果长时间为 false，可认为当前 IMU 输出异常或过滤过严。
+    bool hasEverReceivedValidFrame() const noexcept;
+
+    /// @brief 最近一帧 ImuFrame 的单调时间戳（ns）。
+    ///
+    /// 说明：
+    ///   - 若尚未收到任何帧，返回 0；
+    ///   - 上层可用（now_ns - lastFrameMonoNs()）对比某个超时时间，
+    ///     判定 IMU 是否“近期在线”。
+    MonoTimeNs lastFrameMonoNs() const noexcept;
+
+private:
+    // ==================== 串口管理 ====================
+
+    bool openPort();
     void closePort();
 
     // ==================== 线程主循环 ====================
 
-    /// @brief 采集线程主函数。
-    ///
-    /// 典型逻辑（在 .cpp 中实现）：
-    ///   - 调用 openPort() / Wit SDK 初始化；
-    ///   - 循环：
-    ///       * 发送读寄存器指令；
-    ///       * 从串口读取数据并喂给 WitSerialDataIn；
-    ///       * 根据 WitRegisterCallBack 通知解析 ImuFrame 并调用 on_frame_；
-    ///   - 循环结束后，关闭串口，反初始化 SDK。
     void threadFunc();
 
     // ==================== Wit SDK 回调桥接（C → C++） ====================
 
-    /// @brief 静态实例指针，用于 C 回调桥接到当前对象。
-    ///
-    /// 限制：
-    ///   - 单实例：在 init/start 前应保证没有其他 ImuDriverWit 实例正在使用；
-    ///   - 实际的赋值/清理逻辑在 .cpp 中管理。
     static ImuDriverWit* s_instance_;
 
-    /// @brief 提供给 WitSerialWriteRegister 的静态回调。
-    ///
-    /// SDK 会通过该函数向串口发送数据，本函数内部会转发到当前实例的
-    /// onSerialWrite() 成员函数。
     static void serialWriteBridge(std::uint8_t* data, std::uint32_t len);
-
-    /// @brief 提供给 WitRegisterCallBack 的静态回调。
-    ///
-    /// SDK 在寄存器更新时调用本函数，本函数内部会转发到当前实例的
-    /// onRegUpdate() 成员函数。
     static void regUpdateBridge(std::uint32_t start_reg, std::uint32_t num);
 
-    /// @brief 实例级串口写实现（供 serialWriteBridge 调用）。
     void onSerialWrite(std::uint8_t* data, std::uint32_t len);
-
-    /// @brief 实例级寄存器更新处理（供 regUpdateBridge 调用）。
-    ///
-    /// 典型操作：
-    ///   - 构造 ImuRawRegs 并触发 RawCallback（若存在）；
-///   - 从 sReg[] 解析出 ImuFrame，并依据过滤配置做基本筛选；
-///   - 若帧有效，调用 FrameCallback。
     void onRegUpdate(std::uint32_t start_reg, std::uint32_t num);
 
-    /// @brief 根据 sReg[] + 起始寄存器范围解析出 ImuFrame。
-    ///
-    /// @param start_reg   本次更新的起始寄存器地址
-    /// @param num         连续寄存器数量
-    /// @param out         输出的 ImuFrame（时间戳与物理量在 .cpp 中赋值）
-    ///
-    /// 说明：
-    ///   - 仅负责“寄存器→物理量”的解码逻辑；
-///   - 不做过滤，过滤逻辑由调用方按 ImuFilterConfig 处理。
+    /// @brief 根据 sReg[] 更新区间解析 ImuFrame（完成单位转换）。
     void makeFrameFromRegs(std::uint32_t start_reg,
                            std::uint32_t num,
                            ImuFrame&     out);
 
+    // ==================== 单位转换辅助函数（实现放在 .cpp） ====================
+
+    float rawAccCountToG(std::int16_t raw) const;
+    float rawAccCountToMps2(std::int16_t raw) const;
+    float rawGyroCountToDegPerSec(std::int16_t raw) const;
+    float rawGyroCountToRadPerSec(std::int16_t raw) const;
+    float rawAngleCountToDeg(std::int16_t raw) const;
+    float rawAngleCountToRad(std::int16_t raw) const;
+
 private:
     // ==================== 配置与状态 ====================
 
-    ImuConfig       cfg_{};          ///< 原始配置（供调试/查询）
+    ImuConfig       cfg_{};
 
-    // 展开字段，方便 .cpp 中使用并保持与 cfg_ 同步。
     std::string     port_{};
     int             baud_{230400};
     std::uint8_t    slave_addr_{0x50};
-    ImuFilterConfig filter_cfg_{};   ///< 运行时过滤配置
+    ImuFilterConfig filter_cfg_{};
 
-    // 串口文件描述符（-1 表示未打开）。
-    int fd_{-1};
-
-    // Wit SDK 初始化状态。
+    int  fd_{-1};
     bool sdk_inited_{false};
 
-    // 回调（由 init() 注册）
     FrameCallback on_frame_{};
     RawCallback   on_raw_{};
 
-    // 线程控制。
     std::thread       th_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};
+
+    // ===== 健康检查相关状态（由线程与回调维护） =====
+
+    /// @brief 串口是否打开成功（openPort 成功置 true，closePort 置 false）。
+    std::atomic<bool> port_open_{false};
+
+    /// @brief 自 start() 以来是否收到过至少一帧 ImuFrame（无论 valid）。
+    std::atomic<bool> have_any_frame_{false};
+
+    /// @brief 自 start() 以来是否收到过至少一帧 valid==true 的 ImuFrame。
+    std::atomic<bool> have_valid_frame_{false};
+
+    /// @brief 最近一帧 ImuFrame 的单调时间戳（ns），未收到则为 0。
+    std::atomic<MonoTimeNs> last_frame_mono_ns_{0};
 };
 
 } // namespace nav_core::drivers

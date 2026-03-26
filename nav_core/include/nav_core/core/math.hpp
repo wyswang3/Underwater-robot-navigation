@@ -19,6 +19,7 @@
 //       * ZUPT 零速判定；
 //       * 轨迹梯形积分（配合 Kahan 补偿器）；
 //       * DVL / IMU 噪声地板 & deadzone 处理；
+//       * 滑动平均平滑 yaw / 速度 / 加速度；
 //   - 离线因子图：
 //       * 轨迹误差的 RMS 评估；
 //       * 简单的向量工具（模长、归一化等）。
@@ -29,6 +30,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "nav_core/core/types.hpp"  // Vec3f / Vec3d
 
@@ -102,6 +104,21 @@ inline Vec3f normalize(const Vec3f& v, float eps = 1e-6f) noexcept
     }
     return Vec3f{v.x / n, v.y / n, v.z / n};
 }
+
+inline double clamp(double x, double lo, double hi) noexcept
+{
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}
+
+inline float clamp(float x, float lo, float hi) noexcept
+{
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}
+
 
 // ===================== 3. 坐标系变换：Body → ENU（Yaw-only） =====================
 
@@ -188,14 +205,10 @@ inline void integrate_trapezoid(double dt,
 
     if (acc) {
         acc->add(delta);
-        p_inout.x += delta.x;
-        p_inout.y += delta.y;
-        p_inout.z += delta.z;
-    } else {
-        p_inout.x += delta.x;
-        p_inout.y += delta.y;
-        p_inout.z += delta.z;
     }
+    p_inout.x += delta.x;
+    p_inout.y += delta.y;
+    p_inout.z += delta.z;
 }
 
 // ===================== 7. 误差指标（RMS） =====================
@@ -308,5 +321,155 @@ inline void compensate_bias_and_deadzone(Vec3d& meas_inout,
     // 再应用 deadzone
     apply_deadzone(meas_inout, deadzone);
 }
+
+// ===================== 9. 滑动平均窗口（标量 & 3D 向量） =====================
+//
+// 主要用途：
+//   - 对 yaw_nav、ENU 速度、线加速度做简单平滑，抑制短时抖动；
+//   - 窗口长度一般设置为“若干采样周期”，例如 fs≈100Hz 时，
+//     可选 win=5~15 对应 0.05~0.15s 的时间常数。
+//   - 底层实现为环形缓冲区 + 累计和，构造时一次性分配内存，
+//     在线调用 add() 时不再做动态分配。
+
+/// @brief 标量滑动平均（定长窗口）。
+struct SlidingMeanScalar {
+    std::size_t window_size{0};
+    std::size_t count{0};
+    std::size_t index{0};
+    double      sum{0.0};
+    std::vector<double> buffer;
+
+    SlidingMeanScalar() = default;
+
+    explicit SlidingMeanScalar(std::size_t win)
+    {
+        reset(win);
+    }
+
+    /// @brief 重置窗口长度并清空历史。
+    inline void reset(std::size_t win)
+    {
+        window_size = win;
+        count = 0;
+        index = 0;
+        sum = 0.0;
+        buffer.assign(window_size > 0 ? window_size : 0, 0.0);
+    }
+
+    /// @brief 是否已经有效（窗口长度 > 0）。
+    [[nodiscard]] inline bool valid() const noexcept
+    {
+        return window_size > 0 && !buffer.empty();
+    }
+
+    /// @brief 添加一个新样本，并返回当前滑动平均值。
+    ///
+    /// 若窗口未初始化（window_size==0），则直接返回 x。
+    inline double add(double x) noexcept
+    {
+        if (!valid()) {
+            return x;
+        }
+
+        if (count < window_size) {
+            // 填充阶段
+            buffer[count] = x;
+            sum += x;
+            ++count;
+            index = count % window_size;
+        } else {
+            // 环形覆盖
+            const double old = buffer[index];
+            buffer[index] = x;
+            sum += x - old;
+            index = (index + 1) % window_size;
+        }
+
+        return sum / static_cast<double>(count);
+    }
+};
+
+/// @brief Vec3d 滑动平均（逐分量平均）。
+struct SlidingMeanVec3 {
+    std::size_t window_size{0};
+    std::size_t count{0};
+    std::size_t index{0};
+    Vec3d       sum{0.0, 0.0, 0.0};
+    std::vector<Vec3d> buffer;
+
+    SlidingMeanVec3() = default;
+
+    explicit SlidingMeanVec3(std::size_t win)
+    {
+        reset(win);
+    }
+
+    /// @brief 重置窗口长度并清空历史。
+    inline void reset(std::size_t win)
+    {
+        window_size = win;
+        count = 0;
+        index = 0;
+        sum = Vec3d{0.0, 0.0, 0.0};
+        buffer.assign(window_size > 0 ? window_size : 0, Vec3d{0.0, 0.0, 0.0});
+    }
+
+    /// @brief 是否已经有效（窗口长度 > 0）。
+    [[nodiscard]] inline bool valid() const noexcept
+    {
+        return window_size > 0 && !buffer.empty();
+    }
+    inline void apply_deadzone(Vec3f& v, float threshold) noexcept
+    {
+        if (threshold <= 0.0f) return;
+        v.x = (std::fabs(v.x) < threshold) ? 0.0f : v.x;
+        v.y = (std::fabs(v.y) < threshold) ? 0.0f : v.y;
+        v.z = (std::fabs(v.z) < threshold) ? 0.0f : v.z;
+    }    
+
+    inline void compensate_bias_and_deadzone(Vec3f& meas_inout,
+                                             const Vec3f& bias,
+                                             float deadzone) noexcept
+    {
+        meas_inout.x -= bias.x;
+        meas_inout.y -= bias.y;
+        meas_inout.z -= bias.z;
+        apply_deadzone(meas_inout, deadzone);
+    }
+
+    /// @brief 添加一个新向量样本，并返回当前滑动平均值。
+    ///
+    /// 若窗口未初始化（window_size==0），则直接返回 x。
+    inline Vec3d add(const Vec3d& x) noexcept
+    {
+        if (!valid()) {
+            return x;
+        }
+
+        if (count < window_size) {
+            // 填充阶段
+            buffer[count] = x;
+            sum.x += x.x;
+            sum.y += x.y;
+            sum.z += x.z;
+            ++count;
+            index = count % window_size;
+        } else {
+            // 环形覆盖
+            const Vec3d& old = buffer[index];
+            buffer[index] = x;
+
+            sum.x += x.x - old.x;
+            sum.y += x.y - old.y;
+            sum.z += x.z - old.z;
+
+            index = (index + 1) % window_size;
+        }
+
+        const double inv = 1.0 / static_cast<double>(count);
+        return Vec3d{sum.x * inv, sum.y * inv, sum.z * inv};
+    }
+    
+};
 
 } // namespace nav_core::core::math

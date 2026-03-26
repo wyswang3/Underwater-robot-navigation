@@ -2,21 +2,26 @@
 //
 // Hover H1000 (PD6 / EPD6) 文本协议工具实现：
 //   - 单行报文解析（PD6/EPD6 → ParsedLine）
-//   - 命令打包（ASCII 命令 → 16 字节固定帧）
+//   - 命令打包（CMD2/ARG → 16 字节固定帧）
 //   - 命令回显检测（DVL 是否返回了相同命令）
 //
 // 说明：
 //   - 本文件不依赖任何 IO（串口/线程），仅处理字符串和字节数组；
 //   - 不维护历史状态（无“上一帧 BD”之类），位移/深度的“沿用上一帧”
-//     逻辑由 DvlDriver / online_estimator 实现；
-//   - 速度维度若缺失或出现占位值（+88888），统一以 0 填充，保证数据链不断。
+//     逻辑由 DvlDriver / estimator 实现；
+//   - 速度维度若缺失或出现占位值（+8888 / +88888 / 9999 等），统一以 0 填充，
+//     保证数据链不断；
+//   - 浮点解析为 NaN / Inf 时一律视作失败，不向下游传播 NaN。
 
 #include <nav_core/drivers/dvl_protocol.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <cerrno>
+#include <cstdlib>
 #include <string>
 
 namespace nav_core::dvl_protocol {
@@ -27,10 +32,12 @@ namespace {
 
 inline std::string_view trim(std::string_view sv) noexcept
 {
-    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) {
+    while (!sv.empty() &&
+           std::isspace(static_cast<unsigned char>(sv.front()))) {
         sv.remove_prefix(1);
     }
-    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back()))) {
+    while (!sv.empty() &&
+           std::isspace(static_cast<unsigned char>(sv.back()))) {
         sv.remove_suffix(1);
     }
     return sv;
@@ -51,15 +58,24 @@ inline bool ieq_str(std::string_view a, std::string_view b) noexcept
     return true;
 }
 
-// -------------------- token/数字解析 --------------------
+// -------------------- token / 数字解析 --------------------
 
+/// @brief 判断一个 token 是否是典型占位符（+8888 / 8888 / 9999 / 88888 / 99999）。
 inline bool is_placeholder_token(std::string_view sv) noexcept
 {
     sv = trim(sv);
     if (sv.empty()) return true;  // 空视作“没有实值”
 
-    // 常见占位形式：+88888 / 88888 / -88888
-    if (sv == "+88888" || sv == "88888" || sv == "-88888") {
+    // 去掉前导符号
+    if (!sv.empty() && (sv.front() == '+' || sv.front() == '-')) {
+        sv.remove_prefix(1);
+        sv = trim(sv);
+    }
+
+    // 常见占位形式：8888 / 88888 / 9999 / 99999
+    if (sv == "8888" || sv == "88888" ||
+        sv == "9999" || sv == "99999")
+    {
         return true;
     }
     return false;
@@ -85,12 +101,15 @@ inline bool parse_double_token(std::string_view sv, double& out) noexcept
     sv = trim(sv);
     if (sv.empty()) return false;
 
-    // 使用 strtod 比较稳妥一些（charconv 对浮点在部分标准库里支持不完整）
     std::string tmp{sv};
     char* endp = nullptr;
     errno      = 0;
     const double v = std::strtod(tmp.c_str(), &endp);
+
     if (endp == tmp.c_str() || errno == ERANGE) {
+        return false;
+    }
+    if (!std::isfinite(v)) {
         return false;
     }
     out = v;
@@ -109,7 +128,7 @@ inline std::size_t split_tokens(std::string_view content,
     std::size_t start = 0;
     while (start <= content.size() && count < N) {
         const std::size_t pos = content.find(',', start);
-        if (pos == std::string_view::npos) {
+        if (pos == std::string::npos) {
             tokens[count++] = content.substr(start);
             break;
         }
@@ -139,7 +158,8 @@ bool parse_velocity_frame(const std::string& src,
                           ParsedLine& out)
 {
     if (ntok < 2) {
-        return false;  // 连 src 单独一段以外没有任何数值，不认为是合法速度帧
+        // 连 src 之外没有任何数值，不认为是合法速度帧
+        return false;
     }
 
     // 速度 token 约定：token[1], token[2], token[3]
@@ -148,8 +168,9 @@ bool parse_velocity_frame(const std::string& src,
     const std::string_view t_vn = (ntok > 2) ? tok[2] : std::string_view{};
     const std::string_view t_vu = (ntok > 3) ? tok[3] : std::string_view{};
 
-    // 速度：缺失/占位 → 0
     int ve_i = 0, vn_i = 0, vu_i = 0;
+
+    // 速度：缺失 / 占位 → 0，避免 NaN 传到滤波器
     if (!is_placeholder_token(t_ve)) {
         int tmp = 0;
         if (parse_int_token(t_ve, tmp)) {
@@ -207,13 +228,10 @@ bool parse_velocity_frame(const std::string& src,
         out.valid = -1;
     }
 
-    if (out.track_type == TrackType::BottomTrack && out.valid == 1) {
-        out.bottom_lock = true;
-    } else {
-        out.bottom_lock = false;
-    }
+    out.bottom_lock =
+        (out.track_type == TrackType::BottomTrack && out.valid == 1);
 
-    // 这里不解析质量字段，保持 out.quality = 0
+    // 质量字段对纯速度帧暂不解析，保持 out.quality = 0
     return true;
 }
 
@@ -224,7 +242,7 @@ bool parse_displacement_frame(const std::string& src,
                               std::size_t ntok,
                               ParsedLine& out)
 {
-    // 期待至少有 6 个字段：src, e, n, u, depth, quality
+    // 预期：src, e, n, u, depth, quality
     if (ntok < 2) {
         return false;
     }
@@ -310,12 +328,8 @@ bool parse_displacement_frame(const std::string& src,
     }
 
     out.coord_frame = CoordFrame::Earth;
-
-    if (out.track_type == TrackType::BottomTrack && out.valid == 1) {
-        out.bottom_lock = true;
-    } else {
-        out.bottom_lock = false;
-    }
+    out.bottom_lock =
+        (out.track_type == TrackType::BottomTrack && out.valid == 1);
 
     return true;
 }
@@ -393,7 +407,7 @@ bool parse_pd6_line(std::string_view line, ParsedLine& out)
 
     out.src = src;
 
-    // timestamp_s 暂时不从 TS 帧推导，这里保持 0
+    // DVL 内部时间戳（TS 帧），此处不从该行推导，保持 0，由上层统一打时间基
     out.timestamp_s = 0.0;
 
     // 根据 src 分派
@@ -405,102 +419,104 @@ bool parse_pd6_line(std::string_view line, ParsedLine& out)
 }
 
 // ============================ 4. 命令打包接口实现 ============================
-CommandBytes make_command_from_ascii(std::string_view ascii_cmd)
+
+CommandBytes build_command16(std::string_view cmd2, std::string_view arg)
 {
     CommandBytes bytes{};
-
-    // 默认全部填充为 ASCII '0'，符合手册中 "PR10\r000000000000" 的风格
+    // 默认填充 ASCII '0'
     bytes.fill(static_cast<std::uint8_t>('0'));
 
-    // 去掉首尾空白和 CR/LF
-    auto trim = [](std::string_view s) -> std::string_view {
-        std::size_t beg = 0;
-        std::size_t end = s.size();
-        while (beg < end &&
-               (s[beg] == ' ' || s[beg] == '\t' ||
-                s[beg] == '\r' || s[beg] == '\n')) {
-            ++beg;
-        }
-        while (end > beg &&
-               (s[end - 1] == ' ' || s[end - 1] == '\t' ||
-                s[end - 1] == '\r' || s[end - 1] == '\n')) {
-            --end;
-        }
-        return s.substr(beg, end - beg);
-    };
+    cmd2 = trim(cmd2);
+    arg  = trim(arg);
 
-    ascii_cmd = trim(ascii_cmd);
-
-    // 预留 1 字节给 '\r'：ASCII 部分最长 15
-    const std::size_t max_ascii_len = 15;
-    const std::size_t ascii_len = std::min<std::size_t>(ascii_cmd.size(), max_ascii_len);
-
-    // 拷贝 ASCII 命令体
-    for (std::size_t i = 0; i < ascii_len; ++i) {
-        bytes[i] = static_cast<std::uint8_t>(ascii_cmd[i]);
+    // 命令 2 字符，统一大写
+    std::string cmd2_up;
+    cmd2_up.reserve(2);
+    for (char c : cmd2) {
+        cmd2_up.push_back(static_cast<char>(
+            std::toupper(static_cast<unsigned char>(c))));
     }
 
-    // 在 ASCII 命令体后面放一个 '\r'
-    if (ascii_len < bytes.size()) {
-        bytes[ascii_len] = static_cast<std::uint8_t>('\r');
-        // 之后的字节保持为 '0'，前面 fill() 已经处理
-    } else {
-        // ascii_len == 16 的极端情况：被截断，最后一个字节就是命令最后一位，
-        // 没有多余空间放 '\r'，这种情况一般不会出现，除非命令体异常长。
-        // 如有需要，可以在这里打印一条调试日志。
+    std::string s;
+    s.reserve(16);
+    s += cmd2_up;
+    if (!arg.empty()) {
+        s.push_back(' ');
+        s += std::string(arg);
+    }
+    s.push_back('\r');
+
+    // 限制总长不超过 16
+    if (s.size() > 16) {
+        s.resize(16);
+    }
+
+    const std::size_t n = std::min<std::size_t>(s.size(), bytes.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        bytes[i] = static_cast<std::uint8_t>(s[i]);
     }
 
     return bytes;
 }
 
-// ---- CS / CZ：启动 / 停止 ----
+std::string format_pr_pm_arg_2d(int value)
+{
+    if (value < 0)   value = 0;
+    if (value > 99)  value = 99;
+
+    std::string s = std::to_string(value);
+    if (s.size() == 1) {
+        // 前导空格 + 一位数
+        return std::string(" ") + s;
+    }
+    if (s.size() == 2) {
+        return s;
+    }
+    // 理论上不会到这里（前面已经 clamp 0..99），防御性兜底
+    return s.substr(s.size() - 2);
+}
 
 CommandBytes make_command_cz()
 {
-    // 强制停止 ping
-    return make_command_from_ascii("CZ");
+    return build_command16("CZ", std::string_view{});
 }
 
 CommandBytes make_command_cs()
 {
-    // 启动 ping（不带参数）
-    return make_command_from_ascii("CS");
-}
-
-// ---- PR / PM：发射呼率 / 平均次数 ----
-
-std::string make_pr_ascii(int ping_rate)
-{
-    // 协议格式：PR<数字>，例如 "PR10"
-    std::string s;
-    s.reserve(8);
-    s += "PR";
-    s += std::to_string(ping_rate);
-    return s;
-}
-
-std::string make_pm_ascii(int avg_count)
-{
-    // 协议格式：PM<数字>，例如 "PM10"
-    std::string s;
-    s.reserve(8);
-    s += "PM";
-    s += std::to_string(avg_count);
-    return s;
+    return build_command16("CS", std::string_view{});
 }
 
 CommandBytes make_command_pr(int ping_rate)
 {
-    const std::string ascii = make_pr_ascii(ping_rate);
-    return make_command_from_ascii(ascii);
+    const std::string arg = format_pr_pm_arg_2d(ping_rate);
+    return build_command16("PR", arg);
 }
 
 CommandBytes make_command_pm(int avg_count)
 {
-    const std::string ascii = make_pm_ascii(avg_count);
-    return make_command_from_ascii(ascii);
+    const std::string arg = format_pr_pm_arg_2d(avg_count);
+    return build_command16("PM", arg);
 }
 
+std::string make_ascii_cmd(std::string_view cmd2, std::string_view arg)
+{
+    cmd2 = trim(cmd2);
+    arg  = trim(arg);
+
+    std::string out;
+    out.reserve(8);
+
+    for (char c : cmd2) {
+        out.push_back(static_cast<char>(
+            std::toupper(static_cast<unsigned char>(c))));
+    }
+
+    if (!arg.empty()) {
+        out.push_back(' ');
+        out.append(arg.begin(), arg.end());
+    }
+    return out;
+}
 
 // ============================ 5. 命令回显 / 确认检测实现 ============================
 
@@ -508,8 +524,8 @@ std::string normalize_command_ascii(std::string_view cmd)
 {
     cmd = trim(cmd);
 
-    // 如果开头是 ':'，去掉（DVL 可能回显成 ":CS 10 10"）
-    if (!cmd.empty() && cmd.front() == ':') {
+    // 去掉前导 ':'（RESP 里常见 ":::PR 10..."）
+    while (!cmd.empty() && cmd.front() == ':') {
         cmd.remove_prefix(1);
         cmd = trim(cmd);
     }
@@ -524,7 +540,7 @@ std::string normalize_command_ascii(std::string_view cmd)
     bool pending_space = false;
     for (char ch : cmd) {
         if (is_ws(ch)) {
-            // 折叠所有空白为单一空格（稍后在遇到下一个非空白时再插入）
+            // 折叠所有空白为单一空格
             pending_space = true;
             continue;
         }
@@ -538,51 +554,26 @@ std::string normalize_command_ascii(std::string_view cmd)
             std::toupper(static_cast<unsigned char>(ch))));
     }
 
-    // 末尾不需要额外处理：我们只在遇到非空白字符前插入空格
-
     return out;
 }
 
 bool is_command_echo(std::string_view sent_ascii_cmd,
                      std::string_view echoed_line)
 {
-    const std::string norm_sent  = normalize_command_ascii(sent_ascii_cmd);
-    const std::string norm_echo  = normalize_command_ascii(echoed_line);
+    const std::string norm_sent = normalize_command_ascii(sent_ascii_cmd);
+    const std::string norm_echo = normalize_command_ascii(echoed_line);
 
     if (norm_sent.empty() || norm_echo.empty()) {
         return false;
     }
 
-    return norm_sent == norm_echo;
+    // 对于 ":::PR 10\00\00..." 这种 RESP，这里用“包含关系”更稳妥
+    return norm_echo.find(norm_sent) != std::string::npos;
 }
 
-bool is_cs_command_echo(int ping_rate, int avg_count, std::string_view line)
+bool is_cs_command_echo(std::string_view echoed_line)
 {
-    // 当前协议层 make_command_cs() 已不再接收参数，ping_rate/avg_count 先忽略
-    (void)ping_rate;
-    (void)avg_count;
-
-    const CommandBytes bytes = make_command_cs();
-
-    // 假设命令是 ASCII 文本（一般 DVL 控制命令是文本串）
-    std::string ascii;
-    ascii.reserve(bytes.size());
-    for (auto b : bytes) {
-        ascii.push_back(static_cast<char>(b));
-    }
-
-    // 直接比较 echo 行和期望命令
-    // 如果日志里有 \r\n，可以先 trim 掉末尾的 CR/LF
-    std::string_view trimmed = line;
-    while (!trimmed.empty() && (trimmed.back() == '\r' || trimmed.back() == '\n')) {
-        trimmed.remove_suffix(1);
-    }
-
-    while (!ascii.empty() && (ascii.back() == '\r' || ascii.back() == '\n')) {
-        ascii.pop_back();
-    }
-
-    return trimmed == ascii;
+    return is_command_echo("CS", echoed_line);
 }
 
 } // namespace nav_core::dvl_protocol

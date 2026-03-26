@@ -1,7 +1,7 @@
 file(REMOVE_RECURSE
   "CMakeFiles/uwnav_dvl_selftest.dir/src/nav_core/app/tools/DVL_selftest.cpp.o"
-  "uwnav_dvl_selftest"
-  "uwnav_dvl_selftest.pdb"
+  "bin/uwnav_dvl_selftest"
+  "bin/uwnav_dvl_selftest.pdb"
 )
 
 # Per-language clean rules from dependency scanning.
