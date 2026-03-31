@@ -25,9 +25,9 @@
 namespace nav_core::drivers {
 
 enum class ModbusCrcWireOrder : std::uint8_t {
-    /// CRC 高字节在前（WitMotion SDK 当前实现使用该顺序）
+    /// CRC 高字节在前（非标准；部分旧实现会用这种顺序）
     kHiLo = 0,
-    /// CRC 低字节在前（标准 Modbus RTU 常见顺序）
+    /// CRC 低字节在前（标准 Modbus RTU 线序：low byte, then high byte）
     kLoHi = 1,
 };
 
@@ -44,7 +44,8 @@ struct ImuModbusProbeOptions {
     int         inter_attempt_delay_ms{10};
     int         attempts{2};
     std::size_t max_capture_bytes{512u};
-    ModbusCrcWireOrder crc_order{ModbusCrcWireOrder::kHiLo};
+    // 默认按标准 Modbus RTU 线序发送 CRC（lo-hi）。
+    ModbusCrcWireOrder crc_order{ModbusCrcWireOrder::kLoHi};
     bool        try_both_crc_orders{false};
 };
 
@@ -59,7 +60,7 @@ struct ImuModbusProbeResult {
 
 std::array<std::uint8_t, 8> build_imu_modbus_read_request(
     const ImuModbusProbeRequest& request,
-    ModbusCrcWireOrder           crc_order = ModbusCrcWireOrder::kHiLo) noexcept;
+    ModbusCrcWireOrder           crc_order = ModbusCrcWireOrder::kLoHi) noexcept;
 
 ImuModbusProbeResult run_imu_modbus_probe(
     const std::string&          path,

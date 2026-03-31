@@ -53,6 +53,12 @@ struct ImuSerialDebugSnapshot {
     std::string       summary{};
     std::string       preview_text{};
     std::string       preview_hex{};
+    // 额外的“单帧 dump”（十六进制），用于现场排障。
+    //
+    // 约定：
+    // - 若识别到 Modbus 回复：这里放完整一帧（含 CRC）；
+    // - 否则放捕获缓冲的前 N 字节（N 受实现限制，避免日志爆炸）。
+    std::string       frame_dump_hex{};
 };
 
 /**

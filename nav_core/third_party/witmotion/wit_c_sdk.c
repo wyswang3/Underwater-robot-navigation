@@ -179,7 +179,8 @@ void WitSerialDataIn(uint8_t ucData)
                     return ;
                 }
                 if(s_uiWitDataCnt < (s_ucWitDataBuff[2] + 5))return ;
-                usTemp = ((uint16_t)s_ucWitDataBuff[s_uiWitDataCnt-2] << 8) | s_ucWitDataBuff[s_uiWitDataCnt-1];
+                /* Standard Modbus RTU wire order: CRC low byte then high byte. */
+                usTemp = ((uint16_t)s_ucWitDataBuff[s_uiWitDataCnt-1] << 8) | s_ucWitDataBuff[s_uiWitDataCnt-2];
                 usCRC16 = __CRC16(s_ucWitDataBuff, s_uiWitDataCnt-2);
                 if(usTemp != usCRC16)
                 {
@@ -301,8 +302,9 @@ int32_t WitWriteReg(uint32_t uiReg, uint16_t usData)
             ucBuff[4] = usData >> 8;
             ucBuff[5] = usData & 0xff;
             usCRC = __CRC16(ucBuff, 6);
-            ucBuff[6] = usCRC >> 8;
-            ucBuff[7] = usCRC & 0xff;
+            /* Standard Modbus RTU wire order: CRC low byte then high byte. */
+            ucBuff[6] = usCRC & 0xff;
+            ucBuff[7] = usCRC >> 8;
             p_WitSerialWriteFunc(ucBuff, 8);
             break;
 		case WIT_PROTOCOL_905x_CAN:
@@ -360,8 +362,9 @@ int32_t WitReadReg(uint32_t uiReg, uint32_t uiReadNum)
               ucBuff[4] = uiReadNum >> 8;
               ucBuff[5] = uiReadNum & 0xff;
               usTemp = __CRC16(ucBuff, 6);
-              ucBuff[6] = usTemp >> 8;
-              ucBuff[7] = usTemp & 0xff;
+              /* Standard Modbus RTU wire order: CRC low byte then high byte. */
+              ucBuff[6] = usTemp & 0xff;
+              ucBuff[7] = usTemp >> 8;
               p_WitSerialWriteFunc(ucBuff, 8);
 		   break;
 	    case WIT_PROTOCOL_905x_CAN:

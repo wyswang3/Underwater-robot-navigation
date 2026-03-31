@@ -346,6 +346,11 @@ cd /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core
   --reply-timeout-ms 120
 ```
 
+说明：
+
+* `uwnav_imu_modbus_probe` 默认按标准 Modbus RTU 的 CRC 线序发送（lo byte, hi byte）。
+* 如果现场设备实现存在历史漂移，可追加 `--crc-order both` 让工具自动两种顺序都试一次。
+
 工具会输出：
 
 * 发送出去的 Modbus 请求十六进制

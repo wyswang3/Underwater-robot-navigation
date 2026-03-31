@@ -37,7 +37,11 @@ imu:
   # 2.1 底层驱动配置（对应 nav_core::ImuConfig）
   driver:
     # 串口设备路径
-    port: "/dev/ttyUSB0"
+    #
+    # 建议：留空，让 nav_daemon 在启动阶段自动扫描并主动探测 IMU 口。
+    # 这样可以利用“电压板会持续回传文本、IMU 需要主机发 Modbus 请求才回包”的特性，
+    # 避免依赖硬编码 /dev/ttyUSBx（容易因重枚举跳变）。
+    port: ""
 
     # 波特率（你当前 IMU 配置为 230400）
     baud: 230400
@@ -116,7 +120,10 @@ imu:
 # ------------------------------------------------------------
 dvl:
   # 是否启用 DVL 链路
-  enable: true
+  #
+  # 注意：DVL 在岸上通常不可用（无底跟踪），会导致持续重连与 health=degraded。
+  # 岸上调试建议先关闭；下水后再打开。
+  enable: false
 
   driver:
     # 串口路径
@@ -166,7 +173,9 @@ dvl:
 estimator:
   # 是否启用在线导航估计器
   enable_online: true
-  eskf_config_path: "/home/wys/水下机器人实验数据/offline_nav/config/eskf_2d_pooltest01.yaml"
+  # 说明：实际运行时建议通过命令行 --eskf-config 指定；
+  # 这里给一个相对路径作为默认兜底（以 nav_core 为工作目录时有效）。
+  eskf_config_path: "config/eskf.yaml"
 
   # 因子图已下线，不再需要 enable_smoother
   enable_health: true
@@ -244,7 +253,9 @@ logging:
   enable: true
 
   # 日志根目录（nav_daemon 会在这里按日期/session 再建子目录）
-  base_dir: "/home/wys/data/nav"
+  # 推荐使用仓内相对路径，避免因用户名/权限差异导致日志不可用。
+  # 以 nav_core 为工作目录时，../data/nav 会落到 Underwater-robot-navigation/data/nav。
+  base_dir: "../data/nav"
 
   # 是否按日期分子目录：data/YYYY-MM-DD/...
   split_by_date: true

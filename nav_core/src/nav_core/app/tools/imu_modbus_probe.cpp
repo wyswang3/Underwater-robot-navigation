@@ -29,7 +29,8 @@ struct Args {
     int         reply_timeout_ms{120};
     std::size_t capture_limit{1024u};
     std::string output_path{};
-    std::string crc_order{"hilo"}; // hilo | lohi | both
+    // 默认按标准 Modbus RTU 线序发送 CRC（low byte first）。
+    std::string crc_order{"lohi"}; // hilo | lohi | both
     bool        scan_common{false};
     bool        scan_addr{false};
 };
@@ -98,7 +99,7 @@ void print_usage(const char* argv0)
         << "  --attempts <n>             default: 3\n"
         << "  --reply-timeout-ms <ms>    default: 120\n"
         << "  --capture-limit <bytes>    default: 1024\n"
-        << "  --crc-order <hilo|lohi|both> default: hilo\n"
+        << "  --crc-order <hilo|lohi|both> default: lohi\n"
         << "  --scan-common              scan common baud/addr combos\n"
         << "  --scan-addr                scan addr 1..247 at selected baud\n"
         << "  --output <file>            optional raw RX binary output\n";
@@ -210,14 +211,13 @@ nav_core::drivers::ImuModbusProbeOptions make_options(const Args& args)
     options.attempts = args.attempts;
     options.max_capture_bytes = args.capture_limit;
 
-    if (args.crc_order == "lohi") {
-        options.crc_order = nav_core::drivers::ModbusCrcWireOrder::kLoHi;
-    } else {
+    // "both" 模式下仍指定一个“优先顺序”，默认从标准 lo-hi 开始尝试。
+    if (args.crc_order == "hilo") {
         options.crc_order = nav_core::drivers::ModbusCrcWireOrder::kHiLo;
+    } else {
+        options.crc_order = nav_core::drivers::ModbusCrcWireOrder::kLoHi;
     }
-    if (args.crc_order == "both") {
-        options.try_both_crc_orders = true;
-    }
+    options.try_both_crc_orders = (args.crc_order == "both");
     return options;
 }
 

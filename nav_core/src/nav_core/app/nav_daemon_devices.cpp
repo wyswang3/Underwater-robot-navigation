@@ -203,6 +203,11 @@ void log_imu_no_frame_after_connect(const NavDaemonConfig& cfg,
                      "[nav_daemon] IMU serial preview(hex): %s\n",
                      serial_diag.preview_hex.c_str());
     }
+    if (!serial_diag.frame_dump_hex.empty()) {
+        std::fprintf(stderr,
+                     "[nav_daemon] IMU serial frame_dump(hex): %s\n",
+                     serial_diag.frame_dump_hex.c_str());
+    }
 
     if (event_logger != nullptr &&
         (serial_diag.total_rx_bytes > 0 || !serial_diag.summary.empty())) {

@@ -75,11 +75,14 @@ ModbusReplyScanResult scan_imu_modbus_reply_frames(const std::vector<std::uint8_
         }
 
         const auto* frame_data = sample.data() + i;
-        const auto  crc_expect = static_cast<std::uint16_t>(
+        const auto crc_expect_hilo = static_cast<std::uint16_t>(
             (static_cast<std::uint16_t>(frame_data[kReplyFrameLen - 2]) << 8u) |
             frame_data[kReplyFrameLen - 1]);
+        const auto crc_expect_lohi = static_cast<std::uint16_t>(
+            (static_cast<std::uint16_t>(frame_data[kReplyFrameLen - 1]) << 8u) |
+            frame_data[kReplyFrameLen - 2]);
         const auto crc_actual = modbus_crc16(frame_data, kReplyFrameLen - 2u);
-        if (crc_actual != crc_expect) {
+        if (crc_actual != crc_expect_hilo && crc_actual != crc_expect_lohi) {
             continue;
         }
 
@@ -137,6 +140,12 @@ std::string format_hex_preview(const std::vector<std::uint8_t>& sample, std::siz
 {
     const std::size_t count = std::min(max_bytes, sample.size());
     return format_hex_line(sample.data(), count);
+}
+
+std::string format_frame_dump_hex(const std::vector<std::uint8_t>& sample,
+                                  std::size_t max_bytes = 64u)
+{
+    return format_hex_preview(sample, max_bytes);
 }
 
 std::string extract_first_ascii_line(const std::vector<std::uint8_t>& sample)
@@ -296,6 +305,7 @@ ImuSerialDebugSnapshot ImuSerialDiagnostics::snapshot() const
             ? "WIT Modbus reply observed and SDK callback already fired"
             : "WIT-style Modbus reply observed, but SDK did not emit a register update";
         out.preview_hex = format_hex_line(modbus.first_frame.data(), modbus.first_frame.size());
+        out.frame_dump_hex = out.preview_hex;
         return out;
     }
 
@@ -305,6 +315,7 @@ ImuSerialDebugSnapshot ImuSerialDiagnostics::snapshot() const
         out.summary = "Volt32-style CHn text observed; IMU path may have rebound to the voltage sensor";
         out.preview_text = volt_line;
         out.preview_hex = format_hex_preview(capture);
+        out.frame_dump_hex = format_frame_dump_hex(capture);
         return out;
     }
 
@@ -312,6 +323,7 @@ ImuSerialDebugSnapshot ImuSerialDiagnostics::snapshot() const
         out.peer_kind = ImuSerialPeerKind::kLegacyWitSync;
         out.summary = "legacy WIT 0x55 sync frames observed; device is not speaking the expected Modbus polling reply";
         out.preview_hex = format_hex_preview(capture);
+        out.frame_dump_hex = format_frame_dump_hex(capture);
         return out;
     }
 
@@ -321,12 +333,14 @@ ImuSerialDebugSnapshot ImuSerialDiagnostics::snapshot() const
         out.summary = "ASCII serial text observed, but it does not match WIT Modbus reply grammar";
         out.preview_text = ascii_line;
         out.preview_hex = format_hex_preview(capture);
+        out.frame_dump_hex = format_frame_dump_hex(capture);
         return out;
     }
 
     out.peer_kind = ImuSerialPeerKind::kOtherBinary;
     out.summary = "binary bytes observed, but no known WIT Modbus reply matched";
     out.preview_hex = format_hex_preview(capture);
+    out.frame_dump_hex = format_frame_dump_hex(capture);
     return out;
 }
 

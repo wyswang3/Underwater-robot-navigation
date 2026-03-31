@@ -56,12 +56,39 @@ std::vector<std::uint8_t> make_imu_reply_frame()
     return frame;
 }
 
+std::vector<std::uint8_t> make_imu_reply_frame_lohi()
+{
+    std::vector<std::uint8_t> frame{0x50, 0x03, 30};
+    for (std::uint8_t i = 0; i < 30; ++i) {
+        frame.push_back(static_cast<std::uint8_t>(i + 1u));
+    }
+    const auto crc = modbus_crc16(frame.data(), frame.size());
+    frame.push_back(static_cast<std::uint8_t>(crc & 0xffu));
+    frame.push_back(static_cast<std::uint8_t>((crc >> 8u) & 0xffu));
+    return frame;
+}
+
 int test_detect_imu_modbus_reply()
 {
     nav_core::drivers::ImuSerialDiagnostics diag;
     diag.reset(0x50);
 
     const auto frame = make_imu_reply_frame();
+    diag.record_rx_bytes(frame.data(), frame.size());
+
+    const auto snap = diag.snapshot();
+    TEST_EQ(snap.peer_kind, nav_core::drivers::ImuSerialPeerKind::kImuModbusReply);
+    TEST_EQ(snap.detected_imu_reply_frames, std::size_t{1});
+    TEST_CHECK(snap.preview_hex.find("50 03 1e") != std::string::npos);
+    return 0;
+}
+
+int test_detect_imu_modbus_reply_lohi()
+{
+    nav_core::drivers::ImuSerialDiagnostics diag;
+    diag.reset(0x50);
+
+    const auto frame = make_imu_reply_frame_lohi();
     diag.record_rx_bytes(frame.data(), frame.size());
 
     const auto snap = diag.snapshot();
@@ -91,6 +118,10 @@ int test_detect_volt32_text_line()
 int main()
 {
     int rc = test_detect_imu_modbus_reply();
+    if (rc != 0) {
+        return rc;
+    }
+    rc = test_detect_imu_modbus_reply_lohi();
     if (rc != 0) {
         return rc;
     }
