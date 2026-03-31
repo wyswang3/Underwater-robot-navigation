@@ -182,6 +182,9 @@ drivers::ImuSerialDebugSnapshot active_probe_candidate(const SerialPortIdentity&
     probe_options.reply_timeout_ms = options.active_reply_timeout_ms;
     probe_options.attempts = options.active_probe_attempts;
     probe_options.max_capture_bytes = 512u;
+    // 主动探测阶段优先提高鲁棒性：即使现场 IMU 使用标准 Modbus CRC 低字节在前，
+    // 也能至少抓到回包字节并打印预览，避免“active=unknown”。
+    probe_options.try_both_crc_orders = true;
 
     const auto probe = drivers::run_imu_modbus_probe(
         device.path,

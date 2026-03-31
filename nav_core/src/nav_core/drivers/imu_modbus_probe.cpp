@@ -113,7 +113,8 @@ void capture_serial_window(int                         fd,
 } // namespace
 
 std::array<std::uint8_t, 8> build_imu_modbus_read_request(
-    const ImuModbusProbeRequest& request) noexcept
+    const ImuModbusProbeRequest& request,
+    ModbusCrcWireOrder           crc_order) noexcept
 {
     std::array<std::uint8_t, 8> out{
         request.slave_addr,
@@ -126,8 +127,13 @@ std::array<std::uint8_t, 8> build_imu_modbus_read_request(
         0u,
     };
     const std::uint16_t crc = modbus_crc16(out.data(), out.size() - 2u);
-    out[6] = static_cast<std::uint8_t>((crc >> 8u) & 0xffu);
-    out[7] = static_cast<std::uint8_t>(crc & 0xffu);
+    if (crc_order == ModbusCrcWireOrder::kLoHi) {
+        out[6] = static_cast<std::uint8_t>(crc & 0xffu);
+        out[7] = static_cast<std::uint8_t>((crc >> 8u) & 0xffu);
+    } else {
+        out[6] = static_cast<std::uint8_t>((crc >> 8u) & 0xffu);
+        out[7] = static_cast<std::uint8_t>(crc & 0xffu);
+    }
     return out;
 }
 
@@ -136,7 +142,7 @@ ImuModbusProbeResult run_imu_modbus_probe(const std::string&           path,
                                           const ImuModbusProbeOptions& options)
 {
     ImuModbusProbeResult out{};
-    out.request = build_imu_modbus_read_request(request);
+    out.request = build_imu_modbus_read_request(request, options.crc_order);
 
     std::string error;
     const int fd = open_serial_port_raw(path,
@@ -153,6 +159,15 @@ ImuModbusProbeResult run_imu_modbus_probe(const std::string&           path,
 
     for (int attempt = 0; attempt < std::max(1, options.attempts); ++attempt) {
         ++out.attempts_made;
+
+        if (options.try_both_crc_orders) {
+            const auto order = (attempt % 2 == 0)
+                ? options.crc_order
+                : (options.crc_order == ModbusCrcWireOrder::kHiLo
+                       ? ModbusCrcWireOrder::kLoHi
+                       : ModbusCrcWireOrder::kHiLo);
+            out.request = build_imu_modbus_read_request(request, order);
+        }
 
         const ssize_t wn = ::write(fd, out.request.data(), out.request.size());
         out.last_write_size = static_cast<std::ptrdiff_t>(wn);
