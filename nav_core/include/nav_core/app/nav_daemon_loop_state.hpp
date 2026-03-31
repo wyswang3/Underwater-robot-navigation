@@ -48,6 +48,23 @@ struct RejectEventTracker {
 };
 
 /**
+ * @brief 最近一次对外发布的健康审查摘要，用于去重输出。
+ *
+ * 注意：
+ *   - 这里存的是“操作员应该感知到的摘要层”状态，而不是全部 metrics；
+ *   - 只要 health/root_cause/建议组合没有变化，就不重复刷 stderr / csv。
+ */
+struct NavHealthAuditSnapshot {
+    shared::msg::NavHealth          health{shared::msg::NavHealth::UNINITIALIZED};
+    estimator::NavAuditRootCause    root_cause{estimator::NavAuditRootCause::kUnknown};
+    bool                            recommend_stop_motion{false};
+    bool                            recommend_reduce_speed{false};
+    bool                            recommend_relocalize{false};
+
+    bool operator==(const NavHealthAuditSnapshot& rhs) const noexcept;
+};
+
+/**
  * @brief 主循环从 SharedSensorState 抽取出的一次只读快照。
  *
  * 约定：
@@ -83,6 +100,8 @@ struct NavLoopState {
     RejectEventTracker           dvl_reject_tracker{};
     NavPublishSnapshot           last_nav_publish_snapshot{};
     bool                         have_last_nav_publish_snapshot{false};
+    NavHealthAuditSnapshot       last_health_audit_snapshot{};
+    bool                         have_last_health_audit_snapshot{false};
 
     NavLoopState(ManagedDeviceRuntime imu_runtime_in,
                  ManagedDeviceRuntime dvl_runtime_in);

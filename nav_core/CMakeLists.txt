@@ -107,6 +107,7 @@ set(NAV_CORE_SOURCES
     src/nav_core/estimator/eskf_update_dvl.cpp
     src/nav_core/estimator/eskf_update_yaw.cpp
     src/nav_core/estimator/eskf.cpp
+    src/nav_core/estimator/nav_health_monitor.cpp
 
     # ---- io ----
     src/nav_core/io/bin_logger.cpp
@@ -116,6 +117,7 @@ set(NAV_CORE_SOURCES
     src/nav_core/app/device_binding.cpp
     src/nav_core/app/imu_port_selector.cpp
     src/nav_core/app/nav_daemon_dvl_pipeline.cpp
+    src/nav_core/app/nav_daemon_health_audit.cpp
     src/nav_core/app/nav_daemon_imu_pipeline.cpp
     src/nav_core/app/nav_daemon_loop_state.cpp
     src/nav_core/app/nav_daemon_publish.cpp
@@ -131,7 +133,6 @@ set(NAV_CORE_SOURCES
 if(NAV_CORE_ENABLE_GRAPH)
     list(APPEND NAV_CORE_SOURCES
         src/nav_core/estimator/graph_smoother_2d.cpp
-        src/nav_core/estimator/nav_health_monitor.cpp
         src/nav_core/estimator/online_estimator.cpp
     )
 endif()
@@ -250,6 +251,12 @@ if(NAV_CORE_BUILD_TESTS)
     )
     target_link_libraries(test_nav_daemon_config PRIVATE nav_core)
     add_test(NAME nav_core_test_nav_daemon_config COMMAND test_nav_daemon_config)
+
+    add_executable(test_nav_health_monitor
+        tests/test_nav_health_monitor.cpp
+    )
+    target_link_libraries(test_nav_health_monitor PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_health_monitor COMMAND test_nav_health_monitor)
 
     add_executable(test_nav_state_replay
         tests/test_nav_state_replay.cpp

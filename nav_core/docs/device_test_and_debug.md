@@ -316,6 +316,24 @@ sudo hexdump -C /dev/ttyUSB0 | head
 * IMU 与 Volt32 的 USB-RS485 转接器是否对调
 * `nav_events.csv` 中是否出现 `serial_protocol_diagnostic`
 
+同一版本开始，`uwnav_navd` 还会把 ESKF 审查结果单独汇总成低频告警：
+
+* stderr 会在根因变化时打印 `health audit changed: health=... cause=... summary=...`
+* `nav_events.csv` 会同步记录 `nav_health_audit_changed`
+
+根因字段目前分为：
+
+* `transport_timing`：样本 stale / out-of-order / 心跳超时，更像串口重连、时序链路或线程调度问题
+* `sensor_input`：预处理或 gating 大量拒绝，更像传感器原始数据本身异常
+* `estimator_consistency`：传感器仍在线，但 DVL XY/Z 更新接受率和 NIS 长时间异常，更像 ESKF 参数或观测模型需要调整
+* `estimator_numeric`：ESKF 状态出现 NaN/Inf，属于算法数值级异常
+
+排障顺序建议：
+
+1. 先看 `cause`，决定优先排查传感器、串口链路还是 ESKF 参数。
+2. 再看 `summary` 里的计数和比率，确认是哪一条输入流在持续拉低导航质量。
+3. 最后结合 `nav_publish_state_changed`、`serial_protocol_diagnostic` 和原始 binlog 做细查。
+
 ---
 
 ## 10.2 DVL 无数据或 PD6 解码失败

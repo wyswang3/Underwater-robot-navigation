@@ -280,6 +280,44 @@ void NavEventCsvLogger::log_nav_publish_state_changed(MonoTimeNs mono_ns,
             msg.str());
 }
 
+void NavEventCsvLogger::log_health_audit_changed(MonoTimeNs mono_ns,
+                                                 const shared::msg::NavState& nav,
+                                                 const char* root_cause,
+                                                 const std::string& summary)
+{
+    const NavPublishSnapshot snap{nav.valid != 0,
+                                  nav.stale != 0,
+                                  nav.degraded != 0,
+                                  static_cast<std::uint16_t>(nav.fault_code),
+                                  nav.status_flags};
+
+    const char* level = "info";
+    if (nav.health == smsg::NavHealth::INVALID) {
+        level = "error";
+    } else if (nav.health == smsg::NavHealth::DEGRADED) {
+        level = "warn";
+    }
+
+    std::ostringstream msg;
+    msg << "nav health audit changed root_cause="
+        << (root_cause != nullptr ? root_cause : "unknown")
+        << " summary=" << summary;
+
+    log_row(mono_ns,
+            "nav_health_audit_changed",
+            level,
+            snap.fault_code,
+            snap,
+            {},
+            {},
+            {},
+            {},
+            {},
+            root_cause != nullptr ? root_cause : "",
+            nav.age_ms,
+            msg.str());
+}
+
 void NavEventCsvLogger::log_protocol_diagnostic(MonoTimeNs mono_ns,
                                                 const char* device_label,
                                                 const char* signature,

@@ -48,11 +48,9 @@ std::optional<ImuSample> process_imu_pipeline(
     estimator::EskfFilter&         eskf,
     nav_core::BinLogger*           timing_logger,
     NavEventCsvLogger*             event_logger,
-    NavLoopState&                  loop_state
-#if NAV_CORE_ENABLE_GRAPH
-    , estimator::NavHealthMonitor* health_monitor,
+    NavLoopState&                  loop_state,
+    estimator::NavHealthMonitor*   health_monitor,
     bool                           health_monitor_enabled
-#endif
 )
 {
     std::optional<ImuSample> latest_nav_imu;
@@ -74,6 +72,11 @@ std::optional<ImuSample> process_imu_pipeline(
             ImuSample samp_out{};
             const bool ok = imu_pp.process(samp_in, samp_out);
             if (!ok) {
+                if (health_monitor_enabled && health_monitor != nullptr) {
+                    health_monitor->notify_imu_sample_issue(
+                        samp_in.mono_ns,
+                        estimator::SensorAuditIssue::kPreprocessRejected);
+                }
                 const auto sample_age_ms = compute_age_ms(now_mono_ns, samp_in.mono_ns);
                 write_timing_trace(timing_logger,
                                    io::TimingTraceKind::kImuRejected,
@@ -105,13 +108,9 @@ std::optional<ImuSample> process_imu_pipeline(
                 loop_state.last_consumed_imu_timing = sample_timing_from(samp_out);
                 loop_state.last_used_imu_ns = samp_out.mono_ns;
                 const bool imu_used = eskf.propagate_imu(samp_out);
-#if NAV_CORE_ENABLE_GRAPH
                 if (health_monitor_enabled && health_monitor != nullptr && imu_used) {
                     health_monitor->notify_imu_propagate(samp_out.mono_ns);
                 }
-#else
-                (void)imu_used;
-#endif
                 write_timing_trace(timing_logger,
                                    io::TimingTraceKind::kImuConsumed,
                                    loop_state.last_consumed_imu_timing,
@@ -122,6 +121,11 @@ std::optional<ImuSample> process_imu_pipeline(
             }
             loop_state.last_used_imu_ns = frame_in.mono_ns;
         } else if (!is_sample_fresh(now_mono_ns, frame_in.mono_ns, cfg.loop.max_imu_age_s)) {
+            if (health_monitor_enabled && health_monitor != nullptr) {
+                health_monitor->notify_imu_sample_issue(
+                    frame_in.mono_ns,
+                    estimator::SensorAuditIssue::kStale);
+            }
             const auto sample_age_ms = compute_age_ms(now_mono_ns, frame_in.mono_ns);
             if (event_logger != nullptr &&
                 loop_state.imu_reject_tracker.should_log(SensorRejectKind::kStale)) {
@@ -147,6 +151,11 @@ std::optional<ImuSample> process_imu_pipeline(
             }
         } else if (!should_consume_sample(frame_in.mono_ns, loop_state.last_used_imu_ns) &&
                    frame_in.mono_ns < loop_state.last_used_imu_ns) {
+            if (health_monitor_enabled && health_monitor != nullptr) {
+                health_monitor->notify_imu_sample_issue(
+                    frame_in.mono_ns,
+                    estimator::SensorAuditIssue::kOutOfOrder);
+            }
             const auto sample_age_ms = compute_age_ms(now_mono_ns, frame_in.mono_ns);
             if (event_logger != nullptr &&
                 loop_state.imu_reject_tracker.should_log(SensorRejectKind::kOutOfOrder)) {

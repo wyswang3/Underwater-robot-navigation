@@ -345,39 +345,47 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
         if (est_n) {
             auto& est_cfg = out_cfg.estimator;
 
-            // 4.1 健康监控总开关（新字段：enable_health）
+            // 4.1 健康监控总开关
             //
             // 说明：
-            //   - true  时，如果编译时开启了 NAV_CORE_ENABLE_GRAPH 并实现了 NavHealthMonitor，
-            //            则运行时可以根据健康状态做告警 / 降级；
-            //   - false 时，健康监控逻辑关闭，仅输出导航结果。
+            //   - true  时，运行时启用 NavHealthMonitor，对传感器链路与 ESKF
+            //            一致性做持续审查；
+            //   - false 时，仍发布 NavState，但不额外输出根因审查结果。
             load_scalar(est_n, "enable_health", est_cfg.enable_health);
 
             // 4.2 健康监控详细参数（NavHealthConfig）
-            //
-            // 当前 NavHealthConfig 已精简，不再包含旧版的
-            //   min_baseline_duration_s / min_baseline_samples /
-            //   max_rms_xy_ok_m / max_rms_xy_degraded_m /
-            //   max_rms_yaw_ok_rad / max_rms_yaw_degraded_rad /
-            //   max_drift_rate_ok_m_per_min / max_drift_rate_degraded_m_per_min
-            //
-            // 如需在 YAML 中配置新的参数，可以在这里按实际 struct 成员名补充。
             YAML::Node h_n = get_child(est_n, "health");
             if (h_n) {
-            // 由于当前 NavHealthConfig 中尚未定义新的可配置字段，
-            // 这里先预留接口。如果未来在 nav_health_monitor.hpp /
-            // 相关头文件中补充了成员，例如：
-            //
-            //   double max_xy_drift_m;
-            //   double max_yaw_drift_rad;
-            //
-            // 则可以按如下方式添加：
-            //
-            // load_scalar(h_n, "max_xy_drift_m",     hcfg.max_xy_drift_m);
-            // load_scalar(h_n, "max_yaw_drift_rad",  hcfg.max_yaw_drift_rad);
-            //
-            // 现在先不从 YAML 中加载任何数值，全部使用结构体默认值，
-            // 避免访问不存在的成员导致编译错误。
+                auto& hcfg = est_cfg.health;
+
+                load_scalar(h_n, "imu_timeout_ns", hcfg.imu_timeout_ns);
+                load_scalar(h_n, "dvl_timeout_ns", hcfg.dvl_timeout_ns);
+
+                load_scalar(h_n, "dvl_nis_ok_max", hcfg.dvl_nis_ok_max);
+                load_scalar(h_n, "dvl_nis_reject_max", hcfg.dvl_nis_reject_max);
+                load_scalar(h_n, "z_nis_ok_max", hcfg.z_nis_ok_max);
+                load_scalar(h_n, "z_nis_reject_max", hcfg.z_nis_reject_max);
+
+                load_scalar(h_n,
+                            "dvl_accept_ratio_degraded",
+                            hcfg.dvl_accept_ratio_degraded);
+                load_scalar(h_n,
+                            "dvl_accept_ratio_invalid",
+                            hcfg.dvl_accept_ratio_invalid);
+                load_scalar(h_n, "z_accept_ratio_degraded", hcfg.z_accept_ratio_degraded);
+                load_scalar(h_n, "z_accept_ratio_invalid", hcfg.z_accept_ratio_invalid);
+
+                load_scalar(h_n, "stats_window_duration_s", hcfg.stats_window_duration_s);
+
+                load_scalar(h_n,
+                            "enable_stop_suggestion",
+                            hcfg.enable_stop_suggestion);
+                load_scalar(h_n,
+                            "enable_reloc_suggestion",
+                            hcfg.enable_reloc_suggestion);
+                load_scalar(h_n,
+                            "enable_speed_reduce_suggestion",
+                            hcfg.enable_speed_reduce_suggestion);
             }
         } else {
             log_warn("section 'estimator' missing, estimator config will use defaults");

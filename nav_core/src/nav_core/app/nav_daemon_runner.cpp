@@ -13,6 +13,7 @@
 #include "nav_core/app/nav_daemon_config.hpp"
 #include "nav_core/app/nav_daemon_devices.hpp"
 #include "nav_core/app/nav_daemon_dvl_pipeline.hpp"
+#include "nav_core/app/nav_daemon_health_audit.hpp"
 #include "nav_core/app/nav_daemon_imu_pipeline.hpp"
 #include "nav_core/app/nav_daemon_logging.hpp"
 #include "nav_core/app/nav_daemon_loop_state.hpp"
@@ -25,10 +26,7 @@
 #include "nav_core/io/nav_state_publisher.hpp"
 #include "nav_core/preprocess/dvl_rt_preprocessor.hpp"
 #include "nav_core/preprocess/imu_rt_preprocessor.hpp"
-
-#if NAV_CORE_ENABLE_GRAPH
 #include "nav_core/estimator/nav_health_monitor.hpp"
-#endif
 
 namespace {
 
@@ -67,10 +65,11 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
     auto next_wakeup = std::chrono::steady_clock::now();
     app::NavLoopState loop_state = app::make_nav_loop_state(cfg);
 
-#if NAV_CORE_ENABLE_GRAPH
     estimator::NavHealthMonitor health_monitor(cfg.estimator.health);
     const bool health_monitor_enabled = cfg.estimator.enable_health;
-#endif
+    if (health_monitor_enabled) {
+        health_monitor.notify_eskf_reset(app::loop_monotonic_now_ns());
+    }
 
     while (!stop_flag.load(std::memory_order_relaxed)) {
         next_wakeup += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -87,6 +86,9 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                                     event_logger,
                                     now_mono_ns)) {
             app::handle_imu_connectivity_change(loop_state, imu_pp, eskf);
+            if (health_monitor_enabled) {
+                health_monitor.notify_eskf_reset(now_mono_ns);
+            }
         }
 
         if (cfg.dvl.enable &&
@@ -111,12 +113,9 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                 eskf,
                 timing_logger,
                 event_logger,
-                loop_state
-#if NAV_CORE_ENABLE_GRAPH
-                ,
+                loop_state,
                 &health_monitor,
                 health_monitor_enabled
-#endif
             );
 
         app::process_dvl_pipeline(
@@ -128,29 +127,26 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
             sample_logger,
             timing_logger,
             event_logger,
-            loop_state
-#if NAV_CORE_ENABLE_GRAPH
-            ,
+            loop_state,
             &health_monitor,
             health_monitor_enabled
-#endif
         );
 
-        const auto nav = app::build_nav_state_output(
+        auto nav = app::build_nav_state_output(
             cfg,
             latest_nav_imu,
-            snapshot.last_imu_ns,
-            snapshot.last_dvl_ns,
             now_mono_ns,
             loop_state,
             imu_pp,
             eskf
-#if NAV_CORE_ENABLE_GRAPH
-            ,
-            &health_monitor,
-            health_monitor_enabled
-#endif
         );
+        const auto health_report = app::evaluate_nav_health_audit(
+            now_mono_ns,
+            snapshot.last_imu_ns,
+            snapshot.last_dvl_ns,
+            &health_monitor,
+            health_monitor_enabled,
+            nav);
 
         app::publish_nav_state_output(
             nav,
@@ -159,6 +155,13 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
             nav_pub,
             nav_state_logger,
             timing_logger,
+            event_logger);
+        app::publish_nav_health_audit(
+            cfg,
+            now_mono_ns,
+            health_report,
+            nav,
+            loop_state,
             event_logger);
 
         app::maybe_print_nav_summary(nav, now_mono_ns, loop_state, print_interval_s);

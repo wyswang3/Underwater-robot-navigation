@@ -14,7 +14,8 @@
 //       * shared::msg::NavHealth（OK / DEGRADED / INVALID）；
 //       * status_flags 中与导航质量相关的 bit；
 //       * 工程化建议（是否建议停机 / 建议减速 / 建议重定位等）；
-//       * 一组可用于日志与 GCS 展示的数值指标。
+//       * 一组可用于日志与 GCS 展示的数值指标；
+//       * 一份“根因分类”，用于区分传感器输入、时序链路、ESKF 一致性和数值异常。
 //
 // 注意：
 //   - 本模块不负责“因子图平滑 / 离线基准解算”，仅针对在线 ESKF；
@@ -33,6 +34,33 @@
 #include "shared/msg/nav_state.hpp"  // NavHealth / NavStatusFlags / NavState
 
 namespace nav_core::estimator {
+
+/**
+ * @brief 审查器对“问题来源”的粗粒度根因分类。
+ *
+ * 用途：
+ *   - 给操作员一个稳定的、可读的结论，而不是只有一串 NIS/ratio 数值；
+ *   - 保持 shared NavState ABI 不变，把更细的根因信息留在 nav_daemon 日志层输出。
+ */
+enum class NavAuditRootCause : std::uint8_t {
+    kUnknown = 0,
+    kHealthy,
+    kSensorInput,
+    kTransportTiming,
+    kEstimatorConsistency,
+    kEstimatorNumeric,
+};
+
+/// @brief 审查器看到的“单样本处理结果”，用于统计窗口内的链路问题分布。
+enum class SensorAuditIssue : std::uint8_t {
+    kAccepted = 0,
+    kPreprocessRejected,
+    kStale,
+    kOutOfOrder,
+    kGatedRejected,
+};
+
+const char* nav_audit_root_cause_name(NavAuditRootCause cause) noexcept;
 
 // ============================ 1. 配置结构 ============================
 
@@ -122,6 +150,25 @@ struct NavHealthMetrics {
     double imu_age_s{0.0};   ///< IMU 距离上次有效观测的时间（秒）
     double dvl_age_s{0.0};   ///< DVL 距离上次有效观测的时间（秒）
 
+    // -------- 输入链路统计（帮助判断“数据本身有问题”还是“算法有问题”）--------
+    std::size_t imu_samples_accepted{0};
+    std::size_t imu_preprocess_rejected{0};
+    std::size_t imu_stale_rejected{0};
+    std::size_t imu_out_of_order_rejected{0};
+
+    std::size_t dvl_samples_accepted{0};
+    std::size_t dvl_preprocess_rejected{0};
+    std::size_t dvl_gated_rejected{0};
+    std::size_t dvl_stale_rejected{0};
+    std::size_t dvl_out_of_order_rejected{0};
+
+    bool estimator_numeric_invalid{false};
+
+    bool sensor_input_suspect{false};
+    bool transport_timing_suspect{false};
+    bool estimator_consistency_suspect{false};
+    bool estimator_numeric_suspect{false};
+
     // -------- DVL 水平速度更新统计（vE,vN）--------
     //
     // 统计窗口内的计数与 NIS 指标。
@@ -180,6 +227,7 @@ struct NavHealthDecision {
 struct NavHealthReport {
     NavHealthMetrics  metrics;   ///< 数值指标（可用于日志和 GCS 展示）
     NavHealthDecision decision;  ///< 健康等级与控制建议
+    NavAuditRootCause root_cause{NavAuditRootCause::kUnknown};
 };
 
 // ============================ 3. 健康监测主类 ============================
@@ -230,6 +278,17 @@ public:
     /// @brief 通知监视器“执行了一次 IMU 预测步”（可选，主要用于频率统计）。
     void notify_imu_propagate(MonoTimeNs now_mono_ns) noexcept;
 
+    /**
+     * @brief 通知监视器“一帧 IMU 样本在管线中的处理结果”。
+     *
+     * 说明：
+     *   - accepted 表示样本通过 freshness / preprocess 并进入 ESKF 主链；
+     *   - stale / out_of_order 反映时序链路问题；
+     *   - preprocess_rejected 反映传感器数据语义本身异常。
+     */
+    void notify_imu_sample_issue(MonoTimeNs now_mono_ns,
+                                 SensorAuditIssue issue) noexcept;
+
     // -------------------- ESKF 观测更新事件 --------------------
 
     /**
@@ -253,6 +312,18 @@ public:
     void notify_z_update(MonoTimeNs now_mono_ns,
                          double nis,
                          bool accepted) noexcept;
+
+    /**
+     * @brief 通知监视器“一帧 DVL 样本在管线中的处理结果”。
+     *
+     * 这里的统计发生在 DVL 预处理 / freshness / gating 级别，
+     * 用来和 ESKF update_dvl_* 的一致性统计分层。
+     */
+    void notify_dvl_sample_issue(MonoTimeNs now_mono_ns,
+                                 SensorAuditIssue issue) noexcept;
+
+    /// @brief 通知监视器“本轮看到了 ESKF 数值异常（NaN/Inf 等）”。
+    void notify_numeric_invalid(MonoTimeNs now_mono_ns) noexcept;
 
     // -------------------- 传感器心跳更新 --------------------
 
@@ -334,8 +405,25 @@ private:
     double      z_nis_max_{0.0};
     double      z_nis_last_{0.0};
 
+    // IMU / DVL 原始样本处理统计
+    std::size_t imu_samples_accepted_{0};
+    std::size_t imu_preprocess_rejected_{0};
+    std::size_t imu_stale_rejected_{0};
+    std::size_t imu_out_of_order_rejected_{0};
+
+    std::size_t dvl_samples_accepted_{0};
+    std::size_t dvl_preprocess_rejected_{0};
+    std::size_t dvl_gated_rejected_{0};
+    std::size_t dvl_stale_rejected_{0};
+    std::size_t dvl_out_of_order_rejected_{0};
+
+    bool      numeric_invalid_seen_{false};
+    MonoTimeNs numeric_invalid_last_ns_{0};
+
     // 统计窗口起点（mono ns）
     MonoTimeNs stats_window_begin_ns_{0};
+
+    void refresh_stats_window(MonoTimeNs now_mono_ns) noexcept;
 
     // 辅助：重置统计窗口
     void reset_stats_window(MonoTimeNs new_begin_ns) noexcept;

@@ -72,6 +72,10 @@ public:
                                     std::uint16_t fault_code);
     void log_nav_publish_state_changed(MonoTimeNs mono_ns,
                                        const shared::msg::NavState& nav);
+    void log_health_audit_changed(MonoTimeNs mono_ns,
+                                  const shared::msg::NavState& nav,
+                                  const char* root_cause,
+                                  const std::string& summary);
     void log_protocol_diagnostic(MonoTimeNs mono_ns,
                                  const char* device_label,
                                  const char* signature,

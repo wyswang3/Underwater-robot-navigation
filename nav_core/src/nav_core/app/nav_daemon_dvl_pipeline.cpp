@@ -83,11 +83,9 @@ void process_dvl_pipeline(
     nav_core::BinLogger*           sample_logger,
     nav_core::BinLogger*           timing_logger,
     NavEventCsvLogger*             event_logger,
-    NavLoopState&                  loop_state
-#if NAV_CORE_ENABLE_GRAPH
-    , estimator::NavHealthMonitor* health_monitor,
+    NavLoopState&                  loop_state,
+    estimator::NavHealthMonitor*   health_monitor,
     bool                           health_monitor_enabled
-#endif
 )
 {
     if (!snapshot.dvl_raw.has_value()) {
@@ -126,8 +124,10 @@ void process_dvl_pipeline(
                     eskf.update_dvl_z(dvl_sample, &diag_z);
                 }
 
-#if NAV_CORE_ENABLE_GRAPH
                 if (health_monitor_enabled && health_monitor != nullptr) {
+                    health_monitor->notify_dvl_sample_issue(
+                        dvl_sample.mono_ns,
+                        estimator::SensorAuditIssue::kAccepted);
                     if (dvl_sample.has_enu_vel) {
                         health_monitor->notify_dvl_xy_update(
                             dvl_sample.mono_ns, diag_xy.nis, diag_xy.ok);
@@ -138,7 +138,6 @@ void process_dvl_pipeline(
                             dvl_sample.mono_ns, diag_z.nis, diag_z.ok);
                     }
                 }
-#endif
 
                 if (sample_logger != nullptr) {
                     sample_logger->write(&dvl_sample, sizeof(dvl_sample));
@@ -152,6 +151,12 @@ void process_dvl_pipeline(
                                    io::kTimingTraceFresh | io::kTimingTraceAccepted);
                 loop_state.dvl_reject_tracker.clear();
             } else {
+                if (health_monitor_enabled && health_monitor != nullptr) {
+                    health_monitor->notify_dvl_sample_issue(
+                        raw_in.mono_ns,
+                        ok ? estimator::SensorAuditIssue::kGatedRejected
+                           : estimator::SensorAuditIssue::kPreprocessRejected);
+                }
                 const auto sample_age_ms = compute_age_ms(now_mono_ns, raw_in.mono_ns);
                 const auto reject_kind = ok
                     ? SensorRejectKind::kGatedRejected
@@ -179,6 +184,11 @@ void process_dvl_pipeline(
         }
 
         if (raw_snapshot.mono_ns < loop_state.last_used_dvl_ns) {
+            if (health_monitor_enabled && health_monitor != nullptr) {
+                health_monitor->notify_dvl_sample_issue(
+                    raw_snapshot.mono_ns,
+                    estimator::SensorAuditIssue::kOutOfOrder);
+            }
             const auto sample_age_ms = compute_age_ms(now_mono_ns, raw_snapshot.mono_ns);
             if (event_logger != nullptr &&
                 loop_state.dvl_reject_tracker.should_log(SensorRejectKind::kOutOfOrder)) {
@@ -207,6 +217,11 @@ void process_dvl_pipeline(
         return;
     }
 
+    if (health_monitor_enabled && health_monitor != nullptr) {
+        health_monitor->notify_dvl_sample_issue(
+            raw_snapshot.mono_ns,
+            estimator::SensorAuditIssue::kStale);
+    }
     const auto sample_age_ms = compute_age_ms(now_mono_ns, raw_snapshot.mono_ns);
     if (event_logger != nullptr &&
         loop_state.dvl_reject_tracker.should_log(SensorRejectKind::kStale)) {

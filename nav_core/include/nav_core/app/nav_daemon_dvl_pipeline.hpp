@@ -20,12 +20,9 @@
 #include "nav_core/app/nav_daemon_logging.hpp"
 #include "nav_core/app/nav_daemon_loop_state.hpp"
 #include "nav_core/estimator/eskf.hpp"
+#include "nav_core/estimator/nav_health_monitor.hpp"
 #include "nav_core/io/bin_logger.hpp"
 #include "nav_core/preprocess/dvl_rt_preprocessor.hpp"
-
-#if NAV_CORE_ENABLE_GRAPH
-#include "nav_core/estimator/nav_health_monitor.hpp"
-#endif
 
 namespace nav_core::app {
 
@@ -38,11 +35,9 @@ void process_dvl_pipeline(
     nav_core::BinLogger*           sample_logger,
     nav_core::BinLogger*           timing_logger,
     NavEventCsvLogger*             event_logger,
-    NavLoopState&                  loop_state
-#if NAV_CORE_ENABLE_GRAPH
-    , estimator::NavHealthMonitor* health_monitor = nullptr,
+    NavLoopState&                  loop_state,
+    estimator::NavHealthMonitor*   health_monitor = nullptr,
     bool                           health_monitor_enabled = false
-#endif
 );
 
 } // namespace nav_core::app

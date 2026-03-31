@@ -14,16 +14,10 @@ namespace io = nav_core::io;
 shared::msg::NavState build_nav_state_output(
     const NavDaemonConfig&         cfg,
     const std::optional<ImuSample>& latest_nav_imu,
-    MonoTimeNs                     last_imu_ns,
-    MonoTimeNs                     last_dvl_ns,
     MonoTimeNs                     now_mono_ns,
     const NavLoopState&            loop_state,
     preprocess::ImuRtPreprocessor& imu_pp,
     estimator::EskfFilter&         eskf
-#if NAV_CORE_ENABLE_GRAPH
-    , estimator::NavHealthMonitor* health_monitor,
-    bool                           health_monitor_enabled
-#endif
 )
 {
     shared::msg::NavState nav{};
@@ -51,16 +45,6 @@ shared::msg::NavState build_nav_state_output(
         ? loop_state.dvl_runtime.binder.status().state
         : DeviceConnectionState::DISCONNECTED;
     apply_nav_publish_semantics(publish_ctx, eskf_state_is_finite(eskf), nav);
-
-#if NAV_CORE_ENABLE_GRAPH
-    if (health_monitor_enabled && health_monitor != nullptr) {
-        health_monitor->update_sensor_heartbeat(now_mono_ns, last_imu_ns, last_dvl_ns);
-        health_monitor->update_online_state(nav);
-    }
-#else
-    (void)last_imu_ns;
-    (void)last_dvl_ns;
-#endif
 
     return nav;
 }

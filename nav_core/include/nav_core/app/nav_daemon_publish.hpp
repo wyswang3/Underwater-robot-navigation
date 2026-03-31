@@ -14,7 +14,8 @@
 //
 // 边界：
 //   - 本模块不做传感器预处理和设备重连；
-//   - 假定传感器消费结果已经由 nav_daemon_sensor_pipeline 给出。
+//   - 假定传感器消费结果已经由 IMU/DVL 独立处理模块给出；
+//   - 健康审查汇总单独放在 nav_daemon_health_audit 模块，不在这里内联。
 //
 #pragma once
 
@@ -29,25 +30,15 @@
 #include "nav_core/io/nav_state_publisher.hpp"
 #include "nav_core/preprocess/imu_rt_preprocessor.hpp"
 
-#if NAV_CORE_ENABLE_GRAPH
-#include "nav_core/estimator/nav_health_monitor.hpp"
-#endif
-
 namespace nav_core::app {
 
 shared::msg::NavState build_nav_state_output(
     const NavDaemonConfig&         cfg,
     const std::optional<ImuSample>& latest_nav_imu,
-    MonoTimeNs                     last_imu_ns,
-    MonoTimeNs                     last_dvl_ns,
     MonoTimeNs                     now_mono_ns,
     const NavLoopState&            loop_state,
     preprocess::ImuRtPreprocessor& imu_pp,
     estimator::EskfFilter&         eskf
-#if NAV_CORE_ENABLE_GRAPH
-    , estimator::NavHealthMonitor* health_monitor = nullptr,
-    bool                           health_monitor_enabled = false
-#endif
 );
 
 void publish_nav_state_output(const shared::msg::NavState& nav,

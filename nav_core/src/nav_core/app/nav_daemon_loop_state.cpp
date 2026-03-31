@@ -76,6 +76,15 @@ void RejectEventTracker::clear() noexcept
     last_kind = SensorRejectKind::kNone;
 }
 
+bool NavHealthAuditSnapshot::operator==(const NavHealthAuditSnapshot& rhs) const noexcept
+{
+    return health == rhs.health &&
+           root_cause == rhs.root_cause &&
+           recommend_stop_motion == rhs.recommend_stop_motion &&
+           recommend_reduce_speed == rhs.recommend_reduce_speed &&
+           recommend_relocalize == rhs.recommend_relocalize;
+}
+
 NavLoopState::NavLoopState(ManagedDeviceRuntime imu_runtime_in,
                            ManagedDeviceRuntime dvl_runtime_in)
     : imu_runtime(std::move(imu_runtime_in)),
