@@ -1,3 +1,17 @@
+// nav_core/include/nav_core/app/device_binding.hpp
+//
+// @file  device_binding.hpp
+// @brief 串口设备扫描、身份匹配与绑定状态机接口。
+//
+// 角色：
+//   - 把“扫描系统里有哪些串口”“哪个串口应当绑定给某个设备”“当前连接状态是什么”统一抽象出来；
+//   - 为 IMU/DVL 等驱动提供一个共同的 reconnect / mismatch / backoff 状态机；
+//   - 允许通过可注入选择器，把“按协议行为选设备”的逻辑外挂到 binder 上。
+//
+// 边界：
+//   - 本模块只负责选择和状态流转，不直接打开驱动；
+//   - 真正的 driver start/stop 由 nav_daemon_devices 负责。
+//
 #pragma once
 
 #include <cstdint>
@@ -56,10 +70,18 @@ struct DeviceBindingStatus {
 
 std::vector<SerialPortIdentity> scan_serial_port_identities();
 
+/// 基于 binding 配置判断一个扫描到的串口是否满足身份约束。
 bool matches_binding_identity(const SerialPortIdentity&          device,
                               const drivers::SerialBindingConfig& cfg,
                               const std::string&                  preferred_path) noexcept;
 
+/**
+ * @brief 一次 probe 结束后返回给 DeviceBinder 的决策结果。
+ *
+ * 设计目的：
+ *  - 让“候选口里到底选谁”可以由外部模块决定；
+ *  - 但最终仍统一回到 DeviceBinder 的状态机语义。
+ */
 struct DeviceProbeDecision {
     DeviceConnectionState            state{DeviceConnectionState::DISCONNECTED};
     std::optional<SerialPortIdentity> selected_device{};
@@ -69,6 +91,7 @@ struct DeviceProbeDecision {
 class DeviceBinder {
 public:
     using DiscoverFn = std::function<std::vector<SerialPortIdentity>()>;
+    /// 可插拔的“候选设备选择器”，例如 IMU 的主动 Modbus 探测逻辑。
     using SelectFn = std::function<DeviceProbeDecision(const std::vector<SerialPortIdentity>&,
                                                        const drivers::SerialBindingConfig&,
                                                        const std::string&)>;

@@ -1,3 +1,17 @@
+// nav_core/include/nav_core/app/nav_daemon_logging.hpp
+//
+// @file  nav_daemon_logging.hpp
+// @brief nav_daemon 的低频事件日志、二进制日志和 NavState 发布初始化接口。
+//
+// 角色：
+//   - 封装 nav_events.csv 这类“面向现场排障”的低频结构化日志；
+//   - 统一 BinLogger / NavStatePublisher 的初始化与写包入口；
+//   - 把日志和发布相关逻辑从主循环中拆出，降低 nav_daemon_runner.cpp 的体积和耦合度。
+//
+// 边界：
+//   - 本模块不维护设备连接状态机；
+//   - 不负责协议解析，只负责把外部传入的诊断结果结构化落盘。
+//
 #pragma once
 
 #include <cstdint>
@@ -16,6 +30,13 @@
 
 namespace nav_core::app {
 
+/**
+ * @brief NavState 低频状态快照。
+ *
+ * 用途：
+ *  - 仅用于 `nav_events.csv` 去重和状态变化记录；
+ *  - 避免每个循环都重复写同一类状态事件。
+ */
 struct NavPublishSnapshot {
     bool valid{false};
     bool stale{false};
@@ -26,6 +47,13 @@ struct NavPublishSnapshot {
     bool operator==(const NavPublishSnapshot& rhs) const noexcept;
 };
 
+/**
+ * @brief nav_events.csv 写入器。
+ *
+ * 目标：
+ *  - 记录设备绑定变化、串口打开失败、协议诊断、发布状态变化等低频事件；
+ *  - 让现场排障优先看结构化摘要，而不是只依赖 stderr 滚屏。
+ */
 class NavEventCsvLogger {
 public:
     bool init(const NavDaemonConfig& cfg);
@@ -70,13 +98,16 @@ private:
     std::string   run_id_{};
 };
 
+/// 根据配置初始化共享内存 NavState 发布器。
 bool init_nav_state_publisher(const NavDaemonConfig& cfg,
                               io::NavStatePublisher& pub);
 
+/// 用统一规则初始化某个命名二进制日志文件。
 bool init_named_bin_logger(const NavDaemonConfig& cfg,
                            const char* filename,
                            nav_core::BinLogger& logger);
 
+/// 向 timing binlog 写一条标准化 timing trace。
 void write_timing_trace(nav_core::BinLogger* logger,
                         io::TimingTraceKind kind,
                         const SampleTiming& timing,
