@@ -72,6 +72,7 @@ set(NAV_CORE_SOURCES
 
     # ---- drivers ----
     src/nav_core/drivers/imu_serial_diagnostics.cpp
+    src/nav_core/drivers/imu_modbus_probe.cpp
     src/nav_core/drivers/serial_port_utils.cpp
     src/nav_core/drivers/imu_driver_wit.cpp
     src/nav_core/drivers/dvl_protocol.cpp
@@ -198,10 +199,15 @@ add_executable(uwnav_nav_replay
 )
 target_link_libraries(uwnav_nav_replay PRIVATE nav_core)
 
+add_executable(uwnav_imu_modbus_probe
+    src/nav_core/app/tools/imu_modbus_probe.cpp
+)
+target_link_libraries(uwnav_imu_modbus_probe PRIVATE nav_core)
+
 # 统一把可执行文件放到 build/bin 目录，方便在板子上运行：
 #   ./bin/uwnav_navd
 #   ./bin/uwnav_dvl_selftest
-foreach(tgt uwnav_navd uwnav_dvl_selftest uwnav_nav_replay)
+foreach(tgt uwnav_navd uwnav_dvl_selftest uwnav_nav_replay uwnav_imu_modbus_probe)
     set_target_properties(${tgt} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
@@ -245,6 +251,12 @@ if(NAV_CORE_BUILD_TESTS)
     )
     target_link_libraries(test_imu_port_selector PRIVATE nav_core)
     add_test(NAME nav_core_test_imu_port_selector COMMAND test_imu_port_selector)
+
+    add_executable(test_imu_modbus_probe
+        tests/test_imu_modbus_probe.cpp
+    )
+    target_link_libraries(test_imu_modbus_probe PRIVATE nav_core)
+    add_test(NAME nav_core_test_imu_modbus_probe COMMAND test_imu_modbus_probe)
 
     add_executable(test_nav_daemon_config
         tests/test_nav_daemon_config.cpp

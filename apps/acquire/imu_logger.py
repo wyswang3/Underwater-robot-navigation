@@ -216,7 +216,7 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="IMU logger for long-running navigation data acquisition (timebase unified)"
     )
-    ap.add_argument("--port", default="/dev/ttyUSB0", help="IMU 串口 (默认 /dev/ttyUSB0)")
+    ap.add_argument("--port", default="/dev/ttyUSB1", help="IMU 串口 (默认 /dev/ttyUSB1)")
     ap.add_argument("--baud", type=int, default=230400, help="波特率 (默认 230400)")
     ap.add_argument("--addr", type=lambda x: int(x, 0), default=0x50, help="Modbus 地址（hex，如 0x50）")
 

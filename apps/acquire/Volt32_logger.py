@@ -217,8 +217,8 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Volt32 logger (multi-channel voltage/current board, timebase unified)"
     )
-    ap.add_argument("--port", default="/dev/ttyUSB1",
-                    help="串口设备，例如 /dev/ttyUSB1")
+    ap.add_argument("--port", default="/dev/ttyUSB0",
+                    help="串口设备，例如 /dev/ttyUSB0")
     ap.add_argument("--baud", type=int, default=115200,
                     help="波特率，默认 115200")
     ap.add_argument("--channels", type=int, default=16,

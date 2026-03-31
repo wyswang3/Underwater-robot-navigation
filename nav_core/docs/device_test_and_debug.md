@@ -334,6 +334,30 @@ sudo hexdump -C /dev/ttyUSB0 | head
 2. 再看 `summary` 里的计数和比率，确认是哪一条输入流在持续拉低导航质量。
 3. 最后结合 `nav_publish_state_changed`、`serial_protocol_diagnostic` 和原始 binlog 做细查。
 
+如果当前已经确认 IMU 在某个串口上，但还想直接看“它到底回了什么原始字节”，可以使用新增的主动探测工具：
+
+```bash
+cd /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core
+./build/bin/uwnav_imu_modbus_probe \
+  --port /dev/ttyUSB1 \
+  --baud 230400 \
+  --addr 0x50 \
+  --attempts 3 \
+  --reply-timeout-ms 120
+```
+
+工具会输出：
+
+* 发送出去的 Modbus 请求十六进制
+* 收到的原始返回 `rx_dump`
+* 当前协议分类结果：`imu_modbus_reply` / `volt32_ascii` / `other_ascii` / `other_binary`
+
+如果需要把原始返回单独保存，追加：
+
+```bash
+--output /tmp/imu_usb1_probe.bin
+```
+
 ---
 
 ## 10.2 DVL 无数据或 PD6 解码失败

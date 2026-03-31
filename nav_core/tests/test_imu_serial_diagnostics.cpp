@@ -51,8 +51,8 @@ std::vector<std::uint8_t> make_imu_reply_frame()
         frame.push_back(static_cast<std::uint8_t>(i + 1u));
     }
     const auto crc = modbus_crc16(frame.data(), frame.size());
-    frame.push_back(static_cast<std::uint8_t>(crc & 0xffu));
     frame.push_back(static_cast<std::uint8_t>((crc >> 8u) & 0xffu));
+    frame.push_back(static_cast<std::uint8_t>(crc & 0xffu));
     return frame;
 }
 

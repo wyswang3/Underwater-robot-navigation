@@ -73,6 +73,8 @@ IMU / DVL serial input
   - DVL 自检工具
 - `uwnav_nav_replay`
   - 最小 NavState replay 注入器
+- `uwnav_imu_modbus_probe`
+  - 对指定串口主动发送 WIT Modbus 请求，并打印原始返回
 
 ## 5. 构建方式
 
@@ -135,6 +137,8 @@ cmake --build build -j4
   - 记录真实串口与 by-id 节点变化
 - `parse_nav_timing.py`
   - 解析 `nav_timing.bin`
+- `uwnav_imu_modbus_probe`
+  - 直接对 IMU 候选串口发 `0x50 0x03 0x0034 0x000f` 读请求，输出 TX/RX 十六进制
 
 这里的重点不是“做大平台”，而是把最小复盘闭环做实。
 

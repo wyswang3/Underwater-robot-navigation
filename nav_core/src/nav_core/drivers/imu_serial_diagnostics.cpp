@@ -76,8 +76,8 @@ ModbusReplyScanResult scan_imu_modbus_reply_frames(const std::vector<std::uint8_
 
         const auto* frame_data = sample.data() + i;
         const auto  crc_expect = static_cast<std::uint16_t>(
-            frame_data[kReplyFrameLen - 2] |
-            (static_cast<std::uint16_t>(frame_data[kReplyFrameLen - 1]) << 8u));
+            (static_cast<std::uint16_t>(frame_data[kReplyFrameLen - 2]) << 8u) |
+            frame_data[kReplyFrameLen - 1]);
         const auto crc_actual = modbus_crc16(frame_data, kReplyFrameLen - 2u);
         if (crc_actual != crc_expect) {
             continue;

@@ -1,12 +1,10 @@
 #include "nav_core/app/imu_port_selector.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cerrno>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -15,14 +13,13 @@
 #include <sys/select.h>
 #include <unistd.h>
 
+#include "nav_core/drivers/imu_modbus_probe.hpp"
 #include "nav_core/drivers/imu_serial_diagnostics.hpp"
 #include "nav_core/drivers/serial_port_utils.hpp"
 
 namespace nav_core::app {
 namespace {
 
-constexpr std::uint16_t kImuProbeStartReg  = 0x0034u;
-constexpr std::uint16_t kImuProbeRegCount  = 15u;
 constexpr int           kSelectSliceMs     = 20;
 
 std::string lowercase_copy(std::string value)
@@ -92,40 +89,6 @@ std::vector<SerialPortIdentity> rank_devices(const std::vector<SerialPortIdentit
         return lhs.path < rhs.path;
     });
     return ordered;
-}
-
-std::uint16_t modbus_crc16(const std::uint8_t* data, std::size_t len) noexcept
-{
-    std::uint16_t crc = 0xffffu;
-    for (std::size_t i = 0; i < len; ++i) {
-        crc ^= data[i];
-        for (int bit = 0; bit < 8; ++bit) {
-            if ((crc & 0x0001u) != 0u) {
-                crc = static_cast<std::uint16_t>((crc >> 1u) ^ 0xa001u);
-            } else {
-                crc = static_cast<std::uint16_t>(crc >> 1u);
-            }
-        }
-    }
-    return crc;
-}
-
-std::array<std::uint8_t, 8> build_probe_request(std::uint8_t slave_addr)
-{
-    std::array<std::uint8_t, 8> out{
-        slave_addr,
-        0x03u,
-        static_cast<std::uint8_t>((kImuProbeStartReg >> 8u) & 0xffu),
-        static_cast<std::uint8_t>(kImuProbeStartReg & 0xffu),
-        static_cast<std::uint8_t>((kImuProbeRegCount >> 8u) & 0xffu),
-        static_cast<std::uint8_t>(kImuProbeRegCount & 0xffu),
-        0u,
-        0u,
-    };
-    const std::uint16_t crc = modbus_crc16(out.data(), out.size() - 2u);
-    out[6] = static_cast<std::uint8_t>((crc >> 8u) & 0xffu);
-    out[7] = static_cast<std::uint8_t>(crc & 0xffu);
-    return out;
 }
 
 void capture_serial_window(int fd,
@@ -214,39 +177,20 @@ drivers::ImuSerialDebugSnapshot active_probe_candidate(const SerialPortIdentity&
                                                        const drivers::ImuConfig& imu_cfg,
                                                        ImuPortSelectionOptions   options)
 {
-    std::string error;
-    const int fd = drivers::open_serial_port_raw(device.path,
-                                                 imu_cfg.baud,
-                                                 /*read_timeout_ds=*/1,
-                                                 &error);
-    if (fd < 0) {
-        return make_open_error_snapshot(error);
+    drivers::ImuModbusProbeOptions probe_options{};
+    probe_options.baud = imu_cfg.baud;
+    probe_options.reply_timeout_ms = options.active_reply_timeout_ms;
+    probe_options.attempts = options.active_probe_attempts;
+    probe_options.max_capture_bytes = 512u;
+
+    const auto probe = drivers::run_imu_modbus_probe(
+        device.path,
+        drivers::ImuModbusProbeRequest{imu_cfg.slave_addr, 0x0034u, 15u},
+        probe_options);
+    if (!probe.error.empty()) {
+        return make_open_error_snapshot(probe.error);
     }
-
-    drivers::ImuSerialDiagnostics diag;
-    diag.reset(imu_cfg.slave_addr);
-    const auto request = build_probe_request(imu_cfg.slave_addr);
-
-    for (int attempt = 0; attempt < std::max(1, options.active_probe_attempts); ++attempt) {
-        const ssize_t wn = ::write(fd, request.data(), request.size());
-        if (wn != static_cast<ssize_t>(request.size())) {
-            ::close(fd);
-            return make_open_error_snapshot(
-                std::string("imu active probe write failed: ") + std::strerror(errno));
-        }
-
-        capture_serial_window(fd, options.active_reply_timeout_ms, diag);
-        const auto snapshot = diag.snapshot();
-        if (snapshot.peer_kind == drivers::ImuSerialPeerKind::kImuModbusReply) {
-            ::close(fd);
-            return snapshot;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    ::close(fd);
-    return diag.snapshot();
+    return probe.snapshot;
 }
 
 std::string shorten_preview(const std::string& text, std::size_t max_len = 48u)
@@ -257,20 +201,30 @@ std::string shorten_preview(const std::string& text, std::size_t max_len = 48u)
     return text.substr(0, max_len) + "...";
 }
 
+void append_probe_preview(std::ostringstream& oss,
+                          const drivers::ImuSerialDebugSnapshot& snapshot)
+{
+    oss << "(rx=" << snapshot.total_rx_bytes;
+    if (!snapshot.preview_text.empty()) {
+        oss << ",text=" << shorten_preview(snapshot.preview_text);
+    } else if (!snapshot.preview_hex.empty()) {
+        oss << ",hex=" << shorten_preview(snapshot.preview_hex, 96u);
+    } else if (!snapshot.summary.empty()) {
+        oss << ",summary=" << shorten_preview(snapshot.summary, 96u);
+    }
+    oss << ")";
+}
+
 std::string summarize_probe(const std::string& path,
                             const drivers::ImuSerialDebugSnapshot& passive,
                             const drivers::ImuSerialDebugSnapshot& active)
 {
     std::ostringstream oss;
     oss << path << " passive=" << drivers::imu_serial_peer_kind_name(passive.peer_kind);
-    if (!passive.preview_text.empty()) {
-        oss << "(" << shorten_preview(passive.preview_text) << ")";
-    }
+    append_probe_preview(oss, passive);
     if (active.total_rx_bytes > 0 || !active.summary.empty()) {
         oss << " active=" << drivers::imu_serial_peer_kind_name(active.peer_kind);
-        if (!active.preview_text.empty()) {
-            oss << "(" << shorten_preview(active.preview_text) << ")";
-        }
+        append_probe_preview(oss, active);
     }
     return oss.str();
 }

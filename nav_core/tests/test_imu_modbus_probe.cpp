@@ -4,14 +4,14 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <iostream>
 #include <thread>
 #include <vector>
 
 #include <unistd.h>
 
-#include "nav_core/app/imu_port_selector.hpp"
+#include "nav_core/drivers/imu_modbus_probe.hpp"
+#include "nav_core/drivers/imu_serial_diagnostics.hpp"
 #include "test_pty_utils.hpp"
 
 namespace {
@@ -36,11 +36,10 @@ namespace {
         }                                                                                         \
     } while (0)
 
-using nav_core::app::DeviceConnectionState;
-using nav_core::app::ImuPortSelectionOptions;
-using nav_core::app::SerialPortIdentity;
-using nav_core::app::select_imu_device_port;
-using nav_core::drivers::ImuConfig;
+using nav_core::drivers::ImuModbusProbeOptions;
+using nav_core::drivers::ImuModbusProbeRequest;
+using nav_core::drivers::ImuSerialPeerKind;
+using nav_core::drivers::run_imu_modbus_probe;
 using test_support::PtyPeer;
 
 std::uint16_t modbus_crc16(const std::uint8_t* data, std::size_t len) noexcept
@@ -79,48 +78,6 @@ std::vector<std::uint8_t> build_imu_request()
     out[7] = static_cast<std::uint8_t>(crc & 0xffu);
     return out;
 }
-
-SerialPortIdentity make_identity(const std::string& path, const std::string& serial)
-{
-    SerialPortIdentity out{};
-    out.path = path;
-    out.canonical_path = path;
-    out.vendor_id = "10c4";
-    out.product_id = "ea60";
-    out.serial = serial;
-    return out;
-}
-
-class Volt32Emitter {
-public:
-    explicit Volt32Emitter(const PtyPeer& peer) : peer_(peer) {}
-
-    void start()
-    {
-        stop_.store(false);
-        th_ = std::thread([this] {
-            while (!stop_.load()) {
-                peer_.write_line("CH0:12.41 CH1:0.38\r\n");
-                std::this_thread::sleep_for(std::chrono::milliseconds(30));
-            }
-        });
-    }
-
-    void stop()
-    {
-        stop_.store(true);
-        if (th_.joinable()) {
-            th_.join();
-        }
-    }
-
-    ~Volt32Emitter() { stop(); }
-
-private:
-    const PtyPeer&      peer_;
-    std::atomic<bool>   stop_{false};
-    std::thread         th_{};
-};
 
 class ImuProbeResponder {
 public:
@@ -178,83 +135,40 @@ private:
         }
     }
 
-    const PtyPeer&              peer_;
-    std::vector<std::uint8_t>   request_{};
-    std::vector<std::uint8_t>   reply_{};
-    std::atomic<bool>           stop_{false};
-    std::thread                 th_{};
+    const PtyPeer&            peer_;
+    std::vector<std::uint8_t> request_{};
+    std::vector<std::uint8_t> reply_{};
+    std::atomic<bool>         stop_{false};
+    std::thread               th_{};
 };
 
-int test_selector_rejects_volt32_and_selects_polled_imu()
+int test_probe_returns_modbus_reply_and_raw_capture()
 {
-    auto volt = PtyPeer::create();
     auto imu = PtyPeer::create();
-    TEST_CHECK(volt.has_value());
     TEST_CHECK(imu.has_value());
 
-    Volt32Emitter emitter(*volt);
     ImuProbeResponder responder(*imu);
-    emitter.start();
     responder.start();
 
-    ImuConfig imu_cfg{};
-    imu_cfg.baud = 230400;
-    imu_cfg.slave_addr = 0x50;
+    ImuModbusProbeOptions options{};
+    options.baud = 230400;
+    options.reply_timeout_ms = 60;
+    options.attempts = 2;
+    options.max_capture_bytes = 128u;
 
-    ImuPortSelectionOptions options{};
-    options.passive_observe_ms = 90;
-    options.active_reply_timeout_ms = 60;
-    options.active_probe_attempts = 2;
+    const auto result = run_imu_modbus_probe(imu->slave_path,
+                                             ImuModbusProbeRequest{0x50u, 0x0034u, 15u},
+                                             options);
 
-    const auto decision = select_imu_device_port(
-        std::vector<SerialPortIdentity>{
-            make_identity(volt->slave_path, "volt32"),
-            make_identity(imu->slave_path, "imu"),
-        },
-        imu_cfg,
-        {},
-        "",
-        options);
-
-    emitter.stop();
     responder.stop();
 
-    TEST_EQ(decision.state, DeviceConnectionState::CONNECTING);
-    TEST_CHECK(decision.selected_device.has_value());
-    TEST_EQ(decision.selected_device->path, imu->slave_path);
-    TEST_CHECK(decision.reason.find("active Modbus probe") != std::string::npos);
-    return 0;
-}
-
-int test_selector_reports_volt32_mismatch_when_only_voltage_port_exists()
-{
-    auto volt = PtyPeer::create();
-    TEST_CHECK(volt.has_value());
-
-    Volt32Emitter emitter(*volt);
-    emitter.start();
-
-    ImuConfig imu_cfg{};
-    imu_cfg.baud = 230400;
-    imu_cfg.slave_addr = 0x50;
-
-    ImuPortSelectionOptions options{};
-    options.passive_observe_ms = 90;
-    options.active_reply_timeout_ms = 40;
-    options.active_probe_attempts = 1;
-
-    const auto decision = select_imu_device_port(
-        std::vector<SerialPortIdentity>{make_identity(volt->slave_path, "volt32")},
-        imu_cfg,
-        {},
-        "",
-        options);
-
-    emitter.stop();
-
-    TEST_EQ(decision.state, DeviceConnectionState::MISMATCH);
-    TEST_CHECK(!decision.selected_device.has_value());
-    TEST_CHECK(decision.reason.find("volt32_ascii") != std::string::npos);
+    TEST_CHECK(result.error.empty());
+    TEST_EQ(result.attempts_made, 1);
+    TEST_EQ(result.snapshot.peer_kind, ImuSerialPeerKind::kImuModbusReply);
+    TEST_CHECK(result.snapshot.preview_hex.find("50 03 1e") != std::string::npos);
+    TEST_CHECK(!result.captured_rx.empty());
+    TEST_EQ(result.request[0], 0x50u);
+    TEST_EQ(result.request[1], 0x03u);
     return 0;
 }
 
@@ -262,15 +176,11 @@ int test_selector_reports_volt32_mismatch_when_only_voltage_port_exists()
 
 int main()
 {
-    int rc = test_selector_rejects_volt32_and_selects_polled_imu();
-    if (rc != 0) {
-        return rc;
-    }
-    rc = test_selector_reports_volt32_mismatch_when_only_voltage_port_exists();
+    const int rc = test_probe_returns_modbus_reply_and_raw_capture();
     if (rc != 0) {
         return rc;
     }
 
-    std::cout << "[test_imu_port_selector] all tests passed.\n";
+    std::cout << "[test_imu_modbus_probe] all tests passed.\n";
     return 0;
 }
