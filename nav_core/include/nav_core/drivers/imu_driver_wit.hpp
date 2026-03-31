@@ -42,6 +42,7 @@
 #include <thread>
 
 #include "nav_core/drivers/serial_binding.hpp"
+#include "nav_core/drivers/imu_serial_diagnostics.hpp"
 #include "nav_core/core/types.hpp"  // ImuFrame / ImuRawRegs / ImuFilterConfig
 
 namespace nav_core::drivers {
@@ -130,6 +131,12 @@ public:
     ///     判定 IMU 是否“近期在线”。
     MonoTimeNs lastFrameMonoNs() const noexcept;
 
+    /// @brief 返回当前串口捕获到的诊断快照。
+    ///
+    /// 仅用于“串口已打开但 IMU 没有回调”的现场排障，
+    /// 不参与导航解算语义。
+    ImuSerialDebugSnapshot serialDebugSnapshot() const;
+
 private:
     // ==================== 串口管理 ====================
 
@@ -197,6 +204,9 @@ private:
 
     /// @brief 最近一帧 ImuFrame 的单调时间戳（ns），未收到则为 0。
     std::atomic<MonoTimeNs> last_frame_mono_ns_{0};
+
+    // 记录连接窗口内的原始串口特征，便于把“错口/错协议/错波特率”落成可读诊断。
+    ImuSerialDiagnostics serial_diag_{};
 };
 
 } // namespace nav_core::drivers

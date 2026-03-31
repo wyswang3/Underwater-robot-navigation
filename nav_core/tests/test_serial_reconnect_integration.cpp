@@ -1,20 +1,16 @@
 #include <chrono>
-#include <cerrno>
 #include <cstdint>
-#include <cstring>
-#include <fcntl.h>
 #include <iostream>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
-#include <unistd.h>
 #include <vector>
 
 #include "nav_core/app/device_binding.hpp"
 #include "nav_core/app/nav_runtime_status.hpp"
 #include "nav_core/drivers/dvl_driver.hpp"
 #include "nav_core/drivers/imu_driver_wit.hpp"
+#include "test_pty_utils.hpp"
 
 namespace {
 
@@ -47,138 +43,8 @@ using nav_core::drivers::DvlDriver;
 using nav_core::drivers::ImuConfig;
 using nav_core::drivers::ImuDriverWit;
 using nav_core::drivers::SerialBindingConfig;
-
-struct PtyPeer final {
-    int         master_fd{-1};
-    std::string slave_path{};
-
-    PtyPeer() = default;
-    ~PtyPeer() { close(); }
-
-    PtyPeer(const PtyPeer&) = delete;
-    PtyPeer& operator=(const PtyPeer&) = delete;
-
-    PtyPeer(PtyPeer&& other) noexcept
-        : master_fd(other.master_fd), slave_path(std::move(other.slave_path))
-    {
-        other.master_fd = -1;
-    }
-
-    PtyPeer& operator=(PtyPeer&& other) noexcept
-    {
-        if (this == &other) {
-            return *this;
-        }
-        close();
-        master_fd = other.master_fd;
-        slave_path = std::move(other.slave_path);
-        other.master_fd = -1;
-        return *this;
-    }
-
-    static std::optional<PtyPeer> create()
-    {
-        PtyPeer out{};
-        out.master_fd = ::posix_openpt(O_RDWR | O_NOCTTY | O_NONBLOCK);
-        if (out.master_fd < 0) {
-            std::perror("posix_openpt");
-            return std::nullopt;
-        }
-        if (::grantpt(out.master_fd) != 0 || ::unlockpt(out.master_fd) != 0) {
-            std::perror("grantpt/unlockpt");
-            out.close();
-            return std::nullopt;
-        }
-
-        char* slave = ::ptsname(out.master_fd);
-        if (slave == nullptr) {
-            std::perror("ptsname");
-            out.close();
-            return std::nullopt;
-        }
-
-        out.slave_path = slave;
-        return out;
-    }
-
-    void close_master()
-    {
-        if (master_fd >= 0) {
-            ::close(master_fd);
-            master_fd = -1;
-        }
-    }
-
-    void close()
-    {
-        close_master();
-    }
-
-    bool write_line(const std::string& line) const
-    {
-        if (master_fd < 0) {
-            return false;
-        }
-        const auto* data = reinterpret_cast<const std::uint8_t*>(line.data());
-        const auto  size = static_cast<std::size_t>(line.size());
-        return ::write(master_fd, data, size) == static_cast<ssize_t>(size);
-    }
-
-    bool wait_for_tx_bytes(std::chrono::milliseconds timeout) const
-    {
-        const auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (master_fd < 0) {
-                return false;
-            }
-
-            std::uint8_t buf[256];
-            const ssize_t n = ::read(master_fd, buf, sizeof(buf));
-            if (n > 0) {
-                return true;
-            }
-            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                return false;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        return false;
-    }
-
-    std::vector<std::uint8_t> read_tx_bytes(std::chrono::milliseconds timeout) const
-    {
-        const auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (master_fd < 0) {
-                return {};
-            }
-
-            std::uint8_t buf[256];
-            const ssize_t n = ::read(master_fd, buf, sizeof(buf));
-            if (n > 0) {
-                return std::vector<std::uint8_t>(buf, buf + n);
-            }
-            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                return {};
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        return {};
-    }
-};
-
-template <class Pred>
-bool wait_until(std::chrono::milliseconds timeout, Pred pred)
-{
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (pred()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return pred();
-}
+using test_support::PtyPeer;
+using test_support::wait_until;
 
 SerialPortIdentity make_identity(const std::string& path,
                                  const std::string& serial)

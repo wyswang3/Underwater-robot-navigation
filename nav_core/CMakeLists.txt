@@ -71,6 +71,8 @@ set(NAV_CORE_SOURCES
     src/nav_core/core/timebase.cpp
 
     # ---- drivers ----
+    src/nav_core/drivers/imu_serial_diagnostics.cpp
+    src/nav_core/drivers/serial_port_utils.cpp
     src/nav_core/drivers/imu_driver_wit.cpp
     src/nav_core/drivers/dvl_protocol.cpp
     src/nav_core/drivers/dvl_driver.cpp
@@ -112,10 +114,13 @@ set(NAV_CORE_SOURCES
 
     # ---- app ----
     src/nav_core/app/device_binding.cpp
+    src/nav_core/app/imu_port_selector.cpp
     src/nav_core/app/sample_timing.cpp
     src/nav_core/app/nav_runtime_status.cpp
     src/nav_core/app/nav_state_replay.cpp
     src/nav_core/app/nav_daemon_config.cpp
+    src/nav_core/app/nav_daemon_devices.cpp
+    src/nav_core/app/nav_daemon_logging.cpp
 )
 
 # 如需要，将因子图 / 在线估计相关模块编译进扩展库（默认关闭）
@@ -223,6 +228,24 @@ if(NAV_CORE_BUILD_TESTS)
     )
     target_link_libraries(test_serial_reconnect_integration PRIVATE nav_core)
     add_test(NAME nav_core_test_serial_reconnect_integration COMMAND test_serial_reconnect_integration)
+
+    add_executable(test_imu_serial_diagnostics
+        tests/test_imu_serial_diagnostics.cpp
+    )
+    target_link_libraries(test_imu_serial_diagnostics PRIVATE nav_core)
+    add_test(NAME nav_core_test_imu_serial_diagnostics COMMAND test_imu_serial_diagnostics)
+
+    add_executable(test_imu_port_selector
+        tests/test_imu_port_selector.cpp
+    )
+    target_link_libraries(test_imu_port_selector PRIVATE nav_core)
+    add_test(NAME nav_core_test_imu_port_selector COMMAND test_imu_port_selector)
+
+    add_executable(test_nav_daemon_config
+        tests/test_nav_daemon_config.cpp
+    )
+    target_link_libraries(test_nav_daemon_config PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_daemon_config COMMAND test_nav_daemon_config)
 
     add_executable(test_nav_state_replay
         tests/test_nav_state_replay.cpp

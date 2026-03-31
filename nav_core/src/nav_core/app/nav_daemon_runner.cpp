@@ -12,22 +12,17 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <thread>
-#include <ctime>
-#include <iostream>
-#include <unistd.h>
 
 #include "nav_core/app/nav_daemon_config.hpp"
+#include "nav_core/app/nav_daemon_devices.hpp"
+#include "nav_core/app/nav_daemon_logging.hpp"
+#include "nav_core/app/imu_port_selector.hpp"
 #include "nav_core/app/nav_runtime_status.hpp"
 #include "nav_core/app/sample_timing.hpp"
 
@@ -52,7 +47,6 @@
 namespace {
 
 using nav_core::MonoTimeNs;
-using nav_core::SysTimeNs;
 using nav_core::ImuFrame;
 using nav_core::ImuSample;
 using nav_core::DvlFrame;          // ESKF 那边用的 DvlSample = DvlFrame
@@ -68,6 +62,15 @@ using DvlSample      = nav_core::DvlFrame;    // 方便后面写 update_dvl_xy
 using ProtoTrackType = nav_core::dvl_protocol::TrackType;               // = dvl_protocol::TrackType
 using drivers::DvlCoordFrame;                // = dvl_protocol::CoordFrame
 using app::SampleTiming;
+using app::ManagedDeviceRuntime;
+using app::NavEventCsvLogger;
+using app::NavPublishSnapshot;
+using app::SharedSensorState;
+using app::init_named_bin_logger;
+using app::init_nav_state_publisher;
+using app::service_dvl_device;
+using app::service_imu_device;
+using app::write_timing_trace;
 
 
 // ========== 简单时间工具 ==========
@@ -79,122 +82,6 @@ inline MonoTimeNs monotonic_now_ns()
     return static_cast<MonoTimeNs>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()
     );
-}
-
-inline SysTimeNs system_now_ns()
-{
-    using clock = std::chrono::system_clock;
-    auto now    = clock::now().time_since_epoch();
-    return static_cast<SysTimeNs>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()
-    );
-}
-
-std::string csv_escape(const std::string& value)
-{
-    std::string out;
-    out.reserve(value.size() + 2);
-    out.push_back('"');
-    for (const char ch : value) {
-        if (ch == '"') {
-            out.push_back('"');
-        }
-        out.push_back(ch);
-    }
-    out.push_back('"');
-    return out;
-}
-
-std::string wall_time_now_string()
-{
-    auto now = std::chrono::system_clock::now();
-    std::time_t tt = std::chrono::system_clock::to_time_t(now);
-    std::tm tm{};
-#if defined(_WIN32)
-    localtime_s(&tm, &tt);
-#else
-    localtime_r(&tt, &tm);
-#endif
-    std::ostringstream oss;
-    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-    return oss.str();
-}
-
-std::string resolve_run_id(const char* process_name)
-{
-    if (const char* env = std::getenv("ROV_RUN_ID"); env != nullptr && env[0] != '\0') {
-        return env;
-    }
-
-    std::time_t tt = std::time(nullptr);
-    std::tm tm{};
-#if defined(_WIN32)
-    localtime_s(&tm, &tt);
-#else
-    localtime_r(&tt, &tm);
-#endif
-    std::ostringstream oss;
-    oss << process_name << "-" << ::getpid() << "-" << std::put_time(&tm, "%Y%m%d_%H%M%S");
-    return oss.str();
-}
-
-std::filesystem::path resolve_nav_log_dir(const app::NavDaemonConfig& cfg)
-{
-    const auto& lcfg = cfg.logging;
-    std::filesystem::path base(lcfg.base_dir);
-    if (lcfg.split_by_date) {
-        auto now = std::chrono::system_clock::now();
-        std::time_t tt = std::chrono::system_clock::to_time_t(now);
-        std::tm tm{};
-#if defined(_WIN32)
-        localtime_s(&tm, &tt);
-#else
-        localtime_r(&tt, &tm);
-#endif
-        char buf[16];
-        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
-                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
-        base /= buf;
-    }
-    base /= "nav";
-    return base;
-}
-
-bool is_imu_label(const std::string& label)
-{
-    return label == "imu" || label == "IMU";
-}
-
-smsg::NavFaultCode device_state_fault_code(const app::DeviceBindingStatus& status)
-{
-    const bool imu = is_imu_label(status.label);
-    switch (status.state) {
-    case app::DeviceConnectionState::ONLINE:
-        return smsg::NavFaultCode::kNone;
-    case app::DeviceConnectionState::MISMATCH:
-        return imu ? smsg::NavFaultCode::kImuDeviceMismatch
-                   : smsg::NavFaultCode::kDvlDeviceMismatch;
-    case app::DeviceConnectionState::DISCONNECTED:
-        if (!status.active_path.empty() ||
-            status.reason.find("timeout") != std::string::npos ||
-            status.reason.find("closed") != std::string::npos ||
-            status.reason.find("driver") != std::string::npos) {
-            return imu ? smsg::NavFaultCode::kImuDisconnected
-                       : smsg::NavFaultCode::kDvlDisconnected;
-        }
-        return imu ? smsg::NavFaultCode::kImuDeviceNotFound
-                   : smsg::NavFaultCode::kDvlDeviceNotFound;
-    case app::DeviceConnectionState::PROBING:
-    case app::DeviceConnectionState::CONNECTING:
-    case app::DeviceConnectionState::ERROR_BACKOFF:
-    case app::DeviceConnectionState::RECONNECTING:
-    default:
-        return !status.active_path.empty()
-            ? (imu ? smsg::NavFaultCode::kImuDisconnected
-                   : smsg::NavFaultCode::kDvlDisconnected)
-            : (imu ? smsg::NavFaultCode::kImuDeviceNotFound
-                   : smsg::NavFaultCode::kDvlDeviceNotFound);
-    }
 }
 
 enum class SensorRejectKind : std::uint8_t {
@@ -256,208 +143,6 @@ struct RejectEventTracker {
     void clear() noexcept { last_kind = SensorRejectKind::kNone; }
 };
 
-struct NavPublishSnapshot {
-    bool valid{false};
-    bool stale{false};
-    bool degraded{false};
-    std::uint16_t fault_code{0};
-    std::uint16_t nav_status_flags{0};
-
-    bool operator==(const NavPublishSnapshot& rhs) const noexcept
-    {
-        return valid == rhs.valid &&
-               stale == rhs.stale &&
-               degraded == rhs.degraded &&
-               fault_code == rhs.fault_code &&
-               nav_status_flags == rhs.nav_status_flags;
-    }
-};
-
-struct NavEventCsvLogger {
-    bool init(const app::NavDaemonConfig& cfg)
-    {
-        if (!cfg.logging.enable) {
-            return false;
-        }
-
-        std::error_code ec;
-        const auto dir = resolve_nav_log_dir(cfg);
-        if (!std::filesystem::exists(dir, ec) && !std::filesystem::create_directories(dir, ec)) {
-            return false;
-        }
-
-        const auto path = dir / "nav_events.csv";
-        const bool need_header = !std::filesystem::exists(path, ec) ||
-                                 std::filesystem::file_size(path, ec) == 0;
-        ofs_.open(path, std::ios::out | std::ios::app);
-        if (!ofs_.is_open()) {
-            return false;
-        }
-
-        run_id_ = resolve_run_id("uwnav_navd");
-        if (need_header) {
-            ofs_
-                << "mono_ns,wall_time,component,event,level,run_id,process_name,pid"
-                << ",fault_code,nav_valid,nav_stale,nav_degraded,nav_status_flags,message"
-                << ",device_label,device_path,state,reason,sensor_id,reason_class,sample_age_ms\n";
-            ofs_.flush();
-        }
-        return true;
-    }
-
-    void log_device_bind_state_changed(MonoTimeNs mono_ns,
-                                       const app::DeviceBindingStatus& status)
-    {
-        const auto fault_code = device_state_fault_code(status);
-        std::ostringstream msg;
-        msg << "device bind state changed to " << app::device_state_name(status.state)
-            << " path=" << (status.active_path.empty() ? "<none>" : status.active_path)
-            << " reason=" << (status.reason.empty() ? "<none>" : status.reason);
-        log_row(mono_ns,
-                "device_bind_state_changed",
-                status.state == app::DeviceConnectionState::ONLINE ? "info" : "warn",
-                static_cast<std::uint16_t>(fault_code),
-                {},
-                status.label,
-                status.active_path,
-                app::device_state_name(status.state),
-                status.reason,
-                {},
-                {},
-                app::kAgeUnknownMs,
-                msg.str());
-    }
-
-    void log_serial_open_failed(MonoTimeNs mono_ns,
-                                const char* device_label,
-                                const std::string& device_path,
-                                int baud,
-                                const char* reason)
-    {
-        const bool imu = (device_label != nullptr && std::strcmp(device_label, "imu") == 0);
-        const auto fault_code = imu ? smsg::NavFaultCode::kImuDisconnected
-                                    : smsg::NavFaultCode::kDvlDisconnected;
-        std::ostringstream msg;
-        msg << "serial open failed on " << device_path << " @ " << baud
-            << " reason=" << (reason != nullptr ? reason : "unknown");
-        log_row(mono_ns,
-                "serial_open_failed",
-                "error",
-                static_cast<std::uint16_t>(fault_code),
-                {},
-                device_label != nullptr ? device_label : "",
-                device_path,
-                "",
-                reason != nullptr ? reason : "",
-                {},
-                {},
-                app::kAgeUnknownMs,
-                msg.str());
-    }
-
-    void log_sensor_update_rejected(MonoTimeNs mono_ns,
-                                    const char* sensor_id,
-                                    SensorRejectKind kind,
-                                    std::uint32_t sample_age_ms)
-    {
-        const auto fault_code = sensor_reject_fault_code(sensor_id, kind);
-        std::ostringstream msg;
-        msg << (sensor_id != nullptr ? sensor_id : "sensor")
-            << " update rejected: " << sensor_reject_name(kind)
-            << " age_ms=" << sample_age_ms;
-        log_row(mono_ns,
-                "sensor_update_rejected",
-                kind == SensorRejectKind::kStale ? "warn" : "info",
-                static_cast<std::uint16_t>(fault_code),
-                {},
-                {},
-                {},
-                {},
-                {},
-                sensor_id != nullptr ? sensor_id : "",
-                sensor_reject_name(kind),
-                sample_age_ms,
-                msg.str());
-    }
-
-    void log_nav_publish_state_changed(MonoTimeNs mono_ns,
-                                       const smsg::NavState& nav)
-    {
-        std::ostringstream msg;
-        msg << "nav publish state changed valid=" << static_cast<unsigned>(nav.valid)
-            << " stale=" << static_cast<unsigned>(nav.stale)
-            << " degraded=" << static_cast<unsigned>(nav.degraded)
-            << " fault=" << static_cast<unsigned>(nav.fault_code)
-            << " flags=0x" << std::hex << static_cast<unsigned>(nav.status_flags);
-        NavPublishSnapshot snap{nav.valid != 0,
-                                nav.stale != 0,
-                                nav.degraded != 0,
-                                static_cast<std::uint16_t>(nav.fault_code),
-                                nav.status_flags};
-        log_row(mono_ns,
-                "nav_publish_state_changed",
-                snap.valid && !snap.stale ? "info" : "warn",
-                snap.fault_code,
-                snap,
-                {},
-                {},
-                {},
-                {},
-                {},
-                {},
-                nav.age_ms,
-                msg.str());
-    }
-
-private:
-    void log_row(MonoTimeNs mono_ns,
-                 const char* event,
-                 const char* level,
-                 std::uint16_t fault_code,
-                 const NavPublishSnapshot& nav_snapshot,
-                 const std::string& device_label,
-                 const std::string& device_path,
-                 const std::string& state,
-                 const std::string& reason,
-                 const std::string& sensor_id,
-                 const std::string& reason_class,
-                 std::uint32_t sample_age_ms,
-                 const std::string& message)
-    {
-        if (!ofs_.is_open()) {
-            return;
-        }
-
-        ofs_
-            << mono_ns
-            << "," << csv_escape(wall_time_now_string())
-            << "," << csv_escape("uwnav_navd")
-            << "," << csv_escape(event != nullptr ? event : "")
-            << "," << csv_escape(level != nullptr ? level : "")
-            << "," << csv_escape(run_id_)
-            << "," << csv_escape("uwnav_navd")
-            << "," << ::getpid()
-            << "," << fault_code
-            << "," << (nav_snapshot.valid ? 1 : 0)
-            << "," << (nav_snapshot.stale ? 1 : 0)
-            << "," << (nav_snapshot.degraded ? 1 : 0)
-            << "," << nav_snapshot.nav_status_flags
-            << "," << csv_escape(message)
-            << "," << csv_escape(device_label)
-            << "," << csv_escape(device_path)
-            << "," << csv_escape(state)
-            << "," << csv_escape(reason)
-            << "," << csv_escape(sensor_id)
-            << "," << csv_escape(reason_class)
-            << "," << sample_age_ms
-            << "\n";
-        ofs_.flush();
-    }
-
-    std::ofstream ofs_;
-    std::string run_id_;
-};
-
 // ========== IMU 帧 → 样本 转换工具 ==========
 
 inline void imu_frame_to_sample_raw(const ImuFrame& in, ImuSample& out)
@@ -482,170 +167,6 @@ inline void imu_frame_to_sample_raw(const ImuFrame& in, ImuSample& out)
     out.status      = in.status;
 }
 
-// ========== 共享传感器状态（回调 → 主循环） ==========
-
-struct SharedSensorState {
-    std::mutex m;
-
-    std::optional<ImuFrame>               last_imu;
-    MonoTimeNs                            last_imu_mono_ns{0};
-
-    // DVL：保存“原始采样”（DvlRawSample），让主循环去调用 DvlRtPreprocessor
-    std::optional<preprocess::DvlRawSample> last_dvl_raw;
-    MonoTimeNs                              last_dvl_mono_ns{0};
-
-    std::uint64_t loop_counter{0};
-};
-
-struct ManagedDeviceRuntime {
-    app::DeviceBinder binder;
-    app::DeviceConnectionState last_reported_state{app::DeviceConnectionState::DISCONNECTED};
-    MonoTimeNs last_reported_transition_ns{-1};
-};
-
-// ========== 设备绑定 / 连接监督工具 ==========
-
-inline std::int64_t offline_timeout_ns(const drivers::SerialBindingConfig& cfg) noexcept
-{
-    return static_cast<std::int64_t>(cfg.offline_timeout_ms) * 1000000ll;
-}
-
-void clear_imu_shared_state(SharedSensorState& shared_state)
-{
-    std::lock_guard<std::mutex> lock(shared_state.m);
-    shared_state.last_imu.reset();
-    shared_state.last_imu_mono_ns = 0;
-}
-
-void clear_dvl_shared_state(SharedSensorState& shared_state)
-{
-    std::lock_guard<std::mutex> lock(shared_state.m);
-    shared_state.last_dvl_raw.reset();
-    shared_state.last_dvl_mono_ns = 0;
-}
-
-drivers::ImuDriverWit::FrameCallback make_imu_frame_callback(SharedSensorState& shared_state)
-{
-    return [&shared_state](const ImuFrame& frame) {
-        MonoTimeNs mono_ns = frame.mono_ns;
-        if (mono_ns <= 0) {
-            mono_ns = monotonic_now_ns();
-        }
-
-        std::lock_guard<std::mutex> lock(shared_state.m);
-        shared_state.last_imu = frame;
-        shared_state.last_imu_mono_ns = mono_ns;
-    };
-}
-
-drivers::DvlDriver::RawCallback make_dvl_raw_callback(SharedSensorState& shared)
-{
-    using drivers::DvlRawData;
-    using preprocess::DvlRawSample;
-
-    return [&shared](const DvlRawData& raw) {
-        DvlRawSample sample{};
-
-        sample.sensor_time_ns = raw.sensor_time_ns;
-        sample.recv_mono_ns = raw.recv_mono_ns;
-        sample.consume_mono_ns = 0;
-        sample.mono_ns = raw.mono_ns;
-        sample.est_ns = raw.est_ns;
-
-        const auto& p = raw.parsed;
-
-        std::uint8_t kind = 0;
-        if (p.src == "BI") {
-            kind = 0;
-        } else if (p.src == "BE") {
-            kind = 1;
-        } else if (p.src == "BS") {
-            kind = 2;
-        } else if (p.src == "BD") {
-            kind = 3;
-        }
-        sample.kind = kind;
-        sample.bottom_lock = p.bottom_lock;
-
-        sample.vel_inst_mps.x = 0.f;
-        sample.vel_inst_mps.y = 0.f;
-        sample.vel_inst_mps.z = 0.f;
-        sample.vel_earth_mps.x = 0.f;
-        sample.vel_earth_mps.y = 0.f;
-        sample.vel_earth_mps.z = 0.f;
-
-        if (p.coord_frame == DvlCoordFrame::Earth) {
-            sample.vel_earth_mps.x = static_cast<float>(p.ve_mps());
-            sample.vel_earth_mps.y = static_cast<float>(p.vn_mps());
-            sample.vel_earth_mps.z = static_cast<float>(p.vu_mps());
-        } else {
-            sample.vel_inst_mps.x = static_cast<float>(p.ve_mps());
-            sample.vel_inst_mps.y = static_cast<float>(p.vn_mps());
-            sample.vel_inst_mps.z = static_cast<float>(p.vu_mps());
-        }
-
-        std::lock_guard<std::mutex> lock(shared.m);
-        shared.last_dvl_raw = sample;
-        shared.last_dvl_mono_ns = sample.mono_ns;
-    };
-}
-
-std::uint16_t device_trace_flags(app::DeviceConnectionState state) noexcept
-{
-    switch (state) {
-    case app::DeviceConnectionState::ONLINE:
-        return io::kTimingTraceDeviceOnline;
-    case app::DeviceConnectionState::MISMATCH:
-        return io::kTimingTraceDeviceMismatch;
-    case app::DeviceConnectionState::PROBING:
-    case app::DeviceConnectionState::CONNECTING:
-    case app::DeviceConnectionState::ERROR_BACKOFF:
-    case app::DeviceConnectionState::RECONNECTING:
-        return io::kTimingTraceDeviceReconnecting;
-    case app::DeviceConnectionState::DISCONNECTED:
-    default:
-        return io::kTimingTraceNone;
-    }
-}
-
-void report_device_transition(const char*               label,
-                              io::TimingTraceKind       trace_kind,
-                              ManagedDeviceRuntime&     runtime,
-                              nav_core::BinLogger*      timing_logger,
-                              NavEventCsvLogger*        event_logger)
-{
-    const auto& status = runtime.binder.status();
-    if (status.last_transition_ns == runtime.last_reported_transition_ns &&
-        status.state == runtime.last_reported_state) {
-        return;
-    }
-
-    runtime.last_reported_transition_ns = status.last_transition_ns;
-    runtime.last_reported_state = status.state;
-
-    std::fprintf(stderr,
-                 "[nav_daemon] %s state=%s path=%s reason=%s\n",
-                 label,
-                 app::device_state_name(status.state),
-                 status.active_path.empty() ? "<none>" : status.active_path.c_str(),
-                 status.reason.empty() ? "<none>" : status.reason.c_str());
-
-    if (timing_logger != nullptr) {
-        io::TimingTracePacketV1 pkt{};
-        pkt.kind = static_cast<std::uint16_t>(trace_kind);
-        pkt.flags = device_trace_flags(status.state);
-        pkt.publish_mono_ns = status.last_transition_ns;
-        pkt.age_ms = app::kAgeUnknownMs;
-        pkt.fault_code = static_cast<std::uint32_t>(status.state);
-        timing_logger->writePod(pkt);
-    }
-
-    if (event_logger != nullptr) {
-        // 这里只在 binder 状态边沿写一条 CSV，避免把探测轮询噪声变成大量重复文本。
-        event_logger->log_device_bind_state_changed(status.last_transition_ns, status);
-    }
-}
-
 void reset_eskf_to_config_defaults(estimator::EskfFilter& eskf)
 {
     const auto cfg = eskf.config();
@@ -656,240 +177,6 @@ void reset_eskf_to_config_defaults(estimator::EskfFilter& eskf)
     x0.ba_mps2 = nav_core::Vec3d{0.0, 0.0, 0.0};
     x0.bg_rad_s = nav_core::Vec3d{0.0, 0.0, cfg.init_bgz_rad_s};
     eskf.reset(x0);
-}
-
-bool start_imu_driver_on_path(const app::NavDaemonConfig& cfg,
-                              SharedSensorState&          shared_state,
-                              drivers::ImuDriverWit&      imu_driver,
-                              NavEventCsvLogger*          event_logger,
-                              const std::string&          path)
-{
-    drivers::ImuConfig dcfg = cfg.imu.driver;
-    dcfg.port = path;
-
-    const auto on_frame = make_imu_frame_callback(shared_state);
-    drivers::ImuDriverWit::RawCallback on_raw;  // 不用，留空即可
-
-    if (!imu_driver.init(dcfg, on_frame, on_raw)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] ERROR: ImuDriverWit::init failed (port=%s, baud=%d)\n",
-                     dcfg.port.c_str(), dcfg.baud);
-        std::fprintf(stderr,
-                     "[nav_daemon] HINT: 请检查 IMU 串口号 / 波特率 / 设备权限 / 设备是否插好\n");
-        if (event_logger != nullptr) {
-            event_logger->log_serial_open_failed(monotonic_now_ns(), "imu", dcfg.port, dcfg.baud,
-                                                 "driver_init_failed");
-        }
-        return false;
-    }
-    if (!imu_driver.start()) {
-        std::fprintf(stderr, "[nav_daemon] ERROR: ImuDriverWit::start failed\n");
-        std::fprintf(stderr,
-                     "[nav_daemon] HINT: 请检查串口是否被其它进程占用，或驱动内部异常\n");
-        if (event_logger != nullptr) {
-            event_logger->log_serial_open_failed(monotonic_now_ns(), "imu", dcfg.port, dcfg.baud,
-                                                 "driver_start_failed");
-        }
-        return false;
-    }
-
-    std::fprintf(stderr, "[nav_daemon] IMU driver started on %s @ %d\n",
-                 dcfg.port.c_str(), dcfg.baud);
-    return true;
-}
-
-bool start_dvl_driver_on_path(const app::NavDaemonConfig& cfg,
-                              SharedSensorState&          shared,
-                              drivers::DvlDriver&         dvl,
-                              NavEventCsvLogger*          event_logger,
-                              const std::string&          path)
-{
-    drivers::DvlConfig dcfg = cfg.dvl.driver;
-    dcfg.port = path;
-
-    const auto on_raw = make_dvl_raw_callback(shared);
-
-    if (!dvl.init(dcfg, on_raw)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] ERROR: DvlDriver::init failed (port=%s, baud=%d)\n",
-                     dcfg.port.c_str(), dcfg.baud);
-        std::fprintf(stderr,
-                     "[nav_daemon] HINT: 请检查 DVL 串口 / 波特率 / 供电 / 厂家协议配置\n");
-        if (event_logger != nullptr) {
-            event_logger->log_serial_open_failed(monotonic_now_ns(), "dvl", dcfg.port, dcfg.baud,
-                                                 "driver_init_failed");
-        }
-        return false;
-    }
-
-    if (!dvl.start()) {
-        std::fprintf(stderr, "[nav_daemon] ERROR: DvlDriver::start failed\n");
-        if (event_logger != nullptr) {
-            event_logger->log_serial_open_failed(monotonic_now_ns(), "dvl", dcfg.port, dcfg.baud,
-                                                 "driver_start_failed");
-        }
-        return false;
-    }
-
-    std::fprintf(stderr, "[nav_daemon] DVL driver started on %s @ %d\n",
-                 dcfg.port.c_str(), dcfg.baud);
-    return true;
-}
-
-void log_imu_no_frame_after_connect(const app::NavDaemonConfig& cfg,
-                                    const ManagedDeviceRuntime& runtime,
-                                    MonoTimeNs                  now_mono_ns)
-{
-    const auto& status = runtime.binder.status();
-    const auto  waited_ms =
-        (status.last_transition_ns > 0 && now_mono_ns > status.last_transition_ns)
-            ? static_cast<long long>((now_mono_ns - status.last_transition_ns) / 1000000ll)
-            : static_cast<long long>(cfg.imu.driver.binding.offline_timeout_ms);
-
-    const std::string& path =
-        status.active_path.empty() ? cfg.imu.driver.port : status.active_path;
-
-    std::fprintf(stderr,
-                 "[nav_daemon] IMU opened but no parseable frame arrived within %lld ms "
-                 "(path=%s, baud=%d, addr=0x%02x)\n",
-                 waited_ms, path.c_str(), cfg.imu.driver.baud,
-                 static_cast<unsigned int>(cfg.imu.driver.slave_addr));
-    std::fprintf(stderr,
-                 "[nav_daemon] HINT: 串口已打开，但 IMU 没有返回可解析的 Modbus 数据；"
-                 "请检查供电、RS485 A/B、波特率、slave_addr 和 USB-RS485 转接器\n");
-}
-
-bool service_imu_device(const app::NavDaemonConfig&    cfg,
-                        SharedSensorState&             shared_state,
-                        drivers::ImuDriverWit&         imu_driver,
-                        ManagedDeviceRuntime&          runtime,
-                        nav_core::BinLogger*           timing_logger,
-                        NavEventCsvLogger*             event_logger,
-                        MonoTimeNs                     now_mono_ns)
-{
-    bool reset_pipeline = false;
-    const auto timeout_ns = offline_timeout_ns(cfg.imu.driver.binding);
-
-    if (runtime.binder.status().state == app::DeviceConnectionState::ONLINE) {
-        bool offline = false;
-        std::string reason;
-
-        if (!imu_driver.isRunning()) {
-            offline = true;
-            reason = "driver thread stopped";
-        } else if (!imu_driver.isPortOpen()) {
-            offline = true;
-            reason = "serial port closed";
-        } else if (timeout_ns > 0) {
-            if (!imu_driver.hasEverReceivedFrame()) {
-                if (runtime.binder.status().last_transition_ns > 0 &&
-                    now_mono_ns - runtime.binder.status().last_transition_ns > timeout_ns) {
-                    offline = true;
-                    reason = "no IMU frame after connect";
-                }
-            } else {
-                const MonoTimeNs last_frame_ns = imu_driver.lastFrameMonoNs();
-                if (last_frame_ns > 0 && now_mono_ns - last_frame_ns > timeout_ns) {
-                    offline = true;
-                    reason = "IMU frame timeout";
-                }
-            }
-        }
-
-        if (offline) {
-            if (reason == "no IMU frame after connect") {
-                log_imu_no_frame_after_connect(cfg, runtime, now_mono_ns);
-            }
-            imu_driver.stop();
-            clear_imu_shared_state(shared_state);
-            runtime.binder.mark_disconnected(now_mono_ns, reason);
-            reset_pipeline = true;
-        }
-    }
-
-    if (runtime.binder.should_probe(now_mono_ns)) {
-        const auto device = runtime.binder.probe(now_mono_ns);
-        if (device.has_value()) {
-            imu_driver.stop();
-            clear_imu_shared_state(shared_state);
-
-            if (!start_imu_driver_on_path(cfg, shared_state, imu_driver, event_logger,
-                                          device->path)) {
-                runtime.binder.mark_connect_failure(now_mono_ns, "driver start failed");
-            } else {
-                runtime.binder.mark_connect_success(now_mono_ns, *device);
-                reset_pipeline = true;
-            }
-        }
-    }
-
-    report_device_transition("IMU", io::TimingTraceKind::kImuDeviceState, runtime,
-                             timing_logger, event_logger);
-    return reset_pipeline;
-}
-
-bool service_dvl_device(const app::NavDaemonConfig& cfg,
-                        SharedSensorState&          shared_state,
-                        drivers::DvlDriver&         dvl_driver,
-                        ManagedDeviceRuntime&       runtime,
-                        nav_core::BinLogger*        timing_logger,
-                        NavEventCsvLogger*          event_logger,
-                        MonoTimeNs                  now_mono_ns)
-{
-    bool reset_cache = false;
-    const auto timeout_ns = offline_timeout_ns(cfg.dvl.driver.binding);
-
-    if (runtime.binder.status().state == app::DeviceConnectionState::ONLINE) {
-        bool offline = false;
-        std::string reason;
-
-        if (!dvl_driver.running()) {
-            offline = true;
-            reason = "driver thread stopped";
-        } else if (!dvl_driver.isPortOpen()) {
-            offline = true;
-            reason = "serial port closed";
-        } else if (timeout_ns > 0) {
-            const MonoTimeNs last_rx_ns = dvl_driver.lastRxMonoNs();
-            if (last_rx_ns <= 0) {
-                if (runtime.binder.status().last_transition_ns > 0 &&
-                    now_mono_ns - runtime.binder.status().last_transition_ns > timeout_ns) {
-                    offline = true;
-                    reason = "no DVL frame after connect";
-                }
-            } else if (now_mono_ns - last_rx_ns > timeout_ns) {
-                offline = true;
-                reason = "DVL frame timeout";
-            }
-        }
-
-        if (offline) {
-            dvl_driver.stop();
-            clear_dvl_shared_state(shared_state);
-            runtime.binder.mark_disconnected(now_mono_ns, reason);
-            reset_cache = true;
-        }
-    }
-
-    if (runtime.binder.should_probe(now_mono_ns)) {
-        const auto device = runtime.binder.probe(now_mono_ns);
-        if (device.has_value()) {
-            dvl_driver.stop();
-            clear_dvl_shared_state(shared_state);
-
-            if (!start_dvl_driver_on_path(cfg, shared_state, dvl_driver, event_logger,
-                                          device->path)) {
-                runtime.binder.mark_connect_failure(now_mono_ns, "driver start failed");
-            } else {
-                runtime.binder.mark_connect_success(now_mono_ns, *device);
-                reset_cache = true;
-            }
-        }
-    }
-
-    report_device_transition("DVL", io::TimingTraceKind::kDvlDeviceState, runtime,
-                             timing_logger, event_logger);
-    return reset_cache;
 }
 
 // 将实时预处理结果 DvlRtOutput 映射为 ESKF 所需的 DvlSample（= DvlFrame）
@@ -968,87 +255,6 @@ inline SampleTiming sample_timing_from(const DvlSample& sample) noexcept
     return SampleTiming{sample.mono_ns, sample.recv_mono_ns, sample.consume_mono_ns};
 }
 
-inline void write_timing_trace(nav_core::BinLogger*        logger,
-                               io::TimingTraceKind         kind,
-                               const SampleTiming&         timing,
-                               MonoTimeNs                  publish_mono_ns,
-                               std::uint32_t               age_ms,
-                               std::uint16_t               flags,
-                               shared::msg::NavFaultCode   fault_code =
-                                   shared::msg::NavFaultCode::kNone)
-{
-    if (logger == nullptr) {
-        return;
-    }
-
-    io::TimingTracePacketV1 pkt{};
-    pkt.kind = static_cast<std::uint16_t>(kind);
-    pkt.flags = flags;
-    pkt.sensor_time_ns = timing.sensor_time_ns;
-    pkt.recv_mono_ns = timing.recv_mono_ns;
-    pkt.consume_mono_ns = timing.consume_mono_ns;
-    pkt.publish_mono_ns = publish_mono_ns;
-    pkt.age_ms = age_ms;
-    pkt.fault_code = static_cast<std::uint32_t>(fault_code);
-    logger->writePod(pkt);
-}
-
-// ========== NavStatePublisher 初始化 ==========
-
-bool init_nav_state_publisher(const app::NavDaemonConfig& cfg,
-                              io::NavStatePublisher&      pub)
-{
-    io::NavStatePublisherConfig shm_cfg = cfg.publisher.shm;
-    if (!shm_cfg.enable) {
-        std::fprintf(stderr, "[nav_daemon] NavStatePublisher disabled by config\n");
-        return false;
-    }
-    if (!pub.init(shm_cfg)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] ERROR: NavStatePublisher::init failed (shm=%s)\n",
-                     shm_cfg.shm_name.c_str());
-        std::fprintf(stderr,
-                     "[nav_daemon] HINT: 请检查 shm_name 是否与控制侧一致、系统共享内存权限是否足够\n");
-        return false;
-    }
-    std::fprintf(stderr,
-                 "[nav_daemon] NavStatePublisher initialized (shm=%s)\n",
-                 shm_cfg.shm_name.c_str());
-    return true;
-}
-
-// ========== BinLogger 初始化（使用 nav_core::BinLogger 简单版本） ==========
-
-bool init_named_bin_logger(const app::NavDaemonConfig& cfg,
-                           const char*                 filename,
-                           nav_core::BinLogger&        logger)
-{
-    const auto& lcfg = cfg.logging;
-    if (!lcfg.enable || filename == nullptr || filename[0] == '\0') {
-        std::fprintf(stderr,
-                     "[nav_daemon] bin_logger disabled by config or invalid filename\n");
-        return false;
-    }
-
-    namespace fs = std::filesystem;
-
-    fs::path base = resolve_nav_log_dir(cfg);
-    fs::path file = base / filename;
-
-    // BinLogger::open 自己会递归创建目录（ensureDirForFile），这里不强求 create_directories。
-    if (!logger.open(file.string(), /*append=*/true)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] WARNING: BinLogger::open('%s') failed, disable logging\n",
-                     file.string().c_str());
-        return false;
-    }
-
-    std::fprintf(stderr,
-                 "[nav_daemon] bin_logger logging to %s\n",
-                 file.string().c_str());
-    return true;
-}
-
 // ========== 主循环：所有细节通过已有模块完成 ==========
 
 int run_main_loop(const app::NavDaemonConfig&    cfg,
@@ -1089,8 +295,12 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
     std::optional<ImuSample> last_consumed_nav_imu;
     SampleTiming            last_consumed_imu_timing{};
     SampleTiming            last_consumed_dvl_timing{};
-    ManagedDeviceRuntime    imu_runtime{
-        app::DeviceBinder("imu", cfg.imu.driver.port, cfg.imu.driver.binding)};
+    ManagedDeviceRuntime    imu_runtime{app::DeviceBinder("imu",
+                                                       cfg.imu.driver.port,
+                                                       cfg.imu.driver.binding,
+                                                       {},
+                                                       app::make_imu_port_selector(
+                                                           cfg.imu.driver))};
     ManagedDeviceRuntime    dvl_runtime{
         app::DeviceBinder("dvl", cfg.dvl.driver.port, cfg.dvl.driver.binding)};
     RejectEventTracker      imu_reject_tracker{};
@@ -1185,7 +395,12 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                         imu_reject_tracker.should_log(SensorRejectKind::kPreprocessRejected)) {
                         // 这里只在拒绝类别变化时落一条事件，避免主循环因为同一类坏样本连续刷文本。
                         event_logger->log_sensor_update_rejected(
-                            now_mono_ns, "imu", SensorRejectKind::kPreprocessRejected, sample_age_ms);
+                            now_mono_ns,
+                            "imu",
+                            sensor_reject_name(SensorRejectKind::kPreprocessRejected),
+                            sample_age_ms,
+                            static_cast<std::uint16_t>(
+                                sensor_reject_fault_code("imu", SensorRejectKind::kPreprocessRejected)));
                     }
                     if ((print_counter % 50) == 0) {
                         std::fprintf(stderr,
@@ -1223,7 +438,12 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                 if (event_logger != nullptr &&
                     imu_reject_tracker.should_log(SensorRejectKind::kStale)) {
                     event_logger->log_sensor_update_rejected(
-                        now_mono_ns, "imu", SensorRejectKind::kStale, sample_age_ms);
+                        now_mono_ns,
+                        "imu",
+                        sensor_reject_name(SensorRejectKind::kStale),
+                        sample_age_ms,
+                        static_cast<std::uint16_t>(
+                            sensor_reject_fault_code("imu", SensorRejectKind::kStale)));
                 }
                 if ((print_counter % 200) == 0) {
                     write_timing_trace(
@@ -1244,7 +464,12 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                 if (event_logger != nullptr &&
                     imu_reject_tracker.should_log(SensorRejectKind::kOutOfOrder)) {
                     event_logger->log_sensor_update_rejected(
-                        now_mono_ns, "imu", SensorRejectKind::kOutOfOrder, sample_age_ms);
+                        now_mono_ns,
+                        "imu",
+                        sensor_reject_name(SensorRejectKind::kOutOfOrder),
+                        sample_age_ms,
+                        static_cast<std::uint16_t>(
+                            sensor_reject_fault_code("imu", SensorRejectKind::kOutOfOrder)));
                 }
                 if ((print_counter % 200) == 0) {
                     write_timing_trace(
@@ -1341,7 +566,12 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                             io::kTimingTraceRejected);
                         if (event_logger != nullptr && dvl_reject_tracker.should_log(reject_kind)) {
                             event_logger->log_sensor_update_rejected(
-                                now_mono_ns, "dvl", reject_kind, sample_age_ms);
+                                now_mono_ns,
+                                "dvl",
+                                sensor_reject_name(reject_kind),
+                                sample_age_ms,
+                                static_cast<std::uint16_t>(
+                                    sensor_reject_fault_code("dvl", reject_kind)));
                         }
                     }
 
@@ -1351,7 +581,12 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                     if (event_logger != nullptr &&
                         dvl_reject_tracker.should_log(SensorRejectKind::kOutOfOrder)) {
                         event_logger->log_sensor_update_rejected(
-                            now_mono_ns, "dvl", SensorRejectKind::kOutOfOrder, sample_age_ms);
+                            now_mono_ns,
+                            "dvl",
+                            sensor_reject_name(SensorRejectKind::kOutOfOrder),
+                            sample_age_ms,
+                            static_cast<std::uint16_t>(
+                                sensor_reject_fault_code("dvl", SensorRejectKind::kOutOfOrder)));
                     }
                     if ((print_counter % 200) == 0) {
                         write_timing_trace(
@@ -1373,7 +608,12 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                 if (event_logger != nullptr &&
                     dvl_reject_tracker.should_log(SensorRejectKind::kStale)) {
                     event_logger->log_sensor_update_rejected(
-                        now_mono_ns, "dvl", SensorRejectKind::kStale, sample_age_ms);
+                        now_mono_ns,
+                        "dvl",
+                        sensor_reject_name(SensorRejectKind::kStale),
+                        sample_age_ms,
+                        static_cast<std::uint16_t>(
+                            sensor_reject_fault_code("dvl", SensorRejectKind::kStale)));
                 }
                 if ((print_counter % 200) == 0) {
                     write_timing_trace(

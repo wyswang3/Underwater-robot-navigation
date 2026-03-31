@@ -12,7 +12,9 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -54,6 +56,40 @@ void load_scalar(const YAML::Node& parent,
     }
 }
 
+void load_u8_scalar(const YAML::Node& parent,
+                    const char*       key,
+                    std::uint8_t&     dst)
+{
+    if (!parent || !parent.IsMap()) {
+        return;
+    }
+    const YAML::Node node = parent[key];
+    if (!node || node.IsNull()) {
+        return;
+    }
+
+    try {
+        const auto value = node.as<unsigned int>();
+        if (value > std::numeric_limits<std::uint8_t>::max()) {
+            throw std::out_of_range("value out of uint8_t range");
+        }
+        dst = static_cast<std::uint8_t>(value);
+        return;
+    } catch (const std::exception&) {
+    }
+
+    try {
+        const auto text = node.as<std::string>();
+        const auto value = std::stoul(text, nullptr, 0);
+        if (value > std::numeric_limits<std::uint8_t>::max()) {
+            throw std::out_of_range("value out of uint8_t range");
+        }
+        dst = static_cast<std::uint8_t>(value);
+    } catch (const std::exception& e) {
+        log_warn(std::string("failed to parse key '") + key + "': " + e.what());
+    }
+}
+
 void load_string_list(const YAML::Node& parent,
                       const char*       key,
                       std::vector<std::string>& dst)
@@ -85,7 +121,11 @@ inline YAML::Node get_child(const YAML::Node& parent, const char* key)
     if (!parent || !parent.IsMap()) {
         return YAML::Node{};
     }
-    return parent[key];
+    const YAML::Node node = parent[key];
+    if (!node.IsDefined() || node.IsNull()) {
+        return YAML::Node{};
+    }
+    return node;
 }
 
 } // namespace
@@ -147,7 +187,7 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
             if (drv_n) {
                 load_scalar(drv_n, "port",       out_cfg.imu.driver.port);
                 load_scalar(drv_n, "baud",       out_cfg.imu.driver.baud);
-                load_scalar(drv_n, "slave_addr", out_cfg.imu.driver.slave_addr);
+                load_u8_scalar(drv_n, "slave_addr", out_cfg.imu.driver.slave_addr);
 
                 YAML::Node binding_n = get_child(drv_n, "binding");
                 if (binding_n) {

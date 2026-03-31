@@ -279,6 +279,7 @@ print(imu[:5])
 
 * imu.bin 大小为 0
 * 控制台无 IMU 回调输出
+* `uwnav_navd` 反复打印 `IMU opened but no parseable frame arrived ...`
 
 排查方法：
 
@@ -291,6 +292,29 @@ sudo hexdump -C /dev/ttyUSB0 | head
 * 99% 为 **RS485 A/B 接反**
 
 解决：交换 A/B 线。
+
+从 2026-03-31 起，`uwnav_navd` 在“串口已打开但 IMU 没有可解析帧”时会额外输出：
+
+* `IMU serial diagnostic: kind=... rx_bytes=... summary=...`
+* `IMU serial preview(text): ...` 或 `IMU serial preview(hex): ...`
+
+同一版本开始，IMU 设备绑定不再只依赖 `port`/`binding` 的硬编码路径：
+
+* 启动时会先用 **115200 被动观察** 候选串口，优先识别 Volt32 这类会自动回传 `CHn:` 文本的设备；
+* 对未命中 Volt32 特征的串口，再用 **IMU 配置波特率主动发送 WIT Modbus 读寄存器请求**；
+* 只有观察到合法 `0x50 0x03 ... CRC` 回复的串口，才会被当作 IMU 口绑定。
+
+因此：
+
+* `driver.port`、`candidate_paths`、`expected_vid/pid/serial` 现在主要作为 **排序提示和诊断信息**；
+* 真正决定“哪个串口是 IMU”的依据，已经变成 **串口行为特征 + Modbus 探测结果**；
+* C++ 驱动的串口初始化也已对齐 Python：使用 raw `8N1`，避免此前字符位设置错误导致“Python 可读、C++ 无法解析”的差异。
+
+如果 `kind=volt32_ascii`，通常说明 **IMU/电压板串口发生了重枚举跳变**，当前绑定到的并不是 WIT IMU 口，而是 Volt32 文本电压采集口。此时优先检查：
+
+* `/dev/serial/by-id` 软链接是否变化
+* IMU 与 Volt32 的 USB-RS485 转接器是否对调
+* `nav_events.csv` 中是否出现 `serial_protocol_diagnostic`
 
 ---
 
@@ -357,12 +381,19 @@ dmesg | tail -20
 
 * RS485 线过长、接触不良
 * 上位机波特率设置错误
+* 设备仍在回复字节，但回复内容不是当前 WIT Modbus 寄存器窗口
 
 检查波特率：
 
 ```bash
 stty -F /dev/ttyUSB0
 ```
+
+如果控制台已经打印 `IMU serial preview(hex): 50 03 1e ...` 这类 Modbus 十六进制帧，但仍没有 IMU 回调，优先检查：
+
+* `slave_addr` 是否与实物一致
+* 设备是否处于 WIT Modbus 模式，而不是旧 `0x55` 同步帧模式
+* 当前请求的寄存器窗口是否与实物固件兼容
 
 ---
 

@@ -60,9 +60,18 @@ bool matches_binding_identity(const SerialPortIdentity&          device,
                               const drivers::SerialBindingConfig& cfg,
                               const std::string&                  preferred_path) noexcept;
 
+struct DeviceProbeDecision {
+    DeviceConnectionState            state{DeviceConnectionState::DISCONNECTED};
+    std::optional<SerialPortIdentity> selected_device{};
+    std::string                      reason{};
+};
+
 class DeviceBinder {
 public:
     using DiscoverFn = std::function<std::vector<SerialPortIdentity>()>;
+    using SelectFn = std::function<DeviceProbeDecision(const std::vector<SerialPortIdentity>&,
+                                                       const drivers::SerialBindingConfig&,
+                                                       const std::string&)>;
 
     /**
      * @brief 创建一个主线程使用的串口设备绑定器。
@@ -80,7 +89,8 @@ public:
     DeviceBinder(std::string                        label,
                  std::string                        preferred_path,
                  drivers::SerialBindingConfig       cfg = {},
-                 DiscoverFn                         discover = {});
+                 DiscoverFn                         discover = {},
+                 SelectFn                           select = {});
 
     const DeviceBindingStatus& status() const noexcept { return status_; }
 
@@ -111,6 +121,7 @@ private:
     std::string                   preferred_path_{};
     drivers::SerialBindingConfig  cfg_{};
     DiscoverFn                    discover_fn_{};
+    SelectFn                      select_fn_{};
     DeviceBindingStatus           status_{};
 };
 

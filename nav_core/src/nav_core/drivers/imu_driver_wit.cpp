@@ -6,16 +6,14 @@
 //
 
 #include "nav_core/drivers/imu_driver_wit.hpp"
+#include "nav_core/drivers/serial_port_utils.hpp"
 #include "nav_core/core/timebase.hpp"
 
-#include <cerrno>
 #include <cmath>
 #include <cstring>
 #include <ctime>
-#include <fcntl.h>
 #include <iostream>
 #include <sys/select.h>
-#include <termios.h>
 #include <unistd.h>
 #include <utility>
 #include <thread>
@@ -43,28 +41,6 @@ namespace {
 
 inline bool isFinite(double x) noexcept {
     return std::isfinite(x);
-}
-
-/// 将整型波特率转换为 termios 需要的 speed_t
-speed_t baudToTermios(int baud) {
-    switch (baud) {
-        case 4800:   return B4800;
-        case 9600:   return B9600;
-        case 19200:  return B19200;
-        case 38400:  return B38400;
-        case 57600:  return B57600;
-        case 115200: return B115200;
-#ifdef B230400
-        case 230400: return B230400;
-#endif
-#ifdef B460800
-        case 460800: return B460800;
-#endif
-        default:
-            std::cerr << "[IMU] unsupported baud " << baud
-                      << ", fallback to 115200\n";
-            return B115200;
-    }
 }
 
 } // namespace
@@ -138,6 +114,7 @@ bool ImuDriverWit::init(const ImuConfig& cfg,
     have_any_frame_.store(false);
     have_valid_frame_.store(false);
     last_frame_mono_ns_.store(0);
+    serial_diag_.reset(slave_addr_);
 
     return true;
 }
@@ -161,6 +138,7 @@ bool ImuDriverWit::start()
     have_valid_frame_.store(false);
     last_frame_mono_ns_.store(0);
     port_open_.store(false);
+    serial_diag_.reset(slave_addr_);
 
     if (!openPort()) {
         std::cerr << "[IMU] openPort() failed on " << port_ << "\n";
@@ -296,6 +274,11 @@ MonoTimeNs ImuDriverWit::lastFrameMonoNs() const noexcept
     return last_frame_mono_ns_.load();
 }
 
+ImuSerialDebugSnapshot ImuDriverWit::serialDebugSnapshot() const
+{
+    return serial_diag_.snapshot();
+}
+
 // ============================================================================
 // 串口打开 / 关闭
 // ============================================================================
@@ -307,50 +290,10 @@ bool ImuDriverWit::openPort()
         return true;
     }
 
-    fd_ = ::open(port_.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
+    std::string error;
+    fd_ = open_serial_port_raw(port_, baud_, /*read_timeout_ds=*/5, &error);
     if (fd_ < 0) {
-        std::cerr << "[IMU] open(" << port_ << ") failed: "
-                  << std::strerror(errno) << "\n";
-        port_open_.store(false);
-        return false;
-    }
-
-    termios tio{};
-    if (tcgetattr(fd_, &tio) != 0) {
-        std::cerr << "[IMU] tcgetattr failed: "
-                  << std::strerror(errno) << "\n";
-        ::close(fd_);
-        fd_ = -1;
-        port_open_.store(false);
-        return false;
-    }
-
-    // 配置为原始模式：不做行缓冲/回显等
-    cfmakeraw(&tio);
-
-    const speed_t s = baudToTermios(baud_);
-    cfsetispeed(&tio, s);
-    cfsetospeed(&tio, s);
-
-    tio.c_cflag |= (CLOCAL | CREAD);
-    const tcflag_t csize_mask  = CSIZE;
-    const tcflag_t parenb_mask = PARENB;
-    const tcflag_t cstopb_mask = CSTOPB;
-
-    tio.c_cflag &= ~parenb_mask;
-    tio.c_cflag |= CS8;          // 8N1
-    tio.c_cflag &= ~csize_mask;
-    tio.c_cflag &= ~cstopb_mask;
-
-    // 读超时：配合 select 使用
-    tio.c_cc[VMIN]  = 0;
-    tio.c_cc[VTIME] = 5;        // 0.5s 超时
-
-    if (tcsetattr(fd_, TCSANOW, &tio) != 0) {
-        std::cerr << "[IMU] tcsetattr failed: "
-                  << std::strerror(errno) << "\n";
-        ::close(fd_);
-        fd_ = -1;
+        std::cerr << "[IMU] " << error << "\n";
         port_open_.store(false);
         return false;
     }
@@ -438,6 +381,7 @@ void ImuDriverWit::threadFunc()
                 std::cerr << "[IMU] read() returned EOF, treating device as disconnected\n";
                 closePort();
             } else if (n > 0) {
+                serial_diag_.record_rx_bytes(buf, static_cast<std::size_t>(n));
                 for (ssize_t i = 0; i < n; ++i) {
                     WitSerialDataIn(buf[i]);
                 }
@@ -507,6 +451,7 @@ void ImuDriverWit::onRegUpdate(std::uint32_t start_reg, std::uint32_t num)
     raw.count        = num;
 
     // 健康检查：只要回调被调用，就认为“收到过原始寄存器更新”
+    serial_diag_.mark_parseable_frame();
     have_any_frame_.store(true);
     last_frame_mono_ns_.store(now_ns);
 

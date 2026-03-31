@@ -206,10 +206,12 @@ bool matches_binding_identity(const SerialPortIdentity&           device,
 DeviceBinder::DeviceBinder(std::string                  label,
                            std::string                  preferred_path,
                            drivers::SerialBindingConfig cfg,
-                           DiscoverFn                   discover)
+                           DiscoverFn                   discover,
+                           SelectFn                     select)
     : preferred_path_(std::move(preferred_path)),
       cfg_(std::move(cfg)),
-      discover_fn_(discover ? std::move(discover) : DiscoverFn(scan_serial_port_identities))
+      discover_fn_(discover ? std::move(discover) : DiscoverFn(scan_serial_port_identities)),
+      select_fn_(std::move(select))
 {
     status_.label = std::move(label);
     status_.reason = "not probed";
@@ -241,6 +243,28 @@ std::optional<SerialPortIdentity> DeviceBinder::probe(MonoTimeNs now_ns)
     transition_(now_ns, DeviceConnectionState::PROBING, "scanning candidates");
 
     const auto devices = discover_();
+    if (select_fn_) {
+        const DeviceProbeDecision decision = select_fn_(devices, cfg_, preferred_path_);
+        if (decision.selected_device.has_value()) {
+            const std::string reason =
+                decision.reason.empty() ? "selected custom-probed device" : decision.reason;
+            transition_(now_ns, DeviceConnectionState::CONNECTING, reason,
+                        *decision.selected_device);
+            return decision.selected_device;
+        }
+
+        const DeviceConnectionState next_state =
+            (decision.state == DeviceConnectionState::CONNECTING ||
+             decision.state == DeviceConnectionState::ONLINE)
+                ? DeviceConnectionState::MISMATCH
+                : decision.state;
+        transition_(now_ns,
+                    next_state,
+                    decision.reason.empty() ? "custom selector rejected all candidates"
+                                            : decision.reason);
+        return std::nullopt;
+    }
+
     const bool filters_configured = identity_filters_configured(cfg_);
 
     if (!preferred_path_.empty()) {
