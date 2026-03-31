@@ -267,11 +267,19 @@ _PARSERS = {
     "WD": _parse_WD,
 }
 
+# 只把真正的数据帧起点当作 frame boundary，避免把命令回显/噪声切成伪帧。
+_FRAME_TAGS = tuple(_PARSERS.keys())
+_FRAME_START_RE = re.compile(
+    r":" + r"(?=(?:" + "|".join(_FRAME_TAGS) + r")(?:,|\s|$))"
+)
 # ====================== 主入口 ======================
 
 def parse_line(line: str) -> Optional[Dict]:
     """
     解析单帧（行首需有 ":"），返回 dict 或 None。
+
+    这里只接受已知数据帧类型；命令回显和噪声片段直接返回 None，
+    避免上层把它们当作有效 DVLData 落入 parsed/TB 文件。
     """
     if not line:
         return None
@@ -288,8 +296,7 @@ def parse_line(line: str) -> Optional[Dict]:
 
     fn = _PARSERS.get(msg)
     if fn is None:
-        # 未知类型也返回 src，便于上层记录/统计
-        return {"src": msg}
+        return None
 
     try:
         pkt = fn(payload)
@@ -302,18 +309,26 @@ def parse_line(line: str) -> Optional[Dict]:
 
 def parse_lines(raw: str) -> List[Dict]:
     """
-    一行可能含多帧：使用 ':' 切块，每块前补 ':' 再逐帧解析。
-    解析成功的帧以 dict 形式输出；失败的帧跳过。
+    一行可能含多帧。
+
+    旧实现按所有 ':' 生切，真实样本中会把 `CZ` 回显、乱码和半截 payload
+    误切成伪帧；这里改为只从已知数据帧起点切块。
     """
     if not raw:
         return []
     s = _strip_quotes(raw)
+    if ":" not in s:
+        return []
 
-    # 切块（保留帧界定符）
-    chunks = [":" + c for c in s.split(":") if c]  # 丢弃空块
+    starts = [m.start() for m in _FRAME_START_RE.finditer(s)]
+    if not starts:
+        return []
+
     out: List[Dict] = []
-    for ck in chunks:
-        pkt = parse_line(ck)
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if (idx + 1) < len(starts) else len(s)
+        chunk = s[start:end].strip()
+        pkt = parse_line(chunk)
         if pkt:
             out.append(pkt)
     return out

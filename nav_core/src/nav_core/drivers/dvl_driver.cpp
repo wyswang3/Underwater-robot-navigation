@@ -128,6 +128,7 @@ bool DvlDriver::init(const DvlConfig& cfg,
 
     stop_requested_.store(false);
     running_.store(false);
+    port_open_.store(false);
 
     n_lines_.store(0);
     n_parsed_ok_.store(0);
@@ -233,6 +234,7 @@ void DvlDriver::stop() noexcept {
 
 bool DvlDriver::openPort() {
     if (fd_ >= 0) {
+        port_open_.store(true);
         return true;
     }
 
@@ -240,6 +242,7 @@ bool DvlDriver::openPort() {
     if (fd_ < 0) {
         std::cerr << "[DVL] open(" << port_ << ") failed: "
                   << std::strerror(errno) << "\n";
+        port_open_.store(false);
         return false;
     }
 
@@ -249,6 +252,7 @@ bool DvlDriver::openPort() {
                   << std::strerror(errno) << "\n";
         ::close(fd_);
         fd_ = -1;
+        port_open_.store(false);
         return false;
     }
 
@@ -278,11 +282,13 @@ bool DvlDriver::openPort() {
                   << std::strerror(errno) << "\n";
         ::close(fd_);
         fd_ = -1;
+        port_open_.store(false);
         return false;
     }
 
     std::cerr << "[DVL] serial opened: " << port_
               << " @" << baud_ << "\n";
+    port_open_.store(true);
     return true;
 }
 
@@ -292,6 +298,7 @@ void DvlDriver::closePort() noexcept {
         fd_ = -1;
         std::cerr << "[DVL] serial closed\n";
     }
+    port_open_.store(false);
 }
 
 // ============================================================================
@@ -350,6 +357,10 @@ void DvlDriver::threadFunc() {
             continue;
         }
         if (n == 0) {
+            // 串口主端断开/USB 重枚举时，PTY/tty 读可能直接返回 EOF。
+            // 显式 closePort() 让上层监督逻辑能够进入重连状态，而不是继续盯着旧 fd。
+            std::cerr << "[DVL] read() returned EOF, treating device as disconnected\n";
+            closePort();
             continue;
         }
 
@@ -384,11 +395,13 @@ void DvlDriver::threadFunc() {
             auto ts = tb::stamp("dvl0", tb::SensorKind::DVL);
 
             DvlRawData raw{};
-            raw.mono_ns = ts.host_time_ns;
-            raw.est_ns  = ts.corrected_time_ns;
+            raw.recv_mono_ns   = ts.host_time_ns;
+            raw.sensor_time_ns = ts.corrected_time_ns;
+            raw.mono_ns = (raw.sensor_time_ns > 0) ? raw.sensor_time_ns : raw.recv_mono_ns;
+            raw.est_ns  = raw.mono_ns;
             raw.parsed  = std::move(parsed);
 
-            last_rx_mono_ns_.store(raw.mono_ns);
+            last_rx_mono_ns_.store(raw.recv_mono_ns);
 
             // 5) 直接回调 Raw（不再在驱动内做过滤/Frame 生成）
             handleRawSample(raw);
@@ -491,6 +504,9 @@ bool makeDvlRawSample(const DvlRawData& in,
     out = DvlRawSample{};  // 全部清零
 
     // 时间戳
+    out.sensor_time_ns = in.sensor_time_ns;
+    out.recv_mono_ns = in.recv_mono_ns;
+    out.consume_mono_ns = 0;
     out.mono_ns = in.mono_ns;
     out.est_ns  = in.est_ns;
 

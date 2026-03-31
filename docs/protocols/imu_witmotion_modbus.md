@@ -37,7 +37,7 @@ HWT9073 使用一种非常“特别”的 Modbus 模式：
 因此驱动的核心流程是：
 
 ```
-WitReadReg(AX, 16)         # 请求读取 AX 开始的 16 个寄存器
+WitReadReg(AX, 15)         # 请求读取 AX 开始的 15 个寄存器
 ↓
 SDK 生成 Modbus 字节流
 ↓
@@ -107,9 +107,13 @@ nav_core/src/imu_driver_wit.cpp
 
 设备内部更新率默认 **100Hz**，因此我们的驱动以相同频率查询：
 
-* 每 10ms 执行一次 `WitReadReg(AX, 16)`
+* 每 10ms 执行一次 `WitReadReg(AX, 15)`
 * 设置一个 **5ms 接收窗口**，使用 `select()` + `read()` 抽取响应字节
 * 每个字节交给 `WitSerialDataIn(byte)`
+
+说明：
+当前在线 runtime 轮询的是 `0x34..0x42`，覆盖 acc / gyro / mag / 高精度姿态角；
+`TEMP905x(0x43)` 不在这一轮轮询包内，因此温度当前不作为在线链路判据。
 
 供参考：
 
@@ -391,7 +395,7 @@ Modbus 帧结构：
 [Data...]
 ```
 
-示例读取 16 个寄存器：
+示例读取 15 个寄存器：
 
 ```python
 # 读寄存器指令（使用标准 Modbus 0x03）：
@@ -399,7 +403,7 @@ req = bytes([
     0x50,        # addr
     0x03,        # read holding register
     0x00, 0x34,  # start reg = AX = 0x34
-    0x00, 0x10,  # count = 16
+    0x00, 0x0f,  # count = 15
     crc_lo, crc_hi
 ])
 ser.write(req)
@@ -408,14 +412,14 @@ ser.write(req)
 然后读取服务器返回的 Modbus 帧，解析每个寄存器（2字节）：
 
 ```python
-resp = ser.read(2 + 2 + 16*2 + 2)
+resp = ser.read(2 + 2 + 15*2 + 2)
 ```
 
 并拆解成：
 
 ```python
 values = []
-for i in range(16):
+for i in range(15):
     high = resp[3 + i*2]
     low  = resp[3 + i*2 + 1]
     values.append((high<<8) | low)
@@ -509,4 +513,3 @@ data/YYYY-MM-DD/imu/raw_XXXX.csv
 * **易维护（清晰职责）**
 
 ---
-

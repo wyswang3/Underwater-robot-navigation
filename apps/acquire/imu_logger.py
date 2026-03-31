@@ -30,6 +30,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from uwnav.io.timebase import SensorKind, stamp
+from uwnav.io.acquisition_diagnostics import SensorRunDiagnostics
 from uwnav.sensors.imu import IMUReader, IMUResult
 
 
@@ -215,7 +216,7 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="IMU logger for long-running navigation data acquisition (timebase unified)"
     )
-    ap.add_argument("--port", default="/dev/ttyUSB0", help="IMU 串口 (默认 /dev/ttyUSB0)")
+    ap.add_argument("--port", default="/dev/ttyUSB1", help="IMU 串口 (默认 /dev/ttyUSB1)")
     ap.add_argument("--baud", type=int, default=230400, help="波特率 (默认 230400)")
     ap.add_argument("--addr", type=lambda x: int(x, 0), default=0x50, help="Modbus 地址（hex，如 0x50）")
 
@@ -245,47 +246,88 @@ def main():
     logging.info(f"[IMU] data_root={data_root}")
     logging.info(f"[IMU] 今日目录={out_dir}")
 
+    diag = SensorRunDiagnostics(out_dir, "imu_capture", "IMU_HWT9073")
+    diag.set_meta("port", args.port)
+    diag.set_meta("baud", args.baud)
+    diag.set_meta("addr", hex(args.addr))
+    diag.set_meta("data_root", str(data_root))
+
+    port_path = Path(args.port)
+    if not port_path.exists():
+        diag.warn_once(
+            "imu_serial_path_missing",
+            "configured IMU serial path does not exist before open",
+            port=args.port,
+        )
+
     raw_writer = RawIMUWriter(out_dir)
     min_writer = MinimalIMUWriterTB(out_dir)
+    diag.note_file("imu_raw_csv", raw_writer._path)
+    diag.note_file("imu_min_csv", min_writer._path)
 
-    stats = {"raw": 0, "min": 0, "start_t": time.time()}
+    stats = {"raw": 0, "min": 0, "callback_error": 0, "start_t": time.time()}
     stop = {"flag": False}
+    runtime_error = {"msg": ""}
+
+    def _on_imu_event(level: str, code: str, message: str, **details):
+        diag.bump(f"event_{level}")
+        diag.event(level, code, message, **details)
 
     def imu_callback(res: IMUResult):
-        ts = stamp("imu0", SensorKind.IMU)
-        mono_ns = int(ts.host_time_ns)
-        est_ns  = int(ts.corrected_time_ns)
+        try:
+            ts = stamp("imu0", SensorKind.IMU)
+            mono_ns = int(ts.host_time_ns)
+            est_ns = int(ts.corrected_time_ns)
 
-        acc = (float(res.acc_raw[0]), float(res.acc_raw[1]), float(res.acc_raw[2]))
-        gyr = (float(res.gyr_raw[0]), float(res.gyr_raw[1]), float(res.gyr_raw[2]))  # AsX/Y/Z
+            acc = (float(res.acc_raw[0]), float(res.acc_raw[1]), float(res.acc_raw[2]))
+            gyr = (float(res.gyr_raw[0]), float(res.gyr_raw[1]), float(res.gyr_raw[2]))
 
-        mag = _opt3(res.mag_raw)
-        euler_deg = _opt3(res.euler_deg)
-        temperature_c = res.temperature_c
+            mag = _opt3(res.mag_raw)
+            euler_deg = _opt3(res.euler_deg)
+            temperature_c = res.temperature_c
 
-        # RAW：严格对齐字段集
-        raw_writer.write(
-            mono_ns=mono_ns,
-            est_ns=est_ns,
-            t_unix=_safe_float(res.t_unix, 0.0),
-            acc=acc,
-            gyr=gyr,
-            mag=mag,
-            euler_deg=euler_deg,
-            temperature_c=temperature_c
-        )
-        stats["raw"] += 1
+            # RAW：严格对齐字段集
+            raw_writer.write(
+                mono_ns=mono_ns,
+                est_ns=est_ns,
+                t_unix=_safe_float(res.t_unix, 0.0),
+                acc=acc,
+                gyr=gyr,
+                mag=mag,
+                euler_deg=euler_deg,
+                temperature_c=temperature_c
+            )
+            stats["raw"] += 1
+            diag.bump("raw_samples")
 
-        # MIN：对齐/融合表
-        min_writer.write(
-            mono_ns=mono_ns,
-            est_ns=est_ns,
-            acc=acc,
-            gyr=gyr,
-            yaw_deg=res.yaw_deg,
-            euler_deg=euler_deg
-        )
-        stats["min"] += 1
+            # MIN：对齐/融合表
+            min_writer.write(
+                mono_ns=mono_ns,
+                est_ns=est_ns,
+                acc=acc,
+                gyr=gyr,
+                yaw_deg=res.yaw_deg,
+                euler_deg=euler_deg
+            )
+            stats["min"] += 1
+            diag.bump("min_samples")
+
+            if res.yaw_deg is None:
+                diag.bump("calibrating_samples")
+            if mag is None:
+                diag.bump("samples_without_mag")
+            if temperature_c is None:
+                diag.bump("samples_without_temp")
+        except Exception as e:
+            stats["callback_error"] += 1
+            logging.warning(f"[IMU] callback write error: {e}")
+            if (stats["callback_error"] == 1) or (stats["callback_error"] % 20 == 0):
+                diag.warn(
+                    "imu_callback_write_error",
+                    "imu callback write failed",
+                    error=str(e),
+                    callback_error_count=stats["callback_error"],
+                )
 
     logging.info(f"[IMU] 初始化串口 {args.port} @ {args.baud}, Addr={hex(args.addr)}")
     imu = IMUReader(
@@ -293,12 +335,24 @@ def main():
         baud=args.baud,
         addr=args.addr,
         on_result=imu_callback,
+        on_event=_on_imu_event,
         csv_dir=None  # 关闭 IMUReader 自带落盘，统一由本脚本管理
     )
 
-    imu.open()
-    imu.start()
-    logging.info("[IMU] 启动采集")
+    try:
+        imu.open()
+        imu.start()
+        logging.info("[IMU] 启动采集")
+    except Exception as e:
+        logging.error(f"[IMU] 启动失败: {e}", exc_info=True)
+        raw_writer.close()
+        min_writer.close()
+        diag.finalize(
+            "open_failed",
+            f"imu open/start failed: {e}",
+            imu_stats=imu.stats(),
+        )
+        return
 
     def _on_sig(sig, frame):
         logging.info(f"[IMU] 收到信号 {sig}，准备退出…")
@@ -319,22 +373,46 @@ def main():
                     min_rate = stats["min"] / dt if dt > 0 else 0.0
                     logging.info(
                         f"[STAT] raw={stats['raw']} ({raw_rate:.1f}/s), "
-                        f"min={stats['min']} ({min_rate:.1f}/s)"
+                        f"min={stats['min']} ({min_rate:.1f}/s), imu=({imu.stats()})"
                     )
                     last_stat_t = now
     except KeyboardInterrupt:
         pass
     except Exception as e:
+        runtime_error["msg"] = str(e)
         logging.error(f"[IMU] 运行时异常: {e}", exc_info=True)
     finally:
         logging.info("[IMU] 关闭设备…")
         try:
             imu.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            diag.warn("imu_stop_failed", "imu stop failed", error=str(e))
 
         raw_writer.close()
         min_writer.close()
+
+        imu_stats = imu.stats()
+        diag.set_meta("imu_stats", imu_stats)
+
+        if runtime_error["msg"]:
+            status = "runtime_error"
+            message = f"imu logger runtime error: {runtime_error['msg']}"
+        elif stats["raw"] == 0:
+            status = "empty_capture"
+            message = "imu capture finished without any sample"
+            diag.warn("imu_empty_capture", message, port=args.port)
+        else:
+            status = "ok"
+            message = "imu capture finished with data"
+
+        diag.finalize(
+            status,
+            message,
+            raw_count=stats["raw"],
+            min_count=stats["min"],
+            callback_error_count=stats["callback_error"],
+            runtime_s=round(max(0.0, time.time() - stats["start_t"]), 3),
+        )
         logging.info("[IMU] logger 完整退出。")
 
 

@@ -34,6 +34,8 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.append(str(project_root))
 
 from uwnav.io.timebase import stamp, SensorKind
+from uwnav.io.acquisition_diagnostics import SensorRunDiagnostics
+from uwnav.io.channel_frames import ChannelFrameBuffer, parse_channel_line
 from uwnav.drivers.imu.WitHighModbus.serial_io_tools import SerialReaderThread
 
 # ===================== RollingCSVWriter =====================
@@ -215,8 +217,8 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Volt32 logger (multi-channel voltage/current board, timebase unified)"
     )
-    ap.add_argument("--port", default="/dev/ttyUSB1",
-                    help="串口设备，例如 /dev/ttyUSB1")
+    ap.add_argument("--port", default="/dev/ttyUSB0",
+                    help="串口设备，例如 /dev/ttyUSB0")
     ap.add_argument("--baud", type=int, default=115200,
                     help="波特率，默认 115200")
     ap.add_argument("--channels", type=int, default=16,
@@ -262,6 +264,19 @@ def main():
     logging.info(f"[VOLT] data_root = {data_root}")
     logging.info(f"[VOLT] 今日目录 = {day_volt_dir}")
 
+    diag = SensorRunDiagnostics(day_volt_dir, "volt_capture", "VOLT32")
+    diag.set_meta("port", args.port)
+    diag.set_meta("baud", args.baud)
+    diag.set_meta("channels", args.channels)
+    diag.set_meta("data_root", str(data_root))
+
+    if not Path(args.port).exists():
+        diag.warn_once(
+            "volt_serial_path_missing",
+            "configured Volt32 serial path does not exist before open",
+            port=args.port,
+        )
+
     n_channels = int(args.channels)
 
     # === 关键修改 1：时间字段与 IMU/DVL 对齐 ===
@@ -278,37 +293,77 @@ def main():
         keep_days=args.keep_days,
         autoflush_every=args.autoflush_every,
     )
+    diag.note_file("motor_data_csv", writer.current_path)
 
     shutdown = threading.Event()
-    buf = ChannelBuffer(n_channels=n_channels)
+    frame_buf = ChannelFrameBuffer(n_channels=n_channels)
     frames_written = {"n": 0}
     sniff_count = {"n": 0}
+    parse_error_count = {"n": 0}
+    runtime_error = {"msg": ""}
 
     DEBUG_RAW_SNIFF = max(0, int(args.debug_raw_sniff))
     DEBUG_RAW_ECHO = bool(args.debug_raw_echo)
     FLUSH_SEC = max(0, int(args.flush_sec))
     STAT_EVERY = float(args.stat_every)
+    allowed_units = {"", "V", "A", "mV", "mA"}
 
     # ---- 串口回调 ----
     def on_serial_line(payload: str):
-        nonlocal sniff_count
-
         # 调试输出部分原始行
         if DEBUG_RAW_ECHO or (DEBUG_RAW_SNIFF and sniff_count["n"] < DEBUG_RAW_SNIFF):
             print(f"[RAW ] {repr(payload)}")
             sniff_count["n"] += 1
 
-        parsed = buf.parse_line(payload)
-        if not parsed:
+        parsed = parse_channel_line(payload)
+        if parsed is None:
+            diag.bump("malformed_lines")
+            parse_error_count["n"] += 1
+            if (parse_error_count["n"] == 1) or (parse_error_count["n"] % 20 == 0):
+                diag.warn(
+                    "volt_malformed_line",
+                    "serial line did not match CHx:value format",
+                    raw_line=payload,
+                    malformed_count=parse_error_count["n"],
+                )
             return
-        ch_key, value_str = parsed
-        row_values = buf.update(ch_key, value_str)
+
+        if parsed.index >= n_channels:
+            diag.bump("out_of_range_channels")
+            diag.warn_once(
+                "volt_channel_out_of_range",
+                "received channel index beyond configured channel count",
+                channel=parsed.channel,
+                configured_channels=n_channels,
+            )
+            return
+
+        diag.bump("channel_lines")
+        if parsed.numeric_value is None:
+            diag.bump("non_numeric_values")
+            diag.warn(
+                "volt_non_numeric_value",
+                "channel line carried a non-numeric payload",
+                channel=parsed.channel,
+                raw_value=parsed.raw_value,
+            )
+        if parsed.unit not in allowed_units:
+            diag.bump("unexpected_units")
+            diag.warn_once(
+                "volt_unexpected_unit",
+                "channel line used an unexpected engineering unit",
+                channel=parsed.channel,
+                unit=parsed.unit,
+            )
+        if parsed.unit:
+            diag.bump(f"unit_{parsed.unit}")
+
+        row_values = frame_buf.update(parsed)
         if row_values is None:
             return
 
         # 一帧齐全 → 写入 CSV
-        # === 关键修改 2：复用 IMU 的时间基，保证与 IMU/DVL 对齐 ===
-        ts = stamp("volt0", SensorKind.OTHER) # 与 imu_logger 使用的 key/kind 一致
+        ts = stamp("volt0", SensorKind.OTHER)
         mono_ns = ts.host_time_ns
         est_ns = ts.corrected_time_ns
         mono_s = mono_ns / 1e9
@@ -322,6 +377,8 @@ def main():
             *row_values,
         ])
         frames_written["n"] += 1
+        diag.bump("frames_written")
+        diag.note_file("motor_data_csv", writer.current_path)
 
     # ---- 串口线程 ----
     serial_th = SerialReaderThread(
@@ -336,6 +393,18 @@ def main():
     serial_th.start()
     logging.info(f"[VOLT] 串口已启动：{args.port} @ {args.baud}")
 
+    time.sleep(0.2)
+    if not serial_th.is_alive():
+        writer.flush()
+        writer.close()
+        diag.finalize(
+            "open_failed",
+            "Volt32 serial reader exited immediately after start",
+            frames_written=frames_written["n"],
+        )
+        logging.error("[VOLT] 串口线程启动后立即退出。")
+        return
+
     # ---- 周期性 flush 线程（可选） ----
     def flush_loop():
         while not shutdown.wait(timeout=FLUSH_SEC if FLUSH_SEC > 0 else 1e9):
@@ -344,6 +413,7 @@ def main():
                 logging.debug("[VOLT] 周期性刷新完成")
             except Exception as e:
                 logging.warning(f"[VOLT] 周期性刷新失败：{e}")
+                diag.warn("volt_periodic_flush_failed", "volt periodic flush failed", error=str(e))
 
     if FLUSH_SEC > 0:
         flush_th = threading.Thread(target=flush_loop, daemon=True)
@@ -374,6 +444,9 @@ def main():
                     last_stat_t = now
     except KeyboardInterrupt:
         shutdown.set()
+    except Exception as e:
+        runtime_error["msg"] = str(e)
+        logging.error(f"[VOLT] 运行时异常：{e}", exc_info=True)
 
     # ---- 收尾 ----
     logging.info("[VOLT] 正在收尾…")
@@ -382,8 +455,28 @@ def main():
         flush_th.join(timeout=2.0)
     writer.flush()
     writer.close()
+    diag.note_file("motor_data_csv", writer.current_path)
     logging.info(
         f"[VOLT] 总写入帧数：{frames_written['n']}  最后文件：{writer.current_path}"
+    )
+
+    if runtime_error["msg"]:
+        status = "runtime_error"
+        message = f"volt logger runtime error: {runtime_error['msg']}"
+    elif frames_written["n"] == 0:
+        status = "empty_capture"
+        message = "volt capture finished without a complete frame"
+        diag.warn("volt_empty_capture", message, port=args.port)
+    else:
+        status = "ok"
+        message = "volt capture finished with data"
+
+    diag.finalize(
+        status,
+        message,
+        frames_written=frames_written["n"],
+        malformed_lines=diag.bump("malformed_lines", 0),
+        runtime_s=round(max(0.0, time.time() - start_t), 3),
     )
     logging.info("[VOLT] 已退出。")
 

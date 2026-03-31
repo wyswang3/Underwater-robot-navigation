@@ -148,8 +148,12 @@ class DeviceModel:
             t = threading.Thread(target=self.readDataTh, args=("Data-Received-Thread", 10,))
             t.start()
             print("设备打开成功")
+            return True
         except SerialException:
+            self.serialPort = None
+            self.isOpen = False
             print("打开" + self.serialConfig.portName + "失败")
+            return False
 
     # 监听串口数据线程 Listening to serial data threads
     def readDataTh(self, threadName, delay):
@@ -266,10 +270,15 @@ class DeviceModel:
 
     # 发送串口数据 Sending serial port data
     def sendData(self, data):
+        if (not self.isOpen) or self.serialPort is None:
+            # 串口未打开时直接跳过，避免启动失败后后台线程持续刷屏。
+            return False
         try:
             self.serialPort.write(data)
+            return True
         except Exception as ex:
             print(ex)
+            return False
 
     # 读取寄存器 read register
     def readReg(self, regAddr, regCount):
@@ -341,6 +350,10 @@ class DeviceModel:
 
     # 开始循环读取 Start loop reading
     def startLoopRead(self):
+        if (not self.isOpen) or self.serialPort is None:
+            print("设备未打开，跳过循环读取启动")
+            self.loop = False
+            return
         # 循环读取控制
         self.loop = True
         # 开启读取线程 Enable read thread

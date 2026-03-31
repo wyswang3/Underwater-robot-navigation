@@ -75,6 +75,9 @@ bool DvlRtPreprocessor::process(const DvlRawSample& in,
 
     // 初始化输出
     out = DvlRtOutput{};
+    out.sensor_time_ns = in.sensor_time_ns;
+    out.recv_mono_ns = in.recv_mono_ns;
+    out.consume_mono_ns = in.consume_mono_ns;
     out.mono_ns     = in.mono_ns;
     out.est_ns      = in.est_ns;
     out.bottom_lock = in.bottom_lock;

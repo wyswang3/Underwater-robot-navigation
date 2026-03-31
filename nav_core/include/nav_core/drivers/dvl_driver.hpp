@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 
+#include "nav_core/drivers/serial_binding.hpp"
 #include "nav_core/core/types.hpp"            // MonoTimeNs / SysTimeNs
 #include "nav_core/drivers/dvl_protocol.hpp"  // TrackType / CoordFrame / ParsedLine / CommandBytes
 
@@ -47,15 +48,17 @@ using DvlCommandBytes = dvl_protocol::CommandBytes;
  *
  * 说明：
  *   - DvlRawData 不做任何工程过滤，也不转换坐标系；
- *   - 仅仅是：“这一行 PD6/EPD6 报文” + “本机时间戳 (Mono/Sys)”；
+ *   - 仅仅是：“这一行 PD6/EPD6 报文” + “采样/接收时间元数据”；
  *   - 上层（例如 DVL_logger / 预处理模块）负责：
  *       * 根据 parsed.src / coord_frame 分类为 BI/BE/BD；
 ///       * 做质量门限 / 速度单位转换 / ENU 统一；
 ///       * 输出 CSV 供 Python 或 ESKF 使用。
  */
 struct DvlRawData {
-    MonoTimeNs    mono_ns{0};   ///< 本机单调时钟（steady_clock）时间 [ns]
-    SysTimeNs     est_ns{0};    ///< 估计的 UNIX 时间基 [ns]（可选，用于统一日志）
+    MonoTimeNs    sensor_time_ns{0};   ///< 样本对应采样时刻（steady ns）
+    MonoTimeNs    recv_mono_ns{0};     ///< 驱动线程收到/解码该帧时刻（steady ns）
+    MonoTimeNs    mono_ns{0};          ///< 规范化样本时间（steady ns）
+    SysTimeNs     est_ns{0};           ///< 兼容字段：当前与 mono_ns 保持一致
     DvlParsedLine parsed;       ///< 协议字段（来自 dvl_protocol::parse_pd6_line）
 
     // 便捷访问函数（避免上层频繁写 parsed.xxx）
@@ -91,6 +94,7 @@ struct DvlRawData {
 struct DvlConfig {
     std::string port;              ///< 串口路径，如 "/dev/ttyUSB0"
     int         baud{115200};      ///< 串口波特率
+    SerialBindingConfig binding{}; ///< 稳定路径/候选路径/身份校验/超时配置
 
     bool auto_reconnect{false};    ///< 预留：是否启用自动重连（当前未实现）
     bool send_startup_cmds{true};  ///< 是否在 start() 时自动下发 CZ/PR/PM/CS
@@ -170,6 +174,9 @@ public:
 
     /// @brief 当前是否在运行（后台线程处于 active 状态）。
     [[nodiscard]] bool running() const noexcept { return running_.load(); }
+
+    /// @brief 串口是否已打开。
+    [[nodiscard]] bool isPortOpen() const noexcept { return port_open_.load(); }
 
     // ==================== 连接健康判定 ====================
 
@@ -264,6 +271,7 @@ private:
     std::thread       th_;         ///< 后台读线程
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> port_open_{false};
 
     RawCallback on_raw_{};         ///< 原始帧回调
 

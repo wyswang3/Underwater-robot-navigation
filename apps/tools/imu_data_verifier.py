@@ -207,8 +207,8 @@ class IMURecorder:
                 euler = None
 
             # 温度（如有）
-            if hasattr(res, "temperature") and res.temperature is not None:
-                temp_c: Optional[float] = float(res.temperature)
+            if hasattr(res, "temperature_c") and res.temperature_c is not None:
+                temp_c: Optional[float] = float(res.temperature_c)
             else:
                 temp_c = None
 

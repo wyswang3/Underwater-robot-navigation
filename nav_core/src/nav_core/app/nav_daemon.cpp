@@ -84,6 +84,9 @@ int main(int argc, char** argv)
     std::fprintf(stderr,
                  "[nav_daemon] starting with config=%s eskf_config=%s\n",
                  opt.config_path.c_str(), opt.eskf_config_path.c_str());
+#if defined(NAV_CORE_GIT_SHA)
+    std::fprintf(stderr, "[nav_daemon] build git_sha=%s\n", NAV_CORE_GIT_SHA);
+#endif
 
     // 1) 读取 nav_daemon 配置
     app::NavDaemonConfig cfg{};

@@ -462,11 +462,12 @@ class DVLSerialInterface:
                  parity: str = "N", stopbits: float = 1,
                  rtscts: bool = False, dsrdtr: bool = False, xonxoff: bool = False,
                  no_dtr: bool = False, no_rts: bool = False,
-                 on_raw=None, on_parsed=None):
+                 on_raw=None, on_parsed=None, on_event=None):
         self.port = port
         self.baud = baud
         self.on_raw = on_raw
         self.on_parsed = on_parsed
+        self.on_event = on_event
 
         self.parity = {
             "N": serial.PARITY_NONE,
@@ -489,6 +490,19 @@ class DVLSerialInterface:
         self._n_rx = 0
         self._n_parsed_ok = 0
         self._n_parsed_fail = 0
+        self._n_open_fail = 0
+        self._n_idle_warn = 0
+        self._n_raw_callback_error = 0
+        self._n_parsed_callback_error = 0
+        self._n_parse_empty = 0
+        self._n_read_error = 0
+    def _emit_event(self, level: str, code: str, message: str, **details: Any) -> None:
+        if self.on_event is None:
+            return
+        try:
+            self.on_event(level=level, code=code, message=message, **details)
+        except Exception:
+            pass
 
     # ------ open/close ------
 
@@ -519,9 +533,26 @@ class DVLSerialInterface:
                 f"[DVL-SERIAL] open {self.port} @ {self.baud} "
                 f"(8{'N' if self.parity == serial.PARITY_NONE else 'E' if self.parity == serial.PARITY_EVEN else 'O'}1)"
             )
+            self._emit_event(
+                "info",
+                "dvl_serial_opened",
+                "dvl serial opened",
+                port=self.port,
+                baud=self.baud,
+            )
             return True
         except serial.SerialException as e:
+            self._n_open_fail += 1
             logging.error(f"[DVL-SERIAL] open failed: {e}")
+            self._emit_event(
+                "error",
+                "dvl_serial_open_failed",
+                "dvl serial open failed",
+                port=self.port,
+                baud=self.baud,
+                error=str(e),
+                open_fail_count=self._n_open_fail,
+            )
             return False
 
     def close(self):
@@ -539,30 +570,37 @@ class DVLSerialInterface:
         从串口读取一帧（以 '\\r' 结尾），去掉 CR/LF，返回去空白后的 ASCII 字符串。
         """
         try:
-            raw = self.serial_conn.read_until(b"\r")
+            raw = self.serial_conn.read_until(b"\\r")
             if not raw:
                 return None
-            s = raw.replace(b"\r", b"").replace(b"\n", b"").decode("ascii", errors="ignore").strip()
+            s = raw.replace(b"\\r", b"").replace(b"\\n", b"").decode("ascii", errors="ignore").strip()
             return s if s else None
-        except Exception:
+        except Exception as exc:
+            self._n_read_error += 1
+            if (self._n_read_error == 1) or (self._n_read_error % 20 == 0):
+                self._emit_event(
+                    "warn",
+                    "dvl_serial_read_error",
+                    "dvl serial read failed",
+                    error=str(exc),
+                    read_error_count=self._n_read_error,
+                )
             return None
-
     @staticmethod
     def _pkt_to_dvldata(pkt: Dict[str, Any], ts: float) -> Optional[DVLData]:
         """
         将 protocol.parse_lines() 返回的单帧字典映射到 DVLData。
 
-        约定（可根据 protocol.py 实际字段名微调）：
-        - pkt["src"] : "BI"/"BS"/"BE"/"BD"/"WI"/"WS"/"WE"/"WD"/...
-        - 速度字段   : pkt["ve"], pkt["vn"], pkt["vu"] （单位 mm/s）
-        - 距离字段   : pkt["e"], pkt["n"], pkt["u"] 或 pkt["de"],"dn","du"（看你实际协议）
-        - 深度字段   : pkt["depth"]
-        - 有效位     : pkt["valid"] = "A"/"V"/其他
+        这里只接 BI/BS/BE/BD/WI/WS/WE/WD 这类真正会进入 parsed/TB 的
+        运动/距离帧；SA/TS 和噪声片段保留在 raw logger，不下沉到 DVLData。
         """
         if not pkt:
             return None
 
         src = str(pkt.get("src", "")).upper()
+        allowed_src = {"BI", "BS", "BE", "BD", "WI", "WS", "WE", "WD"}
+        if src not in allowed_src:
+            return None
 
         # 通用数值解析（会把 8888/88888/9999 等占位符映射为 None）
         ve = _to_float(pkt.get("ve"))
@@ -648,6 +686,14 @@ class DVLSerialInterface:
                         f"[DVL] idle > {WARN_IF_IDLE_SEC:.1f}s without data. "
                         f"Check port/baud/cabling."
                     )
+                    self._n_idle_warn += 1
+                    self._emit_event(
+                        "warn",
+                        "dvl_idle_timeout",
+                        "dvl idle beyond warning threshold",
+                        idle_s=round(now - self._last_rx_ts, 3),
+                        idle_warn_count=self._n_idle_warn,
+                    )
                     last_warn = now
                 time.sleep(READ_IDLE_SLEEP)
                 continue
@@ -659,8 +705,16 @@ class DVLSerialInterface:
             if self.on_raw:
                 try:
                     self.on_raw(ts, line, "")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._n_raw_callback_error += 1
+                    if (self._n_raw_callback_error == 1) or (self._n_raw_callback_error % 20 == 0):
+                        self._emit_event(
+                            "warn",
+                            "dvl_raw_callback_error",
+                            "dvl raw callback raised exception",
+                            error=str(exc),
+                            callback_error_count=self._n_raw_callback_error,
+                        )
 
             self._n_rx += 1
 
@@ -672,19 +726,63 @@ class DVLSerialInterface:
                 frames = parse_lines(line)  # 支持一行多帧
                 if not frames:
                     self._n_parsed_fail += 1
+                    self._n_parse_empty += 1
+                    if (self._n_parse_empty == 1) or (self._n_parse_empty % 20 == 0):
+                        self._emit_event(
+                            "warn",
+                            "dvl_parse_empty",
+                            "dvl parser returned no frame for a raw line",
+                            raw_line=line,
+                            parse_empty_count=self._n_parse_empty,
+                        )
                     continue
                 for pkt in frames:
                     try:
                         d = self._pkt_to_dvldata(pkt, ts)
-                        if d and self.on_parsed:
-                            self.on_parsed(d)
-                            self._n_parsed_ok += 1
-                        else:
+                        if d is None:
                             self._n_parsed_fail += 1
-                    except Exception:
+                            self._emit_event(
+                                "warn",
+                                "dvl_packet_mapped_none",
+                                "dvl packet mapped to empty record",
+                                packet=pkt,
+                            )
+                            continue
+                        if self.on_parsed:
+                            try:
+                                self.on_parsed(d)
+                            except Exception as exc:
+                                self._n_parsed_callback_error += 1
+                                self._n_parsed_fail += 1
+                                if (self._n_parsed_callback_error == 1) or (self._n_parsed_callback_error % 20 == 0):
+                                    self._emit_event(
+                                        "warn",
+                                        "dvl_parsed_callback_error",
+                                        "dvl parsed callback raised exception",
+                                        error=str(exc),
+                                        callback_error_count=self._n_parsed_callback_error,
+                                        src=d.src,
+                                    )
+                                continue
+                        self._n_parsed_ok += 1
+                    except Exception as exc:
                         self._n_parsed_fail += 1
-            except Exception:
+                        self._emit_event(
+                            "warn",
+                            "dvl_packet_parse_error",
+                            "dvl packet parse raised exception",
+                            error=str(exc),
+                            packet=pkt,
+                        )
+            except Exception as exc:
                 self._n_parsed_fail += 1
+                self._emit_event(
+                    "warn",
+                    "dvl_parse_lines_error",
+                    "dvl parse_lines raised exception",
+                    error=str(exc),
+                    raw_line=line,
+                )
 
         logging.info("[DVL-SERIAL] listen thread exit")
 
@@ -890,9 +988,19 @@ class DVLSerialInterface:
 
     # 统计信息 ------------------------------------------------------------
 
+    def stats_dict(self) -> Dict[str, int]:
+        return {
+            "rx": self._n_rx,
+            "parsed_ok": self._n_parsed_ok,
+            "parsed_fail": self._n_parsed_fail,
+            "open_fail": self._n_open_fail,
+            "idle_warn": self._n_idle_warn,
+            "raw_callback_error": self._n_raw_callback_error,
+            "parsed_callback_error": self._n_parsed_callback_error,
+            "parse_empty": self._n_parse_empty,
+            "read_error": self._n_read_error,
+        }
+
     def stats(self) -> str:
-        return (
-            f"rx={self._n_rx}, "
-            f"parsed_ok={self._n_parsed_ok}, "
-            f"parsed_fail={self._n_parsed_fail}"
-        )
+        st = self.stats_dict()
+        return ", ".join(f"{key}={value}" for key, value in st.items())

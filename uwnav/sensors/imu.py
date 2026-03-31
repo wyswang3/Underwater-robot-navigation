@@ -18,7 +18,7 @@ import time
 import threading
 from dataclasses import dataclass
 from queue import Queue, Empty
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -100,11 +100,13 @@ class IMUReader:
                  fs: float = DEFAULT_FS,
                  cutoff: float = DEFAULT_CUTOFF,
                  on_result: Optional[Callable[[IMUResult], None]] = None,
+                 on_event: Optional[Callable[..., None]] = None,
                  csv_dir: Optional[str] = None):
         self.port = port
         self.baud = baud
         self.addr = addr
         self.on_result = on_result
+        self.on_event = on_event
 
         # 实时滤波器：在 filters.py 内部完成“1秒静置校准 + 低通 + 航向角积分解缠”
         self.filter = RealTimeIMUFilter(fs=fs, cutoff=cutoff, calibrate=True)
@@ -117,9 +119,14 @@ class IMUReader:
 
         # 统计
         self._last_rx_unix = 0.0
+        self._last_idle_warn_unix = 0.0
         self._n_rx = 0
         self._n_drop = 0
         self._n_out = 0
+        self._n_invalid_required = 0
+        self._n_callback_error = 0
+        self._n_worker_error = 0
+        self._n_idle_warn = 0
 
         # 可选 CSV 落盘（轻量、非阻塞地 flush）
         self._csv_raw = None
@@ -154,6 +161,14 @@ class IMUReader:
                     "Yaw(deg)"
                 ])
 
+    def _emit_event(self, level: str, code: str, message: str, **details: Any) -> None:
+        if self.on_event is None:
+            return
+        try:
+            self.on_event(level=level, code=code, message=message, **details)
+        except Exception:
+            pass
+
     # ---------------- 设备生命周期 ----------------
     def open(self) -> None:
         """打开底层设备并开始回调采集（非阻塞）"""
@@ -166,7 +181,18 @@ class IMUReader:
             ADDR=self.addr,
             callback_method=self._on_device_sample  # 底层回调
         )
-        self._dev.openDevice()
+        opened = self._dev.openDevice()
+        if not opened or (not self._dev.isOpen):
+            self._emit_event(
+                "error",
+                "imu_serial_open_failed",
+                "imu serial open failed",
+                port=self.port,
+                baud=self.baud,
+                addr=hex(self.addr),
+            )
+            self._dev = None
+            raise RuntimeError(f"failed to open IMU serial port: {self.port}")
         self._dev.startLoopRead()
 
     def close(self) -> None:
@@ -224,6 +250,15 @@ class IMUReader:
         acc = _vec3_from_keys(data, "AccX", "AccY", "AccZ")
         gyr = _vec3_from_keys(data, "AsX",  "AsY",  "AsZ")  # deg/s
         if (acc is None) or (gyr is None):
+            self._n_invalid_required += 1
+            if (self._n_invalid_required == 1) or (self._n_invalid_required % 50 == 0):
+                self._emit_event(
+                    "warn",
+                    "imu_missing_required_fields",
+                    "imu sample missing Acc*/As* fields",
+                    count=self._n_invalid_required,
+                    keys=sorted(list(data.keys()))[:16],
+                )
             return
 
         # 可选字段：磁场 / 欧拉角 / 温度
@@ -250,10 +285,24 @@ class IMUReader:
                 self._n_drop += 1
             except Exception:
                 pass
+            if (self._n_drop == 1) or (self._n_drop % 20 == 0):
+                self._emit_event(
+                    "warn",
+                    "imu_queue_drop",
+                    "imu sample queue full; dropping oldest sample",
+                    drop_count=self._n_drop,
+                )
             try:
                 self._q.put_nowait(sample)
             except Exception:
                 self._n_drop += 1
+                if (self._n_drop == 1) or (self._n_drop % 20 == 0):
+                    self._emit_event(
+                        "warn",
+                        "imu_queue_drop",
+                        "imu sample queue full; failed to requeue latest sample",
+                        drop_count=self._n_drop,
+                    )
                 return
 
         self._n_rx += 1
@@ -266,8 +315,17 @@ class IMUReader:
             try:
                 item = self._q.get(timeout=0.1)
             except Empty:
-                if self._last_rx_unix and (time.time() - self._last_rx_unix > WARN_IF_IDLE_SEC):
+                now = time.time()
+                if self._last_rx_unix and (now - self._last_rx_unix > WARN_IF_IDLE_SEC) and (now - self._last_idle_warn_unix > 1.0):
                     print(f"[IMU] idle > {WARN_IF_IDLE_SEC:.1f}s without data. Check port/baud/mode.")
+                    self._last_idle_warn_unix = now
+                    self._n_idle_warn += 1
+                    self._emit_event(
+                        "warn",
+                        "imu_idle_timeout",
+                        "imu idle beyond warning threshold",
+                        idle_s=round(now - self._last_rx_unix, 3),
+                    )
                 continue
 
             res = self._process_one(item)
@@ -278,8 +336,16 @@ class IMUReader:
             if self.on_result:
                 try:
                     self.on_result(res)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._n_callback_error += 1
+                    if (self._n_callback_error == 1) or (self._n_callback_error % 20 == 0):
+                        self._emit_event(
+                            "warn",
+                            "imu_result_callback_error",
+                            "imu result callback raised exception",
+                            callback_errors=self._n_callback_error,
+                            error=str(exc),
+                        )
             self._n_out += 1
 
             # 轻量落盘（可选）
@@ -325,7 +391,18 @@ class IMUReader:
           - 滤波器内部会使用时间戳估计 dt 并完成校准与低通/航向角积分
           - 无论是否校准完成，RAW 扩展字段都透传给上层，便于“原始对照”
         """
-        out = self.filter.process_sample(s.t_unix, s.acc, s.gyr)
+        try:
+            out = self.filter.process_sample(s.t_unix, s.acc, s.gyr)
+        except Exception as exc:
+            self._n_worker_error += 1
+            self._emit_event(
+                "error",
+                "imu_filter_process_error",
+                "imu filter processing failed",
+                worker_errors=self._n_worker_error,
+                error=str(exc),
+            )
+            return None
 
         if out is None:
             # 校准期：只返回原始数据，滤波/航向角 None；但扩展字段照样回传
@@ -356,7 +433,15 @@ class IMUReader:
 
     # ---------------- 工具 ----------------
     def stats(self) -> dict:
-        return {"rx": self._n_rx, "drop": self._n_drop, "out": self._n_out}
+        return {
+            "rx": self._n_rx,
+            "drop": self._n_drop,
+            "out": self._n_out,
+            "invalid_required": self._n_invalid_required,
+            "callback_error": self._n_callback_error,
+            "worker_error": self._n_worker_error,
+            "idle_warn": self._n_idle_warn,
+        }
 
     def last_rx_age(self) -> float:
         return float("inf") if not self._last_rx_unix else (time.time() - self._last_rx_unix)

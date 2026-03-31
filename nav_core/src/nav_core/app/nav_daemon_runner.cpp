@@ -1,628 +1,182 @@
 // src/nav_core/app/nav_daemon_runner.cpp
 //
-// 角色：实现 nav_daemon 的完整业务管线：
-//   - 共享传感器状态 SharedSensorState
-//   - IMU / DVL 驱动初始化
-//   - ImuRtPreprocessor / DvlRtPreprocessor / EskfFilter / NavStatePublisher / BinLogger 初始化
-//   - 主循环 run_main_loop(..., stop_flag)
-//   - 对外统一入口 app::run_nav_daemon(...)
-//
-// main() 不再出现在本文件中。
+// 角色：
+//   - 作为 nav_daemon 的流程编排入口；
+//   - 负责初始化运行时对象，并驱动主循环按固定顺序调用各个子模块；
+//   - 尽量只保留“调度骨架”，不再内联 IMU/DVL 处理、发布和日志细节。
 
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <cstdio>
-#include <cstring>
-#include <filesystem>
-#include <mutex>
-#include <optional>
-#include <string>
 #include <thread>
-#include <ctime>
-#include <iostream>
 
 #include "nav_core/app/nav_daemon_config.hpp"
+#include "nav_core/app/nav_daemon_devices.hpp"
+#include "nav_core/app/nav_daemon_dvl_pipeline.hpp"
+#include "nav_core/app/nav_daemon_health_audit.hpp"
+#include "nav_core/app/nav_daemon_imu_pipeline.hpp"
+#include "nav_core/app/nav_daemon_logging.hpp"
+#include "nav_core/app/nav_daemon_loop_state.hpp"
+#include "nav_core/app/nav_daemon_publish.hpp"
 
-#include "nav_core/core/types.hpp"
-#include "nav_core/core/timebase.hpp"
-#include "nav_core/core/status.hpp"
-
-#include "nav_core/drivers/imu_driver_wit.hpp"
 #include "nav_core/drivers/dvl_driver.hpp"
-
+#include "nav_core/drivers/imu_driver_wit.hpp"
+#include "nav_core/estimator/eskf.hpp"
+#include "nav_core/io/bin_logger.hpp"
+#include "nav_core/io/nav_state_publisher.hpp"
 #include "nav_core/preprocess/dvl_rt_preprocessor.hpp"
 #include "nav_core/preprocess/imu_rt_preprocessor.hpp"
-
-#include "nav_core/estimator/eskf.hpp"
-
-#include "nav_core/io/nav_state_publisher.hpp"
-#include "nav_core/io/bin_logger.hpp"
-
-#include "shared/msg/nav_state.hpp"
+#include "nav_core/estimator/nav_health_monitor.hpp"
 
 namespace {
 
-using nav_core::MonoTimeNs;
-using nav_core::SysTimeNs;
-using nav_core::ImuFrame;
-using nav_core::ImuSample;
-using nav_core::DvlFrame;          // ESKF 那边用的 DvlSample = DvlFrame
-
-namespace app        = nav_core::app;
-namespace drivers    = nav_core::drivers;
+namespace app = nav_core::app;
+namespace drivers = nav_core::drivers;
+namespace estimator = nav_core::estimator;
+namespace io = nav_core::io;
 namespace preprocess = nav_core::preprocess;
-namespace estimator  = nav_core::estimator;
-namespace io         = nav_core::io;
-namespace smsg       = shared::msg;
-
-using DvlSample      = nav_core::DvlFrame;    // 方便后面写 update_dvl_xy
-using ProtoTrackType = nav_core::dvl_protocol::TrackType;               // = dvl_protocol::TrackType
-using drivers::DvlCoordFrame;                // = dvl_protocol::CoordFrame
-
-
-// ========== 简单时间工具 ==========
-
-inline MonoTimeNs monotonic_now_ns()
-{
-    using clock = std::chrono::steady_clock;
-    auto now    = clock::now().time_since_epoch();
-    return static_cast<MonoTimeNs>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()
-    );
-}
-
-inline SysTimeNs system_now_ns()
-{
-    using clock = std::chrono::system_clock;
-    auto now    = clock::now().time_since_epoch();
-    return static_cast<SysTimeNs>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()
-    );
-}
-
-// ========== IMU 帧 → 样本 转换工具 ==========
-
-inline void imu_frame_to_sample_raw(const ImuFrame& in, ImuSample& out)
-{
-    // 时间戳直接拷贝
-    out.mono_ns = in.mono_ns;
-    out.est_ns  = in.est_ns;
-
-    // 角速度 / 加速度 / 欧拉角
-    for (int i = 0; i < 3; ++i) {
-        out.ang_vel[i] = in.ang_vel[i];
-        out.lin_acc[i] = in.lin_acc[i];
-        out.euler[i]   = in.euler[i];
-    }
-
-    // 温度 / 有效性 / 状态
-    out.temperature = in.temperature;
-    out.valid       = in.valid;
-    out.status      = in.status;
-}
-
-// ========== 共享传感器状态（回调 → 主循环） ==========
-
-struct SharedSensorState {
-    std::mutex m;
-
-    std::optional<ImuFrame>               last_imu;
-    MonoTimeNs                            last_imu_mono_ns{0};
-
-    // DVL：保存“原始采样”（DvlRawSample），让主循环去调用 DvlRtPreprocessor
-    std::optional<preprocess::DvlRawSample> last_dvl_raw;
-    MonoTimeNs                              last_dvl_mono_ns{0};
-
-    std::uint64_t loop_counter{0};
-};
-
-// ========== 驱动初始化 ==========
-
-bool init_imu(const app::NavDaemonConfig& cfg,
-              SharedSensorState&          shared_state,
-              drivers::ImuDriverWit&      imu_driver)
-{
-    if (!cfg.imu.enable) {
-        std::fprintf(stderr, "[nav_daemon] IMU disabled by config\n");
-        return true;
-    }
-
-    drivers::ImuConfig dcfg = cfg.imu.driver;
-
-    auto on_frame = [&shared_state](const ImuFrame& frame) {
-        MonoTimeNs mono_ns = frame.mono_ns;
-        if (mono_ns <= 0) {
-            mono_ns = monotonic_now_ns();
-        }
-        std::lock_guard<std::mutex> lock(shared_state.m);
-        shared_state.last_imu         = frame;
-        shared_state.last_imu_mono_ns = mono_ns;
-    };
-
-    drivers::ImuDriverWit::RawCallback on_raw;  // 不用，留空即可
-
-    if (!imu_driver.init(dcfg, on_frame, on_raw)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] ERROR: ImuDriverWit::init failed (port=%s, baud=%d)\n",
-                     dcfg.port.c_str(), dcfg.baud);
-        std::fprintf(stderr,
-                     "[nav_daemon] HINT: 请检查 IMU 串口号 / 波特率 / 设备权限 / 设备是否插好\n");
-        return false;
-    }
-    if (!imu_driver.start()) {
-        std::fprintf(stderr, "[nav_daemon] ERROR: ImuDriverWit::start failed\n");
-        std::fprintf(stderr,
-                     "[nav_daemon] HINT: 请检查串口是否被其它进程占用，或驱动内部异常\n");
-        return false;
-    }
-
-    std::fprintf(stderr,
-                 "[nav_daemon] IMU driver started on %s @ %d\n",
-                 dcfg.port.c_str(), dcfg.baud);
-    return true;
-}
-
-bool init_dvl(const app::NavDaemonConfig& cfg,
-              SharedSensorState&          shared,
-              drivers::DvlDriver&         dvl)
-{
-    if (!cfg.dvl.enable) {
-        std::fprintf(stderr, "[nav_daemon] DVL disabled by config\n");
-        return true;
-    }
-
-    using drivers::DvlRawData;
-    using preprocess::DvlRawSample;
-
-    drivers::DvlConfig dcfg = cfg.dvl.driver;
-
-    // ★ RawCallback：DvlRawData → DvlRawSample → SharedSensorState
-    auto on_raw = [&shared](const DvlRawData& raw) {
-        DvlRawSample sample{};
-
-        sample.mono_ns = raw.mono_ns;
-        sample.est_ns  = raw.est_ns;
-
-        const auto& p = raw.parsed;
-
-        // ---- kind: 根据帧类型字符串做一个简单映射 ----
-        std::uint8_t kind = 0;
-        if (p.src == "BI") {
-        kind = 0;
-        } else if (p.src == "BE") {
-        kind = 1;
-        } else if (p.src == "BS") {
-        kind = 2;
-        } else if (p.src == "BD") {
-        kind = 3;
-        } else {
-            // 将来要支持 WI/WE/WD 时再细化
-            kind = 0;
-        }
-        sample.kind = kind;
-
-        // ---- bottom_lock / 质量状态 ----
-        sample.bottom_lock = p.bottom_lock;
-
-        // 【如果 DvlRawSample 还有 range_m/corr/fom/status 等字段，这里可以继续补映射】
-
-        // ---- 速度：根据 CoordFrame 决定填 Earth 还是 Instrument ----
-        // 先清零 Vec3f（三个分量）
-        sample.vel_inst_mps.x  = 0.f;
-        sample.vel_inst_mps.y  = 0.f;
-        sample.vel_inst_mps.z  = 0.f;
-        sample.vel_earth_mps.x = 0.f;
-        sample.vel_earth_mps.y = 0.f;
-        sample.vel_earth_mps.z = 0.f;
-
-        if (p.coord_frame == DvlCoordFrame::Earth) {
-            // ENU 速度直接填 vel_earth_mps
-            sample.vel_earth_mps.x = static_cast<float>(p.ve_mps());
-            sample.vel_earth_mps.y = static_cast<float>(p.vn_mps());
-            sample.vel_earth_mps.z = static_cast<float>(p.vu_mps());
-        } else {
-            // Instrument / Ship 帧走 vel_inst_mps，后面再用安装角/姿态旋转
-            sample.vel_inst_mps.x = static_cast<float>(p.ve_mps());
-            sample.vel_inst_mps.y = static_cast<float>(p.vn_mps());
-            sample.vel_inst_mps.z = static_cast<float>(p.vu_mps());
-        }
-
-        // ---- 写入共享状态（供主循环使用）----
-        {
-            std::lock_guard<std::mutex> lock(shared.m);
-            shared.last_dvl_raw     = sample;
-            shared.last_dvl_mono_ns = sample.mono_ns;
-        }
-    };
-
-    if (!dvl.init(dcfg, on_raw)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] ERROR: DvlDriver::init failed (port=%s, baud=%d)\n",
-                     dcfg.port.c_str(), dcfg.baud);
-        std::fprintf(stderr,
-                     "[nav_daemon] HINT: 请检查 DVL 串口 / 波特率 / 供电 / 厂家协议配置\n");
-        return false;
-    }
-
-    if (!dvl.start()) {
-        std::fprintf(stderr, "[nav_daemon] ERROR: DvlDriver::start failed\n");
-        return false;
-    }
-
-    std::fprintf(stderr,
-                 "[nav_daemon] DVL driver started on %s @ %d\n",
-                 dcfg.port.c_str(), dcfg.baud);
-    return true;
-}
-
-// 将实时预处理结果 DvlRtOutput 映射为 ESKF 所需的 DvlSample（= DvlFrame）
-inline void dvl_rt_output_to_sample(const preprocess::DvlRtOutput& in,
-                                    DvlSample&                    out)
-{
-    out.mono_ns = in.mono_ns;
-    out.est_ns  = in.est_ns;
-
-    // ---- 体坐标系速度（BI → body=FRD）----
-    if (in.has_bi) {
-        out.vel_body_mps[0] = static_cast<float>(in.vel_bi_body.x);
-        out.vel_body_mps[1] = static_cast<float>(in.vel_bi_body.y);
-        out.vel_body_mps[2] = static_cast<float>(in.vel_bi_body.z);
-        out.has_body_vel    = true;
-    } else {
-        out.vel_body_mps[0] = 0.f;
-        out.vel_body_mps[1] = 0.f;
-        out.vel_body_mps[2] = 0.f;
-        out.has_body_vel    = false;
-    }
-
-    // ---- ENU 速度（BE → ENU）----
-    if (in.has_be) {
-        out.vel_enu_mps[0] = static_cast<float>(in.vel_be_enu.x);
-        out.vel_enu_mps[1] = static_cast<float>(in.vel_be_enu.y);
-        out.vel_enu_mps[2] = static_cast<float>(in.vel_be_enu.z);
-        out.has_enu_vel    = true;
-    } else {
-        out.vel_enu_mps[0] = 0.f;
-        out.vel_enu_mps[1] = 0.f;
-        out.vel_enu_mps[2] = 0.f;
-        out.has_enu_vel    = false;
-    }
-
-    // ---- ENU 积分位移：当前我们不用，保持默认 ----
-    out.dist_enu_m[0] = 0.f;
-    out.dist_enu_m[1] = 0.f;
-    out.dist_enu_m[2] = 0.f;
-    out.has_dist_enu  = false;
-
-    // ---- 高度 ----
-    if (in.has_alt) {
-        out.altitude_m   = static_cast<float>(in.alt_bottom_m);
-        out.has_altitude = true;
-    } else {
-        out.altitude_m   = 0.f;
-        out.has_altitude = false;
-    }
-
-    // ---- 质量 / 标志 ----
-    out.bottom_lock = in.bottom_lock;
-    out.valid       = in.gated_ok;
-
-    out.track_type = nav_core::DvlTrackType::BottomTrack;   // 目前统一先当作底跟踪
-
-    out.fom     = in.mean_corr;
-    out.quality = 0;
-}
-
-// ========== NavStatePublisher 初始化 ==========
-
-bool init_nav_state_publisher(const app::NavDaemonConfig& cfg,
-                              io::NavStatePublisher&      pub)
-{
-    io::NavStatePublisherConfig shm_cfg = cfg.publisher.shm;
-    if (!shm_cfg.enable) {
-        std::fprintf(stderr, "[nav_daemon] NavStatePublisher disabled by config\n");
-        return false;
-    }
-    if (!pub.init(shm_cfg)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] ERROR: NavStatePublisher::init failed (shm=%s)\n",
-                     shm_cfg.shm_name.c_str());
-        std::fprintf(stderr,
-                     "[nav_daemon] HINT: 请检查 shm_name 是否与控制侧一致、系统共享内存权限是否足够\n");
-        return false;
-    }
-    std::fprintf(stderr,
-                 "[nav_daemon] NavStatePublisher initialized (shm=%s)\n",
-                 shm_cfg.shm_name.c_str());
-    return true;
-}
-
-// ========== BinLogger 初始化（使用 nav_core::BinLogger 简单版本） ==========
-
-bool init_bin_logger(const app::NavDaemonConfig& cfg,
-                     nav_core::BinLogger&        logger)
-{
-    const auto& lcfg = cfg.logging;
-    if (!lcfg.enable) {
-        std::fprintf(stderr,
-                     "[nav_daemon] bin_logger disabled by config.logging.enable=false\n");
-        return false;
-    }
-
-    namespace fs = std::filesystem;
-
-    fs::path base(lcfg.base_dir);  // 例如 "/home/wys/data/nav"
-    if (lcfg.split_by_date) {
-        auto     now = std::chrono::system_clock::now();
-        std::time_t tt = std::chrono::system_clock::to_time_t(now);
-        std::tm  tm{};
-    #if defined(_WIN32)
-        localtime_s(&tm, &tt);
-    #else
-        localtime_r(&tt, &tm);
-    #endif
-        char buf[16];
-        std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
-                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
-        base /= buf;
-    }
-    base /= "nav";
-
-    fs::path file = base / "nav.bin";
-
-    // BinLogger::open 自己会递归创建目录（ensureDirForFile），这里不强求 create_directories。
-    if (!logger.open(file.string(), /*append=*/true)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] WARNING: BinLogger::open('%s') failed, disable logging\n",
-                     file.string().c_str());
-        return false;
-    }
-
-    std::fprintf(stderr,
-                 "[nav_daemon] bin_logger logging to %s\n",
-                 file.string().c_str());
-    return true;
-}
-
-// ========== ESKF → NavState 的唯一出口 ==========
-inline void eskf_to_nav_state(const estimator::EskfFilter& eskf,
-                              smsg::NavState&              nav,
-                              MonoTimeNs                   t_ns)
-{
-    const auto st = eskf.state();
-
-    nav.t_ns = t_ns;
-
-    // 位置 [E, N, U]
-    nav.pos[0] = static_cast<float>(st.p_enu.x);
-    nav.pos[1] = static_cast<float>(st.p_enu.y);
-    nav.pos[2] = static_cast<float>(st.p_enu.z);
-
-    // 速度 [vE, vN, vU]
-    nav.vel[0] = static_cast<float>(st.v_enu.x);
-    nav.vel[1] = static_cast<float>(st.v_enu.y);
-    nav.vel[2] = static_cast<float>(st.v_enu.z);
-
-    // 姿态 rpy_nb_rad
-    nav.rpy[0] = static_cast<float>(st.rpy_nb_rad.x);
-    nav.rpy[1] = static_cast<float>(st.rpy_nb_rad.y);
-    nav.rpy[2] = static_cast<float>(st.rpy_nb_rad.z);
-
-    // U 向上，depth 向下为正
-    nav.depth  = static_cast<float>(-st.p_enu.z);
-
-    nav.health       = smsg::NavHealth::OK;
-    nav.status_flags = smsg::NAV_FLAG_IMU_OK;
-}
-
-
-// ========== 主循环：所有细节通过已有模块完成 ==========
 
 int run_main_loop(const app::NavDaemonConfig&    cfg,
-                  SharedSensorState&             shared_state,
+                  app::SharedSensorState&        shared_state,
                   drivers::ImuDriverWit&         imu_driver,
                   drivers::DvlDriver&            dvl_driver,
                   preprocess::ImuRtPreprocessor& imu_pp,
                   preprocess::DvlRtPreprocessor& dvl_pp,
                   estimator::EskfFilter&         eskf,
                   io::NavStatePublisher&         nav_pub,
-                  nav_core::BinLogger*           bin_logger,
+                  nav_core::BinLogger*           sample_logger,
+                  nav_core::BinLogger*           nav_state_logger,
+                  nav_core::BinLogger*           timing_logger,
+                  app::NavEventCsvLogger*        event_logger,
                   std::atomic<bool>&             stop_flag)
 {
-    const double loop_hz   = (cfg.loop.nav_loop_hz > 0.0) ? cfg.loop.nav_loop_hz : 20.0;
+    const double loop_hz = (cfg.loop.nav_loop_hz > 0.0) ? cfg.loop.nav_loop_hz : 20.0;
     const double loop_dt_s = 1.0 / loop_hz;
-
-    const double max_imu_age_s = cfg.loop.max_imu_age_s;
-    const double max_dvl_age_s = cfg.loop.max_dvl_age_s;
+    const double print_interval_s = 10.0;
 
     std::fprintf(stderr, "[nav_daemon] main loop started (%.2f Hz)\n", loop_hz);
-
     std::fprintf(stderr,
                  "[nav_daemon] READY: online navigation is running "
                  "(IMU=%s, DVL=%s, logging=%s)\n",
                  cfg.imu.enable ? "ENABLED" : "DISABLED",
                  cfg.dvl.enable ? "ENABLED" : "DISABLED",
-                 (bin_logger ? "ON" : "OFF"));
+                 (sample_logger || timing_logger) ? "ON" : "OFF");
 
-    auto          next_wakeup    = std::chrono::steady_clock::now();
-    std::uint64_t print_counter  = 0;
-    const double  print_interval_s = 10.0;
-    MonoTimeNs    last_print_ns    = 0;
+    auto next_wakeup = std::chrono::steady_clock::now();
+    app::NavLoopState loop_state = app::make_nav_loop_state(cfg);
 
-    static MonoTimeNs last_used_dvl_ns = 0;
+    estimator::NavHealthMonitor health_monitor(cfg.estimator.health);
+    const bool health_monitor_enabled = cfg.estimator.enable_health;
+    if (health_monitor_enabled) {
+        health_monitor.notify_eskf_reset(app::loop_monotonic_now_ns());
+    }
 
     while (!stop_flag.load(std::memory_order_relaxed)) {
         next_wakeup += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
             std::chrono::duration<double>(loop_dt_s));
 
-        const MonoTimeNs now_mono_ns = monotonic_now_ns();
-        const SysTimeNs  now_wall_ns = system_now_ns();
+        const nav_core::MonoTimeNs now_mono_ns = app::loop_monotonic_now_ns();
 
-        std::optional<ImuFrame>                 imu_frame;
-        std::optional<preprocess::DvlRawSample> dvl_raw;
-        MonoTimeNs last_imu_ns = 0;
-        MonoTimeNs last_dvl_ns = 0;
-
-        {
-            std::lock_guard<std::mutex> lock(shared_state.m);
-            imu_frame   = shared_state.last_imu;
-            dvl_raw     = shared_state.last_dvl_raw;
-            last_imu_ns = shared_state.last_imu_mono_ns;
-            last_dvl_ns = shared_state.last_dvl_mono_ns;
-            ++shared_state.loop_counter;
-        }
-
-        double imu_age_s = 0.0;
-        double dvl_age_s = 0.0;
-
-        // ---------- IMU 管线：ImuFrame -> ImuSample(raw) -> ImuRtPreprocessor -> ESKF ----------
-        if (imu_frame.has_value()) {
-            if (last_imu_ns > 0) {
-                imu_age_s = (now_mono_ns - last_imu_ns) * 1e-9;
-            }
-
-            if (imu_age_s <= max_imu_age_s || max_imu_age_s <= 0.0) {
-                // 1) 驱动回调出来的原始帧（传感器坐标系 RFU）
-                const ImuFrame& frame_in = *imu_frame;
-
-                // 2) 构造 raw ImuSample（仍然是“传感器坐标系 + 原始数据”）
-                ImuSample samp_in{};
-                imu_frame_to_sample_raw(frame_in, samp_in);
-                if (samp_in.est_ns == 0) {
-                    samp_in.est_ns = now_wall_ns;
-                }
-
-                // 3) 预处理输出：体坐标系 B=FRD + 去 bias + 扣重力 + yaw 滤波
-                ImuSample samp_out{};
-                const bool ok = imu_pp.process(samp_in, samp_out);
-                if (!ok) {
-                    if ((print_counter % 50) == 0) {
-                        std::fprintf(stderr,
-                                     "[nav_daemon] WARNING: ImuRtPreprocessor rejected a sample "
-                                     "(可能是 NaN / 无效欧拉角 / 静止窗尚未建立 bias)\n");
-                    }
-                } else {
-                    // 4) ESKF 传播（注意 EskfConfig 要设定 imu.acc_is_linear=true）
-                    eskf.propagate_imu(samp_out);
-                }
+        if (cfg.imu.enable &&
+            app::service_imu_device(cfg,
+                                    shared_state,
+                                    imu_driver,
+                                    loop_state.imu_runtime,
+                                    timing_logger,
+                                    event_logger,
+                                    now_mono_ns)) {
+            app::handle_imu_connectivity_change(loop_state, imu_pp, eskf);
+            if (health_monitor_enabled) {
+                health_monitor.notify_eskf_reset(now_mono_ns);
             }
         }
 
-        // ---------- DVL 管线：DvlRawSample -> DvlRtPreprocessor -> DvlSample -> ESKF 更新 ----------
-        if (dvl_raw.has_value()) {
-            if (last_dvl_ns > 0) {
-                dvl_age_s = (now_mono_ns - last_dvl_ns) * 1e-9;
-            }
-
-            if (dvl_age_s <= max_dvl_age_s || max_dvl_age_s <= 0.0) {
-                const preprocess::DvlRawSample& raw_in = *dvl_raw;
-
-                // 只在“新帧”到达时才调用预处理 & 更新 ESKF
-                if (raw_in.mono_ns > last_used_dvl_ns) {
-                    preprocess::DvlRtOutput dvl_out{};
-                    const bool ok = dvl_pp.process(raw_in, dvl_out);
-
-                    if (ok && dvl_out.gated_ok) {
-                        // 1) DvlRtOutput -> DvlSample（ESKF 接口所需）
-                        DvlSample dvl_sample{};
-                        dvl_rt_output_to_sample(dvl_out, dvl_sample);
-
-                        // 2) ESKF 更新（XY 水平速度 + Z/深度）
-                        estimator::EskfUpdateDiagDvlXY diag_xy{};
-                        estimator::EskfUpdateDiagDvlZ  diag_z{};
-
-                        if (dvl_sample.has_enu_vel) {
-                            eskf.update_dvl_xy(dvl_sample, &diag_xy);
-                        }
-
-                        if (eskf.config().enable_dvl_z_update &&
-                            (dvl_sample.has_enu_vel || dvl_sample.has_altitude)) {
-                            eskf.update_dvl_z(dvl_sample, &diag_z);
-                        }
-
-                        if (bin_logger) {
-                            bin_logger->write(&dvl_sample, sizeof(dvl_sample));
-                        }
-                    }
-
-                    last_used_dvl_ns = raw_in.mono_ns;
-                }
-            } else if ((print_counter % 200) == 0) {
-                std::fprintf(stderr,
-                             "[nav_daemon] WARNING: DVL age=%.3f > max_dvl_age_s=%.3f, "
-                             "treat as offline\n",
-                             dvl_age_s, max_dvl_age_s);
-            }
+        if (cfg.dvl.enable &&
+            app::service_dvl_device(cfg,
+                                    shared_state,
+                                    dvl_driver,
+                                    loop_state.dvl_runtime,
+                                    timing_logger,
+                                    event_logger,
+                                    now_mono_ns)) {
+            app::handle_dvl_connectivity_change(loop_state, dvl_pp);
         }
 
-        // ---------- ESKF → NavState（唯一出口） ----------
-        smsg::NavState nav{};
-        eskf_to_nav_state(eskf, nav, now_mono_ns);
+        const app::SharedSensorSnapshot snapshot =
+            app::snapshot_shared_sensor_state(shared_state);
+        const auto latest_nav_imu =
+            app::process_imu_pipeline(
+                cfg,
+                snapshot,
+                now_mono_ns,
+                imu_pp,
+                eskf,
+                timing_logger,
+                event_logger,
+                loop_state,
+                &health_monitor,
+                health_monitor_enabled
+            );
 
-        // 健康判定：IMU 超时 → INVALID；DVL 超时 → 清 DVL_OK 标志
-        if (imu_age_s > max_imu_age_s && max_imu_age_s > 0.0) {
-            nav.health       = smsg::NavHealth::INVALID;
-            nav.status_flags = smsg::NAV_FLAG_NONE;
-        } else {
-            if (dvl_age_s <= max_dvl_age_s || max_dvl_age_s <= 0.0) {
-                smsg::nav_flag_set(nav.status_flags, smsg::NavStatusFlags::NAV_FLAG_DVL_OK);
-            } else {
-                smsg::nav_flag_clear(nav.status_flags, smsg::NavStatusFlags::NAV_FLAG_DVL_OK);
-            }
-        }
+        app::process_dvl_pipeline(
+            cfg,
+            snapshot,
+            now_mono_ns,
+            dvl_pp,
+            eskf,
+            sample_logger,
+            timing_logger,
+            event_logger,
+            loop_state,
+            &health_monitor,
+            health_monitor_enabled
+        );
 
-        // ---------- 发布 NavState ----------
-        if (nav_pub.ok()) {
-            if (!nav_pub.publish(nav) && (print_counter % 100) == 0) {
-                std::fprintf(stderr,
-                             "[nav_daemon] ERROR: NavStatePublisher::publish failed "
-                             "(请检查共享内存是否被消费端正确读取)\n");
-            }
-        }
+        auto nav = app::build_nav_state_output(
+            cfg,
+            latest_nav_imu,
+            now_mono_ns,
+            loop_state,
+            imu_pp,
+            eskf
+        );
+        const auto health_report = app::evaluate_nav_health_audit(
+            now_mono_ns,
+            snapshot.last_imu_ns,
+            snapshot.last_dvl_ns,
+            &health_monitor,
+            health_monitor_enabled,
+            nav);
 
-        // ---------- 每 10 秒输出一次当前导航结果 ----------
-        {
-            const double since_last_print_s =
-                (last_print_ns > 0)
-                    ? (now_mono_ns - last_print_ns) * 1e-9
-                    : (print_interval_s + 1.0);  // 第一次循环强制打印
+        app::publish_nav_state_output(
+            nav,
+            now_mono_ns,
+            loop_state,
+            nav_pub,
+            nav_state_logger,
+            timing_logger,
+            event_logger);
+        app::publish_nav_health_audit(
+            cfg,
+            now_mono_ns,
+            health_report,
+            nav,
+            loop_state,
+            event_logger);
 
-            if (since_last_print_s >= print_interval_s) {
-                last_print_ns = now_mono_ns;
+        app::maybe_print_nav_summary(nav, now_mono_ns, loop_state, print_interval_s);
 
-                const double t_s = static_cast<double>(now_mono_ns) * 1e-9;
-
-                std::fprintf(stderr,
-                             "[nav_daemon] NAV t=%.1fs "
-                             "E=%.3f N=%.3f U=%.3f depth=%.2f "
-                             "vE=%.3f vN=%.3f vU=%.3f "
-                             "yaw=%.3f health=%d flags=0x%04X\n",
-                             t_s,
-                             nav.pos[0], nav.pos[1], nav.pos[2],
-                             nav.depth,
-                             nav.vel[0], nav.vel[1], nav.vel[2],
-                             nav.rpy[2],
-                             static_cast<int>(nav.health),
-                             static_cast<unsigned>(nav.status_flags));
-            }
-        }
-
-        ++print_counter;
+        ++loop_state.print_counter;
         std::this_thread::sleep_until(next_wakeup);
     }
 
     std::fprintf(stderr, "[nav_daemon] main loop exiting (stop requested)\n");
-
     imu_driver.stop();
     dvl_driver.stop();
-
     return 0;
 }
 
-} // anonymous namespace
-
-// ========== 对外统一入口：给 main 调用 ==========
+} // namespace
 
 namespace nav_core::app {
 
@@ -635,55 +189,73 @@ int run_nav_daemon(const NavDaemonConfig&       cfg,
     drivers::ImuDriverWit imu_driver;
     drivers::DvlDriver    dvl_driver;
 
-    if (!init_imu(cfg, shared_state, imu_driver)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] FATAL: IMU init failed "
-                     "(检查 nav_daemon.yaml.imu.driver.* 配置与硬件连接)\n");
-        return 1;
-    }
-    if (!init_dvl(cfg, shared_state, dvl_driver)) {
-        std::fprintf(stderr,
-                     "[nav_daemon] FATAL: DVL init failed "
-                     "(检查 nav_daemon.yaml.dvl.driver.* 配置与硬件连接)\n");
-        imu_driver.stop();
-        return 1;
-    }
-
-    // ==== 实时预处理器 + ESKF ====
     preprocess::ImuRtPreprocessor imu_pp(cfg.imu.rt_preproc);
     preprocess::DvlRtPreprocessor dvl_pp(cfg.dvl.rt_preproc);
     estimator::EskfFilter         eskf(eskf_cfg);
 
-    // NavStatePublisher
     io::NavStatePublisher nav_pub;
-    bool pub_ok = init_nav_state_publisher(cfg, nav_pub);
-    if (!pub_ok) {
+    if (!init_nav_state_publisher(cfg, nav_pub)) {
         std::fprintf(stderr,
                      "[nav_daemon] WARNING: NavStatePublisher init failed or disabled "
                      "(控制侧将无法从共享内存读取导航状态)\n");
     }
 
-    // BinLogger
-    nav_core::BinLogger  bin_logger;
-    nav_core::BinLogger* bin_logger_ptr = nullptr;
-    if (init_bin_logger(cfg, bin_logger)) {
-        bin_logger_ptr = &bin_logger;
+    nav_core::BinLogger  sample_logger;
+    nav_core::BinLogger* sample_logger_ptr = nullptr;
+    if (init_named_bin_logger(cfg, "nav.bin", sample_logger)) {
+        sample_logger_ptr = &sample_logger;
     } else {
         std::fprintf(stderr,
-                     "[nav_daemon] WARNING: BinLogger init failed or disabled "
-                     "(不会写二进制日志，但不影响导航本身)\n");
+                     "[nav_daemon] WARNING: sample BinLogger init failed or disabled "
+                     "(不会写处理后的 DVL 样本日志，但不影响导航本身)\n");
+    }
+
+    nav_core::BinLogger  timing_logger;
+    nav_core::BinLogger* timing_logger_ptr = nullptr;
+    if (init_named_bin_logger(cfg, "nav_timing.bin", timing_logger)) {
+        timing_logger_ptr = &timing_logger;
+    } else {
+        std::fprintf(stderr,
+                     "[nav_daemon] WARNING: timing BinLogger init failed or disabled "
+                     "(不会写时间语义追踪日志，但不影响导航本身)\n");
+    }
+
+    nav_core::BinLogger  nav_state_logger;
+    nav_core::BinLogger* nav_state_logger_ptr = nullptr;
+    if (init_named_bin_logger(cfg, "nav_state.bin", nav_state_logger)) {
+        nav_state_logger_ptr = &nav_state_logger;
+    } else {
+        std::fprintf(stderr,
+                     "[nav_daemon] WARNING: nav_state BinLogger init failed or disabled "
+                     "(不会写导航状态日志，但不影响导航本身)\n");
+    }
+
+    NavEventCsvLogger  nav_event_logger;
+    NavEventCsvLogger* nav_event_logger_ptr = nullptr;
+    if (nav_event_logger.init(cfg)) {
+        nav_event_logger_ptr = &nav_event_logger;
+    } else {
+        std::fprintf(stderr,
+                     "[nav_daemon] WARNING: nav_events.csv init failed or disabled "
+                     "(结构化低频事件日志不可用，但不影响导航主链)\n");
     }
 
     std::fprintf(stderr,
-                 "[nav_daemon] READY: IMU+DVL drivers started, ESKF online, loop=%.2f Hz\n",
+                 "[nav_daemon] READY: device binders armed, ESKF online, loop=%.2f Hz\n",
                  cfg.loop.nav_loop_hz > 0.0 ? cfg.loop.nav_loop_hz : 20.0);
 
-    // 主循环
-    return run_main_loop(cfg, shared_state,
-                         imu_driver, dvl_driver,
-                         imu_pp, dvl_pp,
-                         eskf, nav_pub,
-                         bin_logger_ptr,
+    return run_main_loop(cfg,
+                         shared_state,
+                         imu_driver,
+                         dvl_driver,
+                         imu_pp,
+                         dvl_pp,
+                         eskf,
+                         nav_pub,
+                         sample_logger_ptr,
+                         nav_state_logger_ptr,
+                         timing_logger_ptr,
+                         nav_event_logger_ptr,
                          stop_flag);
 }
 

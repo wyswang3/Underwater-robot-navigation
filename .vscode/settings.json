@@ -9,5 +9,16 @@
         "xstring": "cpp",
         "atomic": "cpp"
     },
-    "cmake.sourceDirectory": "D:/Underwater-robot-navigation/nav_core"
+    "cmake.sourceDirectory": "D:/Underwater-robot-navigation/nav_core",
+    "ROS2.distro": "humble",
+    "python.analysis.extraPaths": [
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages",
+        "/home/wys/Reinforcement_learning/rov_rl_control/ROV_RL_Control",
+        "/home/wys/rov_ws/src",
+        "/home/wys/Reinforcement_learning/rov_rl_control",
+        "/home/wys/rov_ws/src",
+        ""
+    ],
+    "cmake.ignoreCMakeListsMissing": true
 }

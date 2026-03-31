@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace nav_core::estimator {
 
@@ -16,9 +17,44 @@ inline double ns_to_s(MonoTimeNs dt_ns) noexcept
     return static_cast<double>(dt_ns) * 1e-9;
 }
 
+inline double safe_ratio(std::size_t num, std::size_t den) noexcept
+{
+    if (den == 0u) {
+        return 0.0;
+    }
+    return static_cast<double>(num) / static_cast<double>(den);
+}
+
+inline void worsen_health(shared::msg::NavHealth candidate,
+                          shared::msg::NavHealth& current) noexcept
+{
+    if (static_cast<int>(candidate) > static_cast<int>(current)) {
+        current = candidate;
+    }
+}
+
 } // anonymous namespace
 
 // ============================ NavHealthMonitor 实现 ============================
+
+const char* nav_audit_root_cause_name(NavAuditRootCause cause) noexcept
+{
+    switch (cause) {
+    case NavAuditRootCause::kHealthy:
+        return "healthy";
+    case NavAuditRootCause::kSensorInput:
+        return "sensor_input";
+    case NavAuditRootCause::kTransportTiming:
+        return "transport_timing";
+    case NavAuditRootCause::kEstimatorConsistency:
+        return "estimator_consistency";
+    case NavAuditRootCause::kEstimatorNumeric:
+        return "estimator_numeric";
+    case NavAuditRootCause::kUnknown:
+    default:
+        return "unknown";
+    }
+}
 
 NavHealthMonitor::NavHealthMonitor(const NavHealthConfig& cfg)
     : cfg_(cfg)
@@ -44,13 +80,33 @@ void NavHealthMonitor::notify_eskf_reset(MonoTimeNs now_mono_ns) noexcept
 
 void NavHealthMonitor::notify_imu_propagate(MonoTimeNs now_mono_ns) noexcept
 {
-    // 当前实现中仅记录“最后一次评估时间”的参考，
-    // 若将来需要统计 IMU 预测频率，可在此处扩展计数。
+    refresh_stats_window(now_mono_ns);
+    last_eval_mono_ns_ = now_mono_ns;
+    ++imu_samples_accepted_;
+}
+
+void NavHealthMonitor::notify_imu_sample_issue(MonoTimeNs now_mono_ns,
+                                               SensorAuditIssue issue) noexcept
+{
+    refresh_stats_window(now_mono_ns);
     last_eval_mono_ns_ = now_mono_ns;
 
-    if (stats_window_begin_ns_ == 0) {
-        // 尚未初始化统计窗口，则以第一次调用的时间作为起点
-        reset_stats_window(now_mono_ns);
+    switch (issue) {
+    case SensorAuditIssue::kAccepted:
+        ++imu_samples_accepted_;
+        break;
+    case SensorAuditIssue::kPreprocessRejected:
+        ++imu_preprocess_rejected_;
+        break;
+    case SensorAuditIssue::kStale:
+        ++imu_stale_rejected_;
+        break;
+    case SensorAuditIssue::kOutOfOrder:
+        ++imu_out_of_order_rejected_;
+        break;
+    case SensorAuditIssue::kGatedRejected:
+    default:
+        break;
     }
 }
 
@@ -60,18 +116,8 @@ void NavHealthMonitor::notify_dvl_xy_update(MonoTimeNs now_mono_ns,
                                             double nis,
                                             bool accepted) noexcept
 {
-    // 初始化 / 滑动重置统计窗口
-    if (stats_window_begin_ns_ == 0) {
-        reset_stats_window(now_mono_ns);
-    } else {
-        const double window_s = cfg_.stats_window_duration_s;
-        if (window_s > 0.0) {
-            const double dt_s = ns_to_s(now_mono_ns - stats_window_begin_ns_);
-            if (dt_s > window_s) {
-                reset_stats_window(now_mono_ns);
-            }
-        }
-    }
+    refresh_stats_window(now_mono_ns);
+    last_eval_mono_ns_ = now_mono_ns;
 
     ++dvl_xy_updates_total_;
     if (accepted) {
@@ -91,18 +137,8 @@ void NavHealthMonitor::notify_z_update(MonoTimeNs now_mono_ns,
                                        double nis,
                                        bool accepted) noexcept
 {
-    // 与 DVL XY 相同的窗口逻辑
-    if (stats_window_begin_ns_ == 0) {
-        reset_stats_window(now_mono_ns);
-    } else {
-        const double window_s = cfg_.stats_window_duration_s;
-        if (window_s > 0.0) {
-            const double dt_s = ns_to_s(now_mono_ns - stats_window_begin_ns_);
-            if (dt_s > window_s) {
-                reset_stats_window(now_mono_ns);
-            }
-        }
-    }
+    refresh_stats_window(now_mono_ns);
+    last_eval_mono_ns_ = now_mono_ns;
 
     ++z_updates_total_;
     if (accepted) {
@@ -118,21 +154,52 @@ void NavHealthMonitor::notify_z_update(MonoTimeNs now_mono_ns,
     }
 }
 
+void NavHealthMonitor::notify_dvl_sample_issue(MonoTimeNs now_mono_ns,
+                                               SensorAuditIssue issue) noexcept
+{
+    refresh_stats_window(now_mono_ns);
+    last_eval_mono_ns_ = now_mono_ns;
+
+    switch (issue) {
+    case SensorAuditIssue::kAccepted:
+        ++dvl_samples_accepted_;
+        break;
+    case SensorAuditIssue::kPreprocessRejected:
+        ++dvl_preprocess_rejected_;
+        break;
+    case SensorAuditIssue::kStale:
+        ++dvl_stale_rejected_;
+        break;
+    case SensorAuditIssue::kOutOfOrder:
+        ++dvl_out_of_order_rejected_;
+        break;
+    case SensorAuditIssue::kGatedRejected:
+        ++dvl_gated_rejected_;
+        break;
+    default:
+        break;
+    }
+}
+
+void NavHealthMonitor::notify_numeric_invalid(MonoTimeNs now_mono_ns) noexcept
+{
+    refresh_stats_window(now_mono_ns);
+    last_eval_mono_ns_ = now_mono_ns;
+    numeric_invalid_seen_ = true;
+    numeric_invalid_last_ns_ = now_mono_ns;
+}
+
 // -------------------- 传感器心跳更新 --------------------
 
 void NavHealthMonitor::update_sensor_heartbeat(MonoTimeNs now_mono_ns,
                                                MonoTimeNs last_imu_ns,
                                                MonoTimeNs last_dvl_ns) noexcept
 {
+    refresh_stats_window(now_mono_ns);
     last_eval_mono_ns_ = now_mono_ns;
 
     last_imu_ns_ = last_imu_ns;
     last_dvl_ns_ = last_dvl_ns;
-
-    // 若尚未有统计窗口，则在第一次收到心跳时初始化
-    if (stats_window_begin_ns_ == 0) {
-        reset_stats_window(now_mono_ns);
-    }
 }
 
 // -------------------- 在线导航状态更新 --------------------
@@ -155,6 +222,8 @@ NavHealthReport NavHealthMonitor::evaluate(MonoTimeNs now_mono_ns) const noexcep
 
     m.eval_mono_ns     = now_mono_ns;
     m.eskf_initialized = eskf_initialized_;
+    m.estimator_numeric_invalid = numeric_invalid_seen_;
+    m.estimator_numeric_suspect = numeric_invalid_seen_;
 
     // 1) 传感器心跳
     if (last_imu_ns_ > 0) {
@@ -172,6 +241,16 @@ NavHealthReport NavHealthMonitor::evaluate(MonoTimeNs now_mono_ns) const noexcep
         m.dvl_age_s = std::numeric_limits<double>::infinity();
         m.dvl_alive = false;
     }
+
+    m.imu_samples_accepted = imu_samples_accepted_;
+    m.imu_preprocess_rejected = imu_preprocess_rejected_;
+    m.imu_stale_rejected = imu_stale_rejected_;
+    m.imu_out_of_order_rejected = imu_out_of_order_rejected_;
+    m.dvl_samples_accepted = dvl_samples_accepted_;
+    m.dvl_preprocess_rejected = dvl_preprocess_rejected_;
+    m.dvl_gated_rejected = dvl_gated_rejected_;
+    m.dvl_stale_rejected = dvl_stale_rejected_;
+    m.dvl_out_of_order_rejected = dvl_out_of_order_rejected_;
 
     // 2) DVL XY 统计
     if (dvl_xy_updates_total_ > 0) {
@@ -218,10 +297,50 @@ NavHealthReport NavHealthMonitor::evaluate(MonoTimeNs now_mono_ns) const noexcep
         m.z_nis_last         = 0.0;
     }
 
-    // 4) 最近一次 NavState 的 yaw / 速度（当前实现中暂不从 NavState 读取，
-    //    保持 0.0；如需使用，可在此处按工程约定访问 last_nav_state_ 的字段）
-    m.last_yaw_rad      = 0.0;
-    m.last_speed_xy_mps = 0.0;
+    // 4) 最近一次 NavState 的 yaw / 速度。
+    if (has_nav_state_) {
+        m.last_yaw_rad = last_nav_state_.rpy[2];
+        m.last_speed_xy_mps =
+            std::hypot(last_nav_state_.vel[0], last_nav_state_.vel[1]);
+    } else {
+        m.last_yaw_rad = 0.0;
+        m.last_speed_xy_mps = 0.0;
+    }
+
+    const std::size_t sensor_samples_total =
+        m.imu_samples_accepted + m.imu_preprocess_rejected +
+        m.imu_stale_rejected + m.imu_out_of_order_rejected +
+        m.dvl_samples_accepted + m.dvl_preprocess_rejected +
+        m.dvl_gated_rejected + m.dvl_stale_rejected +
+        m.dvl_out_of_order_rejected;
+    const std::size_t transport_issue_count =
+        m.imu_stale_rejected + m.imu_out_of_order_rejected +
+        m.dvl_stale_rejected + m.dvl_out_of_order_rejected;
+    const std::size_t sensor_input_issue_count =
+        m.imu_preprocess_rejected + m.dvl_preprocess_rejected + m.dvl_gated_rejected;
+    const std::size_t estimator_consistency_issue_count =
+        (m.dvl_xy_updates_total - m.dvl_xy_updates_accepted) +
+        (m.z_updates_total - m.z_updates_accepted);
+
+    const double transport_issue_ratio =
+        safe_ratio(transport_issue_count, sensor_samples_total);
+    const double sensor_input_issue_ratio =
+        safe_ratio(sensor_input_issue_count, sensor_samples_total);
+
+    const bool transport_invalid =
+        !m.imu_alive ||
+        (transport_issue_count >= 4u && transport_issue_ratio >= 0.45);
+    const bool transport_degraded =
+        !m.dvl_alive ||
+        (transport_issue_count >= 2u && transport_issue_ratio >= 0.15);
+
+    const bool sensor_input_invalid =
+        sensor_input_issue_count >= 4u && sensor_input_issue_ratio >= 0.45;
+    const bool sensor_input_degraded =
+        sensor_input_issue_count >= 2u && sensor_input_issue_ratio >= 0.15;
+
+    bool estimator_consistency_invalid = false;
+    bool estimator_consistency_degraded = false;
 
     // ---------- 健康等级判定 ----------
 
@@ -232,17 +351,19 @@ NavHealthReport NavHealthMonitor::evaluate(MonoTimeNs now_mono_ns) const noexcep
         d.health = shared::msg::NavHealth::OK;
     }
 
-    // 1) 传感器掉线情况优先处理
-    const bool imu_dead = !m.imu_alive;
-    const bool dvl_dead = !m.dvl_alive;
-
-    if (imu_dead) {
-        // 没有 IMU，不可能做合理的导航 → 直接 INVALID
+    if (m.estimator_numeric_invalid) {
         d.health = shared::msg::NavHealth::INVALID;
-    } else if (dvl_dead && eskf_initialized_) {
-        // 没有 DVL，可以短时间依赖纯惯导，但总体质量退化
-        if (d.health == shared::msg::NavHealth::OK) {
-            d.health = shared::msg::NavHealth::DEGRADED;
+    } else if (eskf_initialized_) {
+        if (transport_invalid) {
+            worsen_health(shared::msg::NavHealth::INVALID, d.health);
+        } else if (transport_degraded) {
+            worsen_health(shared::msg::NavHealth::DEGRADED, d.health);
+        }
+
+        if (sensor_input_invalid) {
+            worsen_health(shared::msg::NavHealth::INVALID, d.health);
+        } else if (sensor_input_degraded) {
+            worsen_health(shared::msg::NavHealth::DEGRADED, d.health);
         }
     }
 
@@ -253,18 +374,18 @@ NavHealthReport NavHealthMonitor::evaluate(MonoTimeNs now_mono_ns) const noexcep
             const double ratio = m.dvl_xy_accept_ratio;
 
             if (ratio < cfg_.dvl_accept_ratio_invalid) {
-                d.health = shared::msg::NavHealth::INVALID;
+                estimator_consistency_invalid = true;
             } else if (ratio < cfg_.dvl_accept_ratio_degraded &&
                        d.health == shared::msg::NavHealth::OK) {
-                d.health = shared::msg::NavHealth::DEGRADED;
+                estimator_consistency_degraded = true;
             }
 
             // 根据 NIS 均值判断
             if (m.dvl_xy_nis_mean > cfg_.dvl_nis_reject_max) {
-                d.health = shared::msg::NavHealth::INVALID;
+                estimator_consistency_invalid = true;
             } else if (m.dvl_xy_nis_mean > cfg_.dvl_nis_ok_max &&
                        d.health == shared::msg::NavHealth::OK) {
-                d.health = shared::msg::NavHealth::DEGRADED;
+                estimator_consistency_degraded = true;
             }
         }
 
@@ -273,18 +394,24 @@ NavHealthReport NavHealthMonitor::evaluate(MonoTimeNs now_mono_ns) const noexcep
             const double ratio = m.z_accept_ratio;
 
             if (ratio < cfg_.z_accept_ratio_invalid) {
-                d.health = shared::msg::NavHealth::INVALID;
+                estimator_consistency_invalid = true;
             } else if (ratio < cfg_.z_accept_ratio_degraded &&
                        d.health == shared::msg::NavHealth::OK) {
-                d.health = shared::msg::NavHealth::DEGRADED;
+                estimator_consistency_degraded = true;
             }
 
             if (m.z_nis_mean > cfg_.z_nis_reject_max) {
-                d.health = shared::msg::NavHealth::INVALID;
+                estimator_consistency_invalid = true;
             } else if (m.z_nis_mean > cfg_.z_nis_ok_max &&
                        d.health == shared::msg::NavHealth::OK) {
-                d.health = shared::msg::NavHealth::DEGRADED;
+                estimator_consistency_degraded = true;
             }
+        }
+
+        if (estimator_consistency_invalid) {
+            worsen_health(shared::msg::NavHealth::INVALID, d.health);
+        } else if (estimator_consistency_degraded) {
+            worsen_health(shared::msg::NavHealth::DEGRADED, d.health);
         }
     }
 
@@ -311,7 +438,48 @@ NavHealthReport NavHealthMonitor::evaluate(MonoTimeNs now_mono_ns) const noexcep
         }
     }
 
+    m.transport_timing_suspect = transport_degraded || transport_invalid;
+    m.sensor_input_suspect = sensor_input_degraded || sensor_input_invalid;
+    m.estimator_consistency_suspect =
+        estimator_consistency_degraded || estimator_consistency_invalid;
+
+    if (m.estimator_numeric_suspect) {
+        rep.root_cause = NavAuditRootCause::kEstimatorNumeric;
+    } else if (m.transport_timing_suspect &&
+               (transport_issue_count >= sensor_input_issue_count ||
+                !m.imu_alive || !m.dvl_alive)) {
+        rep.root_cause = NavAuditRootCause::kTransportTiming;
+    } else if (m.sensor_input_suspect) {
+        rep.root_cause = NavAuditRootCause::kSensorInput;
+    } else if (m.estimator_consistency_suspect ||
+               (estimator_consistency_issue_count > 0u &&
+                d.health != shared::msg::NavHealth::OK)) {
+        rep.root_cause = NavAuditRootCause::kEstimatorConsistency;
+    } else if (d.health == shared::msg::NavHealth::OK) {
+        rep.root_cause = NavAuditRootCause::kHealthy;
+    } else {
+        rep.root_cause = NavAuditRootCause::kUnknown;
+    }
+
     return rep;
+}
+
+void NavHealthMonitor::refresh_stats_window(MonoTimeNs now_mono_ns) noexcept
+{
+    if (stats_window_begin_ns_ == 0) {
+        reset_stats_window(now_mono_ns);
+        return;
+    }
+
+    const double window_s = cfg_.stats_window_duration_s;
+    if (window_s <= 0.0) {
+        return;
+    }
+
+    const double dt_s = ns_to_s(now_mono_ns - stats_window_begin_ns_);
+    if (dt_s > window_s) {
+        reset_stats_window(now_mono_ns);
+    }
 }
 
 // -------------------- 辅助：重置统计窗口 --------------------
@@ -333,6 +501,19 @@ void NavHealthMonitor::reset_stats_window(MonoTimeNs new_begin_ns) noexcept
     z_nis_sum_               = 0.0;
     z_nis_max_               = 0.0;
     z_nis_last_              = 0.0;
+
+    // IMU / DVL 样本处理统计
+    imu_samples_accepted_        = 0;
+    imu_preprocess_rejected_     = 0;
+    imu_stale_rejected_          = 0;
+    imu_out_of_order_rejected_   = 0;
+    dvl_samples_accepted_        = 0;
+    dvl_preprocess_rejected_     = 0;
+    dvl_gated_rejected_          = 0;
+    dvl_stale_rejected_          = 0;
+    dvl_out_of_order_rejected_   = 0;
+    numeric_invalid_seen_        = false;
+    numeric_invalid_last_ns_     = 0;
 }
 
 } // namespace nav_core::estimator

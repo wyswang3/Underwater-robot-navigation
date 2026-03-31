@@ -6,16 +6,15 @@
 //
 
 #include "nav_core/drivers/imu_driver_wit.hpp"
+#include "nav_core/drivers/serial_port_utils.hpp"
 #include "nav_core/core/timebase.hpp"
 
-#include <cerrno>
+#include <filesystem>
 #include <cmath>
 #include <cstring>
 #include <ctime>
-#include <fcntl.h>
 #include <iostream>
 #include <sys/select.h>
-#include <termios.h>
 #include <unistd.h>
 #include <utility>
 #include <thread>
@@ -45,26 +44,23 @@ inline bool isFinite(double x) noexcept {
     return std::isfinite(x);
 }
 
-/// 将整型波特率转换为 termios 需要的 speed_t
-speed_t baudToTermios(int baud) {
-    switch (baud) {
-        case 4800:   return B4800;
-        case 9600:   return B9600;
-        case 19200:  return B19200;
-        case 38400:  return B38400;
-        case 57600:  return B57600;
-        case 115200: return B115200;
-#ifdef B230400
-        case 230400: return B230400;
-#endif
-#ifdef B460800
-        case 460800: return B460800;
-#endif
-        default:
-            std::cerr << "[IMU] unsupported baud " << baud
-                      << ", fallback to 115200\n";
-            return B115200;
+std::string format_hex_line(const std::uint8_t* data, std::size_t len)
+{
+    if (data == nullptr || len == 0u) {
+        return {};
     }
+    static const char* kHex = "0123456789abcdef";
+    std::string out;
+    out.reserve(len * 3u);
+    for (std::size_t i = 0; i < len; ++i) {
+        if (i != 0u) {
+            out.push_back(' ');
+        }
+        const unsigned v = static_cast<unsigned>(data[i]);
+        out.push_back(kHex[(v >> 4u) & 0x0fu]);
+        out.push_back(kHex[v & 0x0fu]);
+    }
+    return out;
 }
 
 } // namespace
@@ -138,6 +134,7 @@ bool ImuDriverWit::init(const ImuConfig& cfg,
     have_any_frame_.store(false);
     have_valid_frame_.store(false);
     last_frame_mono_ns_.store(0);
+    serial_diag_.reset(slave_addr_);
 
     return true;
 }
@@ -161,6 +158,8 @@ bool ImuDriverWit::start()
     have_valid_frame_.store(false);
     last_frame_mono_ns_.store(0);
     port_open_.store(false);
+    serial_diag_.reset(slave_addr_);
+    tx_debug_budget_.store(2);
 
     if (!openPort()) {
         std::cerr << "[IMU] openPort() failed on " << port_ << "\n";
@@ -296,6 +295,11 @@ MonoTimeNs ImuDriverWit::lastFrameMonoNs() const noexcept
     return last_frame_mono_ns_.load();
 }
 
+ImuSerialDebugSnapshot ImuDriverWit::serialDebugSnapshot() const
+{
+    return serial_diag_.snapshot();
+}
+
 // ============================================================================
 // 串口打开 / 关闭
 // ============================================================================
@@ -307,55 +311,29 @@ bool ImuDriverWit::openPort()
         return true;
     }
 
-    fd_ = ::open(port_.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
+    std::string error;
+    fd_ = open_serial_port_raw(port_, baud_, /*read_timeout_ds=*/5, &error);
     if (fd_ < 0) {
-        std::cerr << "[IMU] open(" << port_ << ") failed: "
-                  << std::strerror(errno) << "\n";
+        std::cerr << "[IMU] " << error << "\n";
         port_open_.store(false);
         return false;
     }
 
-    termios tio{};
-    if (tcgetattr(fd_, &tio) != 0) {
-        std::cerr << "[IMU] tcgetattr failed: "
-                  << std::strerror(errno) << "\n";
-        ::close(fd_);
-        fd_ = -1;
-        port_open_.store(false);
-        return false;
+    std::string canonical = port_;
+    {
+        std::error_code ec;
+        const auto path = std::filesystem::path(port_);
+        const auto resolved = std::filesystem::canonical(path, ec);
+        if (!ec) {
+            canonical = resolved.string();
+        }
     }
 
-    // 配置为原始模式：不做行缓冲/回显等
-    cfmakeraw(&tio);
-
-    const speed_t s = baudToTermios(baud_);
-    cfsetispeed(&tio, s);
-    cfsetospeed(&tio, s);
-
-    tio.c_cflag |= (CLOCAL | CREAD);
-    const tcflag_t csize_mask  = CSIZE;
-    const tcflag_t parenb_mask = PARENB;
-    const tcflag_t cstopb_mask = CSTOPB;
-
-    tio.c_cflag &= ~parenb_mask;
-    tio.c_cflag |= CS8;          // 8N1
-    tio.c_cflag &= ~csize_mask;
-    tio.c_cflag &= ~cstopb_mask;
-
-    // 读超时：配合 select 使用
-    tio.c_cc[VMIN]  = 0;
-    tio.c_cc[VTIME] = 5;        // 0.5s 超时
-
-    if (tcsetattr(fd_, TCSANOW, &tio) != 0) {
-        std::cerr << "[IMU] tcsetattr failed: "
-                  << std::strerror(errno) << "\n";
-        ::close(fd_);
-        fd_ = -1;
-        port_open_.store(false);
-        return false;
+    std::cerr << "[IMU] serial opened: " << port_ << " @" << baud_;
+    if (canonical != port_) {
+        std::cerr << " canonical=" << canonical;
     }
-
-    std::cerr << "[IMU] serial opened: " << port_ << " @" << baud_ << "\n";
+    std::cerr << "\n";
     port_open_.store(true);
     return true;
 }
@@ -375,16 +353,24 @@ void ImuDriverWit::closePort()
 // ============================================================================
 //
 // 简单策略：
-//   - 以 poll_hz 频率发起 WitReadReg(AX, 16)；
+//   - 以 poll_hz 频率发起 WitReadReg(AX, 15)；
 //   - 在一个短时间窗口内用 select + read 收集响应；
 //   - 收到的每个字节都喂给 WitSerialDataIn()；
 //   - Wit SDK 解析成功后会调用 regUpdateBridge()。
 // ============================================================================
 void ImuDriverWit::threadFunc()
 {
-    const int poll_hz     = 100;                // 100 Hz 轮询
-    const int period_ms   = 1000 / poll_hz;     // 控制周期 ~10 ms
-    const int recv_win_ms = 5;                  // 每次命令后给 5 ms 接收窗口
+    // 经验值：
+    // - 现场 USB-RS485 + IMU 的回包延迟可能 >5ms，且 35B 回包可能被拆成多段 read()；
+    // - Wit SDK 在 Modbus 模式下需要“请求-响应”对齐（回复帧不带起始寄存器地址），
+    //   若我们在上一帧回复尚未完整到达前就发下一次 WitReadReg()，会覆盖 SDK 的请求上下文，
+    //   导致 SDK 无法触发 regUpdate 回调，从而上层误判“没有可解析帧”。 
+    //
+    // 因此这里采用更保守的策略：降低轮询频率，并在每次请求后持续 drain 一段接收窗口。
+    const int poll_hz       = 50;               // 50 Hz 轮询（更稳，足够给 ESKF propagate）
+    const int period_ms     = 1000 / poll_hz;   // ~20 ms
+    const int recv_win_ms   = 30;               // 每次命令后给更长接收窗口，确保完整回包到达
+    const int select_slice_ms = 5;              // 细分 select，便于循环 drain
 
     while (!stop_requested_.load()) {
         if (fd_ < 0) {
@@ -394,49 +380,71 @@ void ImuDriverWit::threadFunc()
             }
         }
 
-        // 1) 发送读寄存器命令：AX 开始读取 16 个寄存器
-        //    用法参考官方 Demo Main.cpp
-        if (WitReadReg(AX, 16) != WIT_HAL_OK) {
+        // 1) 发送读寄存器命令：AX 开始读取 15 个寄存器
+        //    当前实机稳定路径与 Python reader 对齐：读取 0x34..0x42，
+        //    覆盖 acc/gyro/mag + 高精度姿态角，避免请求 16 个寄存器时实机无响应。
+        if (WitReadReg(AX, 15) != WIT_HAL_OK) {
             // TODO: 如有需要，可做错误日志节流
-            std::cerr << "[IMU] WitReadReg(AX,16) failed\n";
+            std::cerr << "[IMU] WitReadReg(AX,15) failed\n";
         }
 
-        // 2) 使用 select 等待一小段时间的串口数据
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(fd_, &rfds);
+        // 2) drain 串口接收窗口：尽量在当前周期内把回复读完并喂给 SDK
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(recv_win_ms);
 
-        timeval tv{};
-        tv.tv_sec  = recv_win_ms / 1000;
-        tv.tv_usec = (recv_win_ms % 1000) * 1000;
+        while (!stop_requested_.load() &&
+               fd_ >= 0 &&
+               std::chrono::steady_clock::now() < deadline) {
+            const auto now = std::chrono::steady_clock::now();
+            const auto remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - now);
+            const int wait_ms = static_cast<int>(
+                std::max<long long>(0ll, std::min<long long>(remaining_ms.count(), select_slice_ms)));
+            if (wait_ms <= 0) {
+                break;
+            }
 
-        int ret = ::select(fd_ + 1, &rfds, nullptr, nullptr, &tv);
-        if (ret < 0) {
-            if (errno == EINTR) {
-                // 被信号打断，不算致命错误，下次循环继续
-                std::this_thread::sleep_for(std::chrono::milliseconds(period_ms));
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(fd_, &rfds);
+
+            timeval tv{};
+            tv.tv_sec  = wait_ms / 1000;
+            tv.tv_usec = (wait_ms % 1000) * 1000;
+
+            const int ret = ::select(fd_ + 1, &rfds, nullptr, nullptr, &tv);
+            if (ret < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                std::cerr << "[IMU] select() error: " << std::strerror(errno) << "\n";
+                closePort();
+                break;
+            }
+            if (ret == 0 || !FD_ISSET(fd_, &rfds)) {
                 continue;
             }
-            std::cerr << "[IMU] select() error: "
-                      << std::strerror(errno) << "\n";
-            closePort();
-            std::this_thread::sleep_for(std::chrono::milliseconds(period_ms));
-            continue;
-        }
 
-        if (ret > 0 && FD_ISSET(fd_, &rfds)) {
             std::uint8_t buf[256];
             const ssize_t n = ::read(fd_, buf, sizeof(buf));
             if (n < 0) {
-                std::cerr << "[IMU] read() error: "
-                          << std::strerror(errno) << "\n";
-                closePort();
-            } else if (n > 0) {
-                for (ssize_t i = 0; i < n; ++i) {
-                    WitSerialDataIn(buf[i]);
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    continue;
                 }
+                std::cerr << "[IMU] read() error: " << std::strerror(errno) << "\n";
+                closePort();
+                break;
             }
-            // n == 0: 暂时没有数据，忽略
+            if (n == 0) {
+                std::cerr << "[IMU] read() returned EOF, treating device as disconnected\n";
+                closePort();
+                break;
+            }
+
+            serial_diag_.record_rx_bytes(buf, static_cast<std::size_t>(n));
+            for (ssize_t i = 0; i < n; ++i) {
+                WitSerialDataIn(buf[i]);
+            }
         }
 
         // 控制循环节奏
@@ -468,6 +476,13 @@ void ImuDriverWit::onSerialWrite(std::uint8_t* data, std::uint32_t len)
 {
     if (fd_ < 0 || data == nullptr || len == 0) {
         return;
+    }
+
+    int budget = tx_debug_budget_.load();
+    if (budget > 0) {
+        if (tx_debug_budget_.compare_exchange_strong(budget, budget - 1)) {
+            std::cerr << "[IMU] tx(modbus): " << format_hex_line(data, len) << "\n";
+        }
     }
     const ssize_t wn = ::write(fd_, data, static_cast<std::size_t>(len));
     if (wn != static_cast<ssize_t>(len)) {
@@ -502,6 +517,7 @@ void ImuDriverWit::onRegUpdate(std::uint32_t start_reg, std::uint32_t num)
     raw.count        = num;
 
     // 健康检查：只要回调被调用，就认为“收到过原始寄存器更新”
+    serial_diag_.mark_parseable_frame();
     have_any_frame_.store(true);
     last_frame_mono_ns_.store(now_ns);
 
@@ -661,8 +677,11 @@ void ImuDriverWit::makeFrameFromRegs(std::uint32_t /*start_reg*/,
     // -------- 时间戳：使用统一 timebase::stamp --------
     auto ts = tb::stamp("imu0", tb::SensorKind::IMU);
 
-    out.mono_ns = ts.host_time_ns;        // 单调时间
-    out.est_ns  = ts.corrected_time_ns;   // 延迟补偿后的统一时间
+    out.recv_mono_ns   = ts.host_time_ns;
+    out.sensor_time_ns = ts.corrected_time_ns;
+    out.consume_mono_ns = 0;
+    out.mono_ns = (out.sensor_time_ns > 0) ? out.sensor_time_ns : out.recv_mono_ns;
+    out.est_ns  = out.mono_ns;   // 兼容字段：当前与规范化样本时间保持一致
 
     // -------- 填充 IMU 数据 --------
     out.lin_acc[0] = static_cast<float>(acc_mps2[0]);

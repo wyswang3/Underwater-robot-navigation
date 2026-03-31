@@ -180,7 +180,10 @@ struct ImuRtPreprocessState {
  *   }
  *
  * 设计约束：
- *   - 不改写时间戳：输出 ImuSample.out.mono_ns / est_ns 与输入保持一致；
+ *   - 不改写样本时间语义：
+ *       * 输出会保留输入的 sensor_time_ns / recv_mono_ns / mono_ns；
+ *       * consume_mono_ns 由主线程在进入本模块前填写，本模块只透传；
+ *       * est_ns 当前只作为 mono_ns 的兼容镜像透传；
  *   - 不在此处做全局（ENU）姿态/位置解算，ESKF/MHE 在更高层实现；
  *   - 非线程安全：默认按“单生产者”模型使用，若多线程访问请上层加锁。
  */

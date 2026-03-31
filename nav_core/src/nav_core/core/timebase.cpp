@@ -49,7 +49,11 @@ Stamp stamp(const std::string&          sensor_id,
         ? *latency_ns
         : default_latency_ns(kind);
 
-    s.corrected_time_ns = s.host_time_ns - s.latency_ns;
+    if (s.sensor_time_ns.has_value()) {
+        s.corrected_time_ns = *s.sensor_time_ns;
+    } else {
+        s.corrected_time_ns = s.host_time_ns - s.latency_ns;
+    }
     return s;
 }
 

@@ -18,6 +18,24 @@ endif()
 
 # 是否编译因子图 / 在线估计等实验模块（默认关闭）
 option(NAV_CORE_ENABLE_GRAPH "Build graph smoother / online estimator modules" OFF)
+option(NAV_CORE_BUILD_TESTS "Build nav_core unit tests" OFF)
+
+# =========================================
+# 1.5) Build ID (git sha)
+#
+# 用途：
+# - 现场排障时快速确认当前运行的二进制是否来自预期代码版本；
+# - 避免“已更新代码但运行的还是旧 build/bin”的误判。
+# =========================================
+
+set(NAV_CORE_GIT_SHA "unknown")
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE NAV_CORE_GIT_SHA
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
 
 # =========================================
 # 2) 依赖库：Eigen / 线程
@@ -70,6 +88,9 @@ set(NAV_CORE_SOURCES
     src/nav_core/core/timebase.cpp
 
     # ---- drivers ----
+    src/nav_core/drivers/imu_serial_diagnostics.cpp
+    src/nav_core/drivers/imu_modbus_probe.cpp
+    src/nav_core/drivers/serial_port_utils.cpp
     src/nav_core/drivers/imu_driver_wit.cpp
     src/nav_core/drivers/dvl_protocol.cpp
     src/nav_core/drivers/dvl_driver.cpp
@@ -104,20 +125,32 @@ set(NAV_CORE_SOURCES
     src/nav_core/estimator/eskf_update_dvl.cpp
     src/nav_core/estimator/eskf_update_yaw.cpp
     src/nav_core/estimator/eskf.cpp
+    src/nav_core/estimator/nav_health_monitor.cpp
 
     # ---- io ----
     src/nav_core/io/bin_logger.cpp
     src/nav_core/io/nav_state_publisher.cpp
 
     # ---- app ----
+    src/nav_core/app/device_binding.cpp
+    src/nav_core/app/imu_port_selector.cpp
+    src/nav_core/app/nav_daemon_dvl_pipeline.cpp
+    src/nav_core/app/nav_daemon_health_audit.cpp
+    src/nav_core/app/nav_daemon_imu_pipeline.cpp
+    src/nav_core/app/nav_daemon_loop_state.cpp
+    src/nav_core/app/nav_daemon_publish.cpp
+    src/nav_core/app/sample_timing.cpp
+    src/nav_core/app/nav_runtime_status.cpp
+    src/nav_core/app/nav_state_replay.cpp
     src/nav_core/app/nav_daemon_config.cpp
+    src/nav_core/app/nav_daemon_devices.cpp
+    src/nav_core/app/nav_daemon_logging.cpp
 )
 
 # 如需要，将因子图 / 在线估计相关模块编译进扩展库（默认关闭）
 if(NAV_CORE_ENABLE_GRAPH)
     list(APPEND NAV_CORE_SOURCES
         src/nav_core/estimator/graph_smoother_2d.cpp
-        src/nav_core/estimator/nav_health_monitor.cpp
         src/nav_core/estimator/online_estimator.cpp
     )
 endif()
@@ -150,6 +183,7 @@ target_link_libraries(nav_core
 # 方便在代码中用 #if NAV_CORE_ENABLE_GRAPH 包裹实验性模块。
 target_compile_definitions(nav_core
     PUBLIC NAV_CORE_ENABLE_GRAPH=$<BOOL:${NAV_CORE_ENABLE_GRAPH}>
+    PUBLIC NAV_CORE_GIT_SHA="${NAV_CORE_GIT_SHA}"
 )
 
 # =========================================
@@ -178,11 +212,91 @@ add_executable(uwnav_dvl_selftest
 )
 target_link_libraries(uwnav_dvl_selftest PRIVATE nav_core)
 
+add_executable(uwnav_nav_replay
+    src/nav_core/app/tools/nav_state_replay.cpp
+)
+target_link_libraries(uwnav_nav_replay PRIVATE nav_core)
+
+add_executable(uwnav_imu_modbus_probe
+    src/nav_core/app/tools/imu_modbus_probe.cpp
+)
+target_link_libraries(uwnav_imu_modbus_probe PRIVATE nav_core)
+
 # 统一把可执行文件放到 build/bin 目录，方便在板子上运行：
 #   ./bin/uwnav_navd
 #   ./bin/uwnav_dvl_selftest
-foreach(tgt uwnav_navd uwnav_dvl_selftest)
+foreach(tgt uwnav_navd uwnav_dvl_selftest uwnav_nav_replay uwnav_imu_modbus_probe)
     set_target_properties(${tgt} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
 endforeach()
+
+if(NAV_CORE_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(test_nav_runtime_status
+        tests/test_nav_runtime_status.cpp
+    )
+    target_link_libraries(test_nav_runtime_status PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_runtime_status COMMAND test_nav_runtime_status)
+
+    add_executable(test_sample_timing
+        tests/test_sample_timing.cpp
+    )
+    target_link_libraries(test_sample_timing PRIVATE nav_core)
+    add_test(NAME nav_core_test_sample_timing COMMAND test_sample_timing)
+
+    add_executable(test_device_binding
+        tests/test_device_binding.cpp
+    )
+    target_link_libraries(test_device_binding PRIVATE nav_core)
+    add_test(NAME nav_core_test_device_binding COMMAND test_device_binding)
+
+    add_executable(test_serial_reconnect_integration
+        tests/test_serial_reconnect_integration.cpp
+    )
+    target_link_libraries(test_serial_reconnect_integration PRIVATE nav_core)
+    add_test(NAME nav_core_test_serial_reconnect_integration COMMAND test_serial_reconnect_integration)
+
+    add_executable(test_imu_serial_diagnostics
+        tests/test_imu_serial_diagnostics.cpp
+    )
+    target_link_libraries(test_imu_serial_diagnostics PRIVATE nav_core)
+    add_test(NAME nav_core_test_imu_serial_diagnostics COMMAND test_imu_serial_diagnostics)
+
+    add_executable(test_imu_port_selector
+        tests/test_imu_port_selector.cpp
+    )
+    target_link_libraries(test_imu_port_selector PRIVATE nav_core)
+    add_test(NAME nav_core_test_imu_port_selector COMMAND test_imu_port_selector)
+
+    add_executable(test_imu_modbus_probe
+        tests/test_imu_modbus_probe.cpp
+    )
+    target_link_libraries(test_imu_modbus_probe PRIVATE nav_core)
+    add_test(NAME nav_core_test_imu_modbus_probe COMMAND test_imu_modbus_probe)
+
+    add_executable(test_nav_daemon_config
+        tests/test_nav_daemon_config.cpp
+    )
+    target_link_libraries(test_nav_daemon_config PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_daemon_config COMMAND test_nav_daemon_config)
+
+    add_executable(test_nav_health_monitor
+        tests/test_nav_health_monitor.cpp
+    )
+    target_link_libraries(test_nav_health_monitor PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_health_monitor COMMAND test_nav_health_monitor)
+
+    add_executable(test_nav_state_replay
+        tests/test_nav_state_replay.cpp
+    )
+    target_link_libraries(test_nav_state_replay PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_state_replay COMMAND test_nav_state_replay)
+
+    add_executable(test_nav_diagnostic_fixture
+        tests/test_nav_diagnostic_fixture.cpp
+    )
+    target_link_libraries(test_nav_diagnostic_fixture PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_diagnostic_fixture COMMAND test_nav_diagnostic_fixture)
+endif()

@@ -11,8 +11,11 @@ namespace nav_core {
 /// 一般来自 timebase 模块（例如 monotonic_clock_ns()）。
 using MonoTimeNs = std::int64_t;
 
-/// 估计的 UNIX 时间（纳秒），用于日志 / 对外时间轴（GCS、数据分析等）。
-/// 可以由 MonoTimeNs 通过 timebase 校正得到。
+/// 兼容旧实现保留的“对外时间标量”（纳秒）。
+///
+/// 说明：
+///  - 当前 P0 基线中，部分链路仍把它当作 sample 对应时间的兼容字段使用；
+///  - 在建立真正的 epoch / wall-clock 对齐前，不应仅凭字段名把它解释为 UNIX 时间。
 using SysTimeNs  = std::int64_t;
 
 
@@ -83,16 +86,31 @@ struct ImuRawRegs {
  *    因此坐标变换应在驱动 / 预处理层完成。
  *
  * 时间戳：
- *  - mono_ns: 单调时钟（纳秒），用于内部时间对齐 / 插值（ESKF、在线估计主时间轴）；
- *  - est_ns:  估计 UNIX 时间（纳秒），用于日志落盘、与 DVL / 其他传感器对齐。
+ *  - sensor_time_ns:
+ *      * 样本真正对应的采样时刻（steady/mono 时间轴）；
+ *      * 若设备本身不提供硬件时间戳，驱动层可退化为“按固定延迟回推的采样时刻”；
+ *  - recv_mono_ns:
+ *      * 驱动线程收到并解码该帧时的主机单调时间；
+ *  - consume_mono_ns:
+ *      * 主线程真正接受并用于预处理 / ESKF / 发布语义判断的时间；
+ *      * 驱动输出时通常为 0，由主线程在消费路径填写；
+ *  - mono_ns:
+ *      * 采样时间在导航时间轴上的规范化表示；
+ *      * freshness / stale / out-of-order 判断统一使用该字段；
+ *  - est_ns:
+ *      * 兼容旧代码保留的时间字段；
+ *      * 在当前基线中要求与 mono_ns 保持一致，禁止再把它当成“独立 UNIX 时间”。
  *
  * 质量标志：
  *  - valid:  该帧是否通过 IMU 层基本过滤（NaN / 溢出 / 明显异常）；
  *  - status: 预留状态位（自检结果 / 错误码等，上层可扩展）。
  */
 struct ImuFrame {
-    MonoTimeNs mono_ns{0};  ///< 单调时钟时间戳（纳秒）
-    SysTimeNs  est_ns{0};   ///< 估计 UNIX 时间戳（纳秒）
+    MonoTimeNs sensor_time_ns{0};   ///< 样本对应采样时刻（steady ns）
+    MonoTimeNs recv_mono_ns{0};     ///< 驱动线程收到/解码时刻（steady ns）
+    MonoTimeNs consume_mono_ns{0};  ///< 主线程消费时刻（steady ns）
+    MonoTimeNs mono_ns{0};          ///< 规范化样本时间（steady ns）
+    SysTimeNs  est_ns{0};           ///< 兼容字段：当前必须与 mono_ns 保持一致
 
     float ang_vel[3]  = {0.f, 0.f, 0.f}; ///< 角速度 [wx, wy, wz] (rad/s)
     float lin_acc[3]  = {0.f, 0.f, 0.f}; ///< 线加速度 [ax, ay, az] (m/s^2)
@@ -162,8 +180,9 @@ enum class DvlTrackType : std::uint8_t {
  *  - X_n = East, Y_n = North, Z_n = Up（Z 轴向上为正）。
  *
  * 时间戳：
- *  - mono_ns: 单调时间戳（ns），建议作为 DVL 在导航系统中的主时间轴；
- *  - est_ns:  估计 UNIX 时间戳，用于跨进程日志对齐。
+ *  - sensor_time_ns / recv_mono_ns / consume_mono_ns 的语义与 ImuFrame 一致；
+ *  - mono_ns 统一表示该 DVL 样本在导航时间轴上的采样时刻；
+ *  - est_ns 为兼容字段，当前必须与 mono_ns 保持一致。
  *
  * 有效性：
  *  - has_body_vel: 本帧是否含有有效的体坐标速度；
@@ -174,8 +193,11 @@ enum class DvlTrackType : std::uint8_t {
  *  - valid:        该帧是否通过 DVL 层整体过滤（结合 DvlFilterConfig）。
  */
 struct DvlFrame {
-    MonoTimeNs mono_ns{0};  ///< 统一时间戳（ns）
-    SysTimeNs  est_ns{0};   ///< 估计 UNIX 时间戳（ns），用于日志/对外
+    MonoTimeNs sensor_time_ns{0};   ///< 样本对应采样时刻（steady ns）
+    MonoTimeNs recv_mono_ns{0};     ///< 驱动线程收到/解码时刻（steady ns）
+    MonoTimeNs consume_mono_ns{0};  ///< 主线程消费时刻（steady ns）
+    MonoTimeNs mono_ns{0};          ///< 统一样本时间戳（steady ns）
+    SysTimeNs  est_ns{0};           ///< 兼容字段：当前必须与 mono_ns 保持一致
 
     // ---- 1. 底跟踪 / 水团 & 锁底状态 ----
     bool          bottom_lock{false};   ///< 是否锁底成功（底跟踪）
