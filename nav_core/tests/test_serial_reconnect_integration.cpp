@@ -144,6 +144,27 @@ struct PtyPeer final {
         }
         return false;
     }
+
+    std::vector<std::uint8_t> read_tx_bytes(std::chrono::milliseconds timeout) const
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (master_fd < 0) {
+                return {};
+            }
+
+            std::uint8_t buf[256];
+            const ssize_t n = ::read(master_fd, buf, sizeof(buf));
+            if (n > 0) {
+                return std::vector<std::uint8_t>(buf, buf + n);
+            }
+            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                return {};
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return {};
+    }
 };
 
 template <class Pred>
@@ -254,7 +275,14 @@ int test_imu_reconnect_sequence_with_real_pty()
     imu_cfg.baud = 115200;
     TEST_CHECK(imu.init(imu_cfg, [](const nav_core::ImuFrame&) {}, nullptr));
     TEST_CHECK(imu.start());
-    TEST_CHECK(first->wait_for_tx_bytes(std::chrono::milliseconds(500)));
+    const auto first_tx = first->read_tx_bytes(std::chrono::milliseconds(500));
+    TEST_CHECK(first_tx.size() >= 8);
+    TEST_EQ(first_tx[0], 0x50);
+    TEST_EQ(first_tx[1], 0x03);
+    TEST_EQ(first_tx[2], 0x00);
+    TEST_EQ(first_tx[3], 0x34);
+    TEST_EQ(first_tx[4], 0x00);
+    TEST_EQ(first_tx[5], 0x0f);
 
     binder.mark_connect_success(1'210'000'000ll, *device);
     TEST_EQ(binder.status().state, DeviceConnectionState::ONLINE);
@@ -285,7 +313,14 @@ int test_imu_reconnect_sequence_with_real_pty()
     imu_cfg.port = device->path;
     TEST_CHECK(imu.init(imu_cfg, [](const nav_core::ImuFrame&) {}, nullptr));
     TEST_CHECK(imu.start());
-    TEST_CHECK(second->wait_for_tx_bytes(std::chrono::milliseconds(500)));
+    const auto second_tx = second->read_tx_bytes(std::chrono::milliseconds(500));
+    TEST_CHECK(second_tx.size() >= 8);
+    TEST_EQ(second_tx[0], 0x50);
+    TEST_EQ(second_tx[1], 0x03);
+    TEST_EQ(second_tx[2], 0x00);
+    TEST_EQ(second_tx[3], 0x34);
+    TEST_EQ(second_tx[4], 0x00);
+    TEST_EQ(second_tx[5], 0x0f);
     binder.mark_connect_success(1'330'000'000ll, *device);
 
     TEST_EQ(binder.status().state, DeviceConnectionState::ONLINE);

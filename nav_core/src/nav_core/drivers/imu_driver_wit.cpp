@@ -375,7 +375,7 @@ void ImuDriverWit::closePort()
 // ============================================================================
 //
 // 简单策略：
-//   - 以 poll_hz 频率发起 WitReadReg(AX, 16)；
+//   - 以 poll_hz 频率发起 WitReadReg(AX, 15)；
 //   - 在一个短时间窗口内用 select + read 收集响应；
 //   - 收到的每个字节都喂给 WitSerialDataIn()；
 //   - Wit SDK 解析成功后会调用 regUpdateBridge()。
@@ -394,11 +394,12 @@ void ImuDriverWit::threadFunc()
             }
         }
 
-        // 1) 发送读寄存器命令：AX 开始读取 16 个寄存器
-        //    用法参考官方 Demo Main.cpp
-        if (WitReadReg(AX, 16) != WIT_HAL_OK) {
+        // 1) 发送读寄存器命令：AX 开始读取 15 个寄存器
+        //    当前实机稳定路径与 Python reader 对齐：读取 0x34..0x42，
+        //    覆盖 acc/gyro/mag + 高精度姿态角，避免请求 16 个寄存器时实机无响应。
+        if (WitReadReg(AX, 15) != WIT_HAL_OK) {
             // TODO: 如有需要，可做错误日志节流
-            std::cerr << "[IMU] WitReadReg(AX,16) failed\n";
+            std::cerr << "[IMU] WitReadReg(AX,15) failed\n";
         }
 
         // 2) 使用 select 等待一小段时间的串口数据

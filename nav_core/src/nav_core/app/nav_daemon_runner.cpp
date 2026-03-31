@@ -736,6 +736,29 @@ bool start_dvl_driver_on_path(const app::NavDaemonConfig& cfg,
     return true;
 }
 
+void log_imu_no_frame_after_connect(const app::NavDaemonConfig& cfg,
+                                    const ManagedDeviceRuntime& runtime,
+                                    MonoTimeNs                  now_mono_ns)
+{
+    const auto& status = runtime.binder.status();
+    const auto  waited_ms =
+        (status.last_transition_ns > 0 && now_mono_ns > status.last_transition_ns)
+            ? static_cast<long long>((now_mono_ns - status.last_transition_ns) / 1000000ll)
+            : static_cast<long long>(cfg.imu.driver.binding.offline_timeout_ms);
+
+    const std::string& path =
+        status.active_path.empty() ? cfg.imu.driver.port : status.active_path;
+
+    std::fprintf(stderr,
+                 "[nav_daemon] IMU opened but no parseable frame arrived within %lld ms "
+                 "(path=%s, baud=%d, addr=0x%02x)\n",
+                 waited_ms, path.c_str(), cfg.imu.driver.baud,
+                 static_cast<unsigned int>(cfg.imu.driver.slave_addr));
+    std::fprintf(stderr,
+                 "[nav_daemon] HINT: 串口已打开，但 IMU 没有返回可解析的 Modbus 数据；"
+                 "请检查供电、RS485 A/B、波特率、slave_addr 和 USB-RS485 转接器\n");
+}
+
 bool service_imu_device(const app::NavDaemonConfig&    cfg,
                         SharedSensorState&             shared_state,
                         drivers::ImuDriverWit&         imu_driver,
@@ -774,6 +797,9 @@ bool service_imu_device(const app::NavDaemonConfig&    cfg,
         }
 
         if (offline) {
+            if (reason == "no IMU frame after connect") {
+                log_imu_no_frame_after_connect(cfg, runtime, now_mono_ns);
+            }
             imu_driver.stop();
             clear_imu_shared_state(shared_state);
             runtime.binder.mark_disconnected(now_mono_ns, reason);
