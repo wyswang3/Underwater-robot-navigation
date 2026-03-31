@@ -325,9 +325,17 @@ void ImuDriverWit::closePort()
 // ============================================================================
 void ImuDriverWit::threadFunc()
 {
-    const int poll_hz     = 100;                // 100 Hz 轮询
-    const int period_ms   = 1000 / poll_hz;     // 控制周期 ~10 ms
-    const int recv_win_ms = 5;                  // 每次命令后给 5 ms 接收窗口
+    // 经验值：
+    // - 现场 USB-RS485 + IMU 的回包延迟可能 >5ms，且 35B 回包可能被拆成多段 read()；
+    // - Wit SDK 在 Modbus 模式下需要“请求-响应”对齐（回复帧不带起始寄存器地址），
+    //   若我们在上一帧回复尚未完整到达前就发下一次 WitReadReg()，会覆盖 SDK 的请求上下文，
+    //   导致 SDK 无法触发 regUpdate 回调，从而上层误判“没有可解析帧”。 
+    //
+    // 因此这里采用更保守的策略：降低轮询频率，并在每次请求后持续 drain 一段接收窗口。
+    const int poll_hz       = 50;               // 50 Hz 轮询（更稳，足够给 ESKF propagate）
+    const int period_ms     = 1000 / poll_hz;   // ~20 ms
+    const int recv_win_ms   = 30;               // 每次命令后给更长接收窗口，确保完整回包到达
+    const int select_slice_ms = 5;              // 细分 select，便于循环 drain
 
     while (!stop_requested_.load()) {
         if (fd_ < 0) {
@@ -345,46 +353,62 @@ void ImuDriverWit::threadFunc()
             std::cerr << "[IMU] WitReadReg(AX,15) failed\n";
         }
 
-        // 2) 使用 select 等待一小段时间的串口数据
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(fd_, &rfds);
+        // 2) drain 串口接收窗口：尽量在当前周期内把回复读完并喂给 SDK
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(recv_win_ms);
 
-        timeval tv{};
-        tv.tv_sec  = recv_win_ms / 1000;
-        tv.tv_usec = (recv_win_ms % 1000) * 1000;
+        while (!stop_requested_.load() &&
+               fd_ >= 0 &&
+               std::chrono::steady_clock::now() < deadline) {
+            const auto now = std::chrono::steady_clock::now();
+            const auto remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - now);
+            const int wait_ms = static_cast<int>(
+                std::max<long long>(0ll, std::min<long long>(remaining_ms.count(), select_slice_ms)));
+            if (wait_ms <= 0) {
+                break;
+            }
 
-        int ret = ::select(fd_ + 1, &rfds, nullptr, nullptr, &tv);
-        if (ret < 0) {
-            if (errno == EINTR) {
-                // 被信号打断，不算致命错误，下次循环继续
-                std::this_thread::sleep_for(std::chrono::milliseconds(period_ms));
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(fd_, &rfds);
+
+            timeval tv{};
+            tv.tv_sec  = wait_ms / 1000;
+            tv.tv_usec = (wait_ms % 1000) * 1000;
+
+            const int ret = ::select(fd_ + 1, &rfds, nullptr, nullptr, &tv);
+            if (ret < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                std::cerr << "[IMU] select() error: " << std::strerror(errno) << "\n";
+                closePort();
+                break;
+            }
+            if (ret == 0 || !FD_ISSET(fd_, &rfds)) {
                 continue;
             }
-            std::cerr << "[IMU] select() error: "
-                      << std::strerror(errno) << "\n";
-            closePort();
-            std::this_thread::sleep_for(std::chrono::milliseconds(period_ms));
-            continue;
-        }
 
-        if (ret > 0 && FD_ISSET(fd_, &rfds)) {
             std::uint8_t buf[256];
             const ssize_t n = ::read(fd_, buf, sizeof(buf));
             if (n < 0) {
-                std::cerr << "[IMU] read() error: "
-                          << std::strerror(errno) << "\n";
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    continue;
+                }
+                std::cerr << "[IMU] read() error: " << std::strerror(errno) << "\n";
                 closePort();
-            } else if (n == 0) {
-                // PTY/USB 断开时 read() 可能返回 0。继续保留 fd 会让上层误判端口仍在线，
-                // 因此这里显式关闭串口，让 nav 主线程进入 RECONNECTING 路径。
+                break;
+            }
+            if (n == 0) {
                 std::cerr << "[IMU] read() returned EOF, treating device as disconnected\n";
                 closePort();
-            } else if (n > 0) {
-                serial_diag_.record_rx_bytes(buf, static_cast<std::size_t>(n));
-                for (ssize_t i = 0; i < n; ++i) {
-                    WitSerialDataIn(buf[i]);
-                }
+                break;
+            }
+
+            serial_diag_.record_rx_bytes(buf, static_cast<std::size_t>(n));
+            for (ssize_t i = 0; i < n; ++i) {
+                WitSerialDataIn(buf[i]);
             }
         }
 

@@ -301,9 +301,12 @@ ImuSerialDebugSnapshot ImuSerialDiagnostics::snapshot() const
 
     if (modbus.frame_count > 0u) {
         out.peer_kind = ImuSerialPeerKind::kImuModbusReply;
+        // 注意：这个诊断器既会被 navd 驱动使用（会调用 mark_parseable_frame），
+        // 也会被独立 probe 工具使用（只抓字节，不跑 Wit SDK）。
+        // 因此这里的 summary 不能过度绑定 “SDK 是否已回调” 的语义。
         out.summary = out.parseable_frame_seen
-            ? "WIT Modbus reply observed and SDK callback already fired"
-            : "WIT-style Modbus reply observed, but SDK did not emit a register update";
+            ? "WIT Modbus reply observed and register update callback already fired"
+            : "WIT-style Modbus reply observed (CRC ok)";
         out.preview_hex = format_hex_line(modbus.first_frame.data(), modbus.first_frame.size());
         out.frame_dump_hex = out.preview_hex;
         return out;
