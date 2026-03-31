@@ -115,10 +115,11 @@ set(NAV_CORE_SOURCES
     # ---- app ----
     src/nav_core/app/device_binding.cpp
     src/nav_core/app/imu_port_selector.cpp
+    src/nav_core/app/nav_daemon_dvl_pipeline.cpp
+    src/nav_core/app/nav_daemon_imu_pipeline.cpp
     src/nav_core/app/nav_daemon_loop_state.cpp
     src/nav_core/app/nav_daemon_publish.cpp
     src/nav_core/app/sample_timing.cpp
-    src/nav_core/app/nav_daemon_sensor_pipeline.cpp
     src/nav_core/app/nav_runtime_status.cpp
     src/nav_core/app/nav_state_replay.cpp
     src/nav_core/app/nav_daemon_config.cpp

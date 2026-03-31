@@ -12,10 +12,11 @@
 
 #include "nav_core/app/nav_daemon_config.hpp"
 #include "nav_core/app/nav_daemon_devices.hpp"
+#include "nav_core/app/nav_daemon_dvl_pipeline.hpp"
+#include "nav_core/app/nav_daemon_imu_pipeline.hpp"
 #include "nav_core/app/nav_daemon_logging.hpp"
 #include "nav_core/app/nav_daemon_loop_state.hpp"
 #include "nav_core/app/nav_daemon_publish.hpp"
-#include "nav_core/app/nav_daemon_sensor_pipeline.hpp"
 
 #include "nav_core/drivers/dvl_driver.hpp"
 #include "nav_core/drivers/imu_driver_wit.hpp"
@@ -101,15 +102,13 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
 
         const app::SharedSensorSnapshot snapshot =
             app::snapshot_shared_sensor_state(shared_state);
-        const app::ProcessedLoopSamples processed_samples =
-            app::process_sensor_pipelines(
+        const auto latest_nav_imu =
+            app::process_imu_pipeline(
                 cfg,
                 snapshot,
                 now_mono_ns,
                 imu_pp,
-                dvl_pp,
                 eskf,
-                sample_logger,
                 timing_logger,
                 event_logger,
                 loop_state
@@ -120,9 +119,28 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
 #endif
             );
 
+        app::process_dvl_pipeline(
+            cfg,
+            snapshot,
+            now_mono_ns,
+            dvl_pp,
+            eskf,
+            sample_logger,
+            timing_logger,
+            event_logger,
+            loop_state
+#if NAV_CORE_ENABLE_GRAPH
+            ,
+            &health_monitor,
+            health_monitor_enabled
+#endif
+        );
+
         const auto nav = app::build_nav_state_output(
             cfg,
-            processed_samples,
+            latest_nav_imu,
+            snapshot.last_imu_ns,
+            snapshot.last_dvl_ns,
             now_mono_ns,
             loop_state,
             imu_pp,

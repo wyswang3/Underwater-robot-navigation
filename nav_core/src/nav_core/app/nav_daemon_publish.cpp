@@ -13,7 +13,9 @@ namespace io = nav_core::io;
 
 shared::msg::NavState build_nav_state_output(
     const NavDaemonConfig&         cfg,
-    const ProcessedLoopSamples&    processed_samples,
+    const std::optional<ImuSample>& latest_nav_imu,
+    MonoTimeNs                     last_imu_ns,
+    MonoTimeNs                     last_dvl_ns,
     MonoTimeNs                     now_mono_ns,
     const NavLoopState&            loop_state,
     preprocess::ImuRtPreprocessor& imu_pp,
@@ -30,8 +32,7 @@ shared::msg::NavState build_nav_state_output(
         eskf,
         nav,
         state_stamp_ns,
-        processed_samples.latest_nav_imu.has_value() ? &(*processed_samples.latest_nav_imu)
-                                                     : nullptr);
+        latest_nav_imu.has_value() ? &(*latest_nav_imu) : nullptr);
 
     NavPublishContext publish_ctx{};
     publish_ctx.publish_mono_ns = now_mono_ns;
@@ -53,10 +54,12 @@ shared::msg::NavState build_nav_state_output(
 
 #if NAV_CORE_ENABLE_GRAPH
     if (health_monitor_enabled && health_monitor != nullptr) {
-        health_monitor->update_sensor_heartbeat(
-            now_mono_ns, processed_samples.last_imu_ns, processed_samples.last_dvl_ns);
+        health_monitor->update_sensor_heartbeat(now_mono_ns, last_imu_ns, last_dvl_ns);
         health_monitor->update_online_state(nav);
     }
+#else
+    (void)last_imu_ns;
+    (void)last_dvl_ns;
 #endif
 
     return nav;

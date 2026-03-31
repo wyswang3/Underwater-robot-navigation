@@ -8,16 +8,21 @@
 //   - 负责共享内存发布、binlog 落盘、状态变化事件记录；
 //   - 统一周期性导航摘要输出，避免这些逻辑散落在主循环中。
 //
+// 输出语义：
+//   - 这里构造并发布的 NavState 是导航侧对外唯一权威输出；
+//   - 控制侧和上位机都应消费这份共享导航数据，而不是直接读取内部 ESKF 状态。
+//
 // 边界：
 //   - 本模块不做传感器预处理和设备重连；
 //   - 假定传感器消费结果已经由 nav_daemon_sensor_pipeline 给出。
 //
 #pragma once
 
+#include <optional>
+
 #include "nav_core/app/nav_daemon_config.hpp"
 #include "nav_core/app/nav_daemon_logging.hpp"
 #include "nav_core/app/nav_daemon_loop_state.hpp"
-#include "nav_core/app/nav_daemon_sensor_pipeline.hpp"
 #include "nav_core/app/nav_runtime_status.hpp"
 #include "nav_core/estimator/eskf.hpp"
 #include "nav_core/io/bin_logger.hpp"
@@ -32,7 +37,9 @@ namespace nav_core::app {
 
 shared::msg::NavState build_nav_state_output(
     const NavDaemonConfig&         cfg,
-    const ProcessedLoopSamples&    processed_samples,
+    const std::optional<ImuSample>& latest_nav_imu,
+    MonoTimeNs                     last_imu_ns,
+    MonoTimeNs                     last_dvl_ns,
     MonoTimeNs                     now_mono_ns,
     const NavLoopState&            loop_state,
     preprocess::ImuRtPreprocessor& imu_pp,
