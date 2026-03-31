@@ -207,6 +207,9 @@ private:
 
     // 记录连接窗口内的原始串口特征，便于把“错口/错协议/错波特率”落成可读诊断。
     ImuSerialDiagnostics serial_diag_{};
+
+    // 现场排障用：只打印少量前几帧 TX，确认“驱动是否真的在发 Modbus 请求”。
+    std::atomic<int> tx_debug_budget_{0};
 };
 
 } // namespace nav_core::drivers

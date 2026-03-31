@@ -44,6 +44,25 @@ inline bool isFinite(double x) noexcept {
     return std::isfinite(x);
 }
 
+std::string format_hex_line(const std::uint8_t* data, std::size_t len)
+{
+    if (data == nullptr || len == 0u) {
+        return {};
+    }
+    static const char* kHex = "0123456789abcdef";
+    std::string out;
+    out.reserve(len * 3u);
+    for (std::size_t i = 0; i < len; ++i) {
+        if (i != 0u) {
+            out.push_back(' ');
+        }
+        const unsigned v = static_cast<unsigned>(data[i]);
+        out.push_back(kHex[(v >> 4u) & 0x0fu]);
+        out.push_back(kHex[v & 0x0fu]);
+    }
+    return out;
+}
+
 } // namespace
 
 // ============================================================================
@@ -140,6 +159,7 @@ bool ImuDriverWit::start()
     last_frame_mono_ns_.store(0);
     port_open_.store(false);
     serial_diag_.reset(slave_addr_);
+    tx_debug_budget_.store(2);
 
     if (!openPort()) {
         std::cerr << "[IMU] openPort() failed on " << port_ << "\n";
@@ -456,6 +476,13 @@ void ImuDriverWit::onSerialWrite(std::uint8_t* data, std::uint32_t len)
 {
     if (fd_ < 0 || data == nullptr || len == 0) {
         return;
+    }
+
+    int budget = tx_debug_budget_.load();
+    if (budget > 0) {
+        if (tx_debug_budget_.compare_exchange_strong(budget, budget - 1)) {
+            std::cerr << "[IMU] tx(modbus): " << format_hex_line(data, len) << "\n";
+        }
     }
     const ssize_t wn = ::write(fd_, data, static_cast<std::size_t>(len));
     if (wn != static_cast<ssize_t>(len)) {
