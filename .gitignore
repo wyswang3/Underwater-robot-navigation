@@ -4,3 +4,6 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# runtime-generated navigation logs (do not version)
+data/nav/
