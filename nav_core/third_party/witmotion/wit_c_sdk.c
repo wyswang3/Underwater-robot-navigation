@@ -168,10 +168,10 @@ void WitSerialDataIn(uint8_t ucData)
                 s_uiWitDataCnt = 0;
             }
         break;
-        case WIT_PROTOCOL_905x_MODBUS:
-        case WIT_PROTOCOL_MODBUS:
-            if(s_uiWitDataCnt > 2)
-            {
+	        case WIT_PROTOCOL_905x_MODBUS:
+	        case WIT_PROTOCOL_MODBUS:
+	            if(s_uiWitDataCnt > 2)
+	            {
                 if(s_ucWitDataBuff[1] != FuncR)
                 {
                     s_uiWitDataCnt--;
@@ -179,11 +179,13 @@ void WitSerialDataIn(uint8_t ucData)
                     return ;
                 }
                 if(s_uiWitDataCnt < (s_ucWitDataBuff[2] + 5))return ;
-                /* Standard Modbus RTU wire order: CRC low byte then high byte. */
-                usTemp = ((uint16_t)s_ucWitDataBuff[s_uiWitDataCnt-1] << 8) | s_ucWitDataBuff[s_uiWitDataCnt-2];
-                usCRC16 = __CRC16(s_ucWitDataBuff, s_uiWitDataCnt-2);
-                if(usTemp != usCRC16)
-                {
+	                // NOTE: WitMotion SDK __CRC16() returns a byte-swapped numeric value (hi<<8|lo),
+	                // while Modbus RTU on-the-wire CRC bytes are low then high.
+	                // Therefore we must reconstruct numeric CRC as (low<<8)|high to match __CRC16().
+	                usTemp = ((uint16_t)s_ucWitDataBuff[s_uiWitDataCnt-2] << 8) | s_ucWitDataBuff[s_uiWitDataCnt-1];
+	                usCRC16 = __CRC16(s_ucWitDataBuff, s_uiWitDataCnt-2);
+	                if(usTemp != usCRC16)
+	                {
                     s_uiWitDataCnt--;
                     memcpy(s_ucWitDataBuff, &s_ucWitDataBuff[1], s_uiWitDataCnt);
                     return ;
@@ -292,20 +294,20 @@ int32_t WitWriteReg(uint32_t uiReg, uint16_t usData)
             ucBuff[4] = usData >> 8;
             p_WitSerialWriteFunc(ucBuff, 5);
             break;
-        case WIT_PROTOCOL_905x_MODBUS:
-        case WIT_PROTOCOL_MODBUS:
-            if(p_WitSerialWriteFunc == NULL)return WIT_HAL_EMPTY;
-            ucBuff[0] = s_ucAddr;
-            ucBuff[1] = FuncW;
-            ucBuff[2] = uiReg >> 8;
-            ucBuff[3] = uiReg & 0xFF;
-            ucBuff[4] = usData >> 8;
-            ucBuff[5] = usData & 0xff;
-            usCRC = __CRC16(ucBuff, 6);
-            /* Standard Modbus RTU wire order: CRC low byte then high byte. */
-            ucBuff[6] = usCRC & 0xff;
-            ucBuff[7] = usCRC >> 8;
-            p_WitSerialWriteFunc(ucBuff, 8);
+		case WIT_PROTOCOL_905x_MODBUS:
+		case WIT_PROTOCOL_MODBUS:
+			if(p_WitSerialWriteFunc == NULL)return WIT_HAL_EMPTY;
+			ucBuff[0] = s_ucAddr;
+			ucBuff[1] = FuncW;
+			ucBuff[2] = uiReg >> 8;
+			ucBuff[3] = uiReg & 0xFF;
+			ucBuff[4] = usData >> 8;
+			ucBuff[5] = usData & 0xff;
+			usCRC = __CRC16(ucBuff, 6);
+			// See note in WitSerialDataIn(): __CRC16() numeric is byte-swapped.
+			ucBuff[6] = usCRC >> 8;
+			ucBuff[7] = usCRC & 0xff;
+			p_WitSerialWriteFunc(ucBuff, 8);
             break;
 		case WIT_PROTOCOL_905x_CAN:
         case WIT_PROTOCOL_CAN:
@@ -352,7 +354,7 @@ int32_t WitReadReg(uint32_t uiReg, uint32_t uiReadNum)
 		   break;
         case WIT_PROTOCOL_905x_MODBUS:
         case WIT_PROTOCOL_MODBUS:
-			  if(p_WitSerialWriteFunc == NULL)return WIT_HAL_EMPTY;
+              if(p_WitSerialWriteFunc == NULL)return WIT_HAL_EMPTY;
               usTemp = uiReadNum << 1;
               if((usTemp + 5) > WIT_DATA_BUFF_SIZE)return WIT_HAL_NOMEM;
               ucBuff[0] = s_ucAddr;
@@ -362,9 +364,10 @@ int32_t WitReadReg(uint32_t uiReg, uint32_t uiReadNum)
               ucBuff[4] = uiReadNum >> 8;
               ucBuff[5] = uiReadNum & 0xff;
               usTemp = __CRC16(ucBuff, 6);
-              /* Standard Modbus RTU wire order: CRC low byte then high byte. */
-              ucBuff[6] = usTemp & 0xff;
-              ucBuff[7] = usTemp >> 8;
+              // See note above: __CRC16() numeric is byte-swapped, so write hi then lo to get
+              // Modbus RTU wire order (lo then hi).
+              ucBuff[6] = usTemp >> 8;
+              ucBuff[7] = usTemp & 0xff;
               p_WitSerialWriteFunc(ucBuff, 8);
 		   break;
 	    case WIT_PROTOCOL_905x_CAN:
