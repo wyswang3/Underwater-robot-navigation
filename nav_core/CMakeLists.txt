@@ -21,6 +21,23 @@ option(NAV_CORE_ENABLE_GRAPH "Build graph smoother / online estimator modules" O
 option(NAV_CORE_BUILD_TESTS "Build nav_core unit tests" OFF)
 
 # =========================================
+# 1.5) Build ID (git sha)
+#
+# 用途：
+# - 现场排障时快速确认当前运行的二进制是否来自预期代码版本；
+# - 避免“已更新代码但运行的还是旧 build/bin”的误判。
+# =========================================
+
+set(NAV_CORE_GIT_SHA "unknown")
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE NAV_CORE_GIT_SHA
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
+# =========================================
 # 2) 依赖库：Eigen / 线程
 # =========================================
 
@@ -166,6 +183,7 @@ target_link_libraries(nav_core
 # 方便在代码中用 #if NAV_CORE_ENABLE_GRAPH 包裹实验性模块。
 target_compile_definitions(nav_core
     PUBLIC NAV_CORE_ENABLE_GRAPH=$<BOOL:${NAV_CORE_ENABLE_GRAPH}>
+    PUBLIC NAV_CORE_GIT_SHA="${NAV_CORE_GIT_SHA}"
 )
 
 # =========================================

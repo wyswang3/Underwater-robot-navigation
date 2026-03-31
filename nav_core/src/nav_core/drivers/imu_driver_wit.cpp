@@ -9,6 +9,7 @@
 #include "nav_core/drivers/serial_port_utils.hpp"
 #include "nav_core/core/timebase.hpp"
 
+#include <filesystem>
 #include <cmath>
 #include <cstring>
 #include <ctime>
@@ -298,7 +299,21 @@ bool ImuDriverWit::openPort()
         return false;
     }
 
-    std::cerr << "[IMU] serial opened: " << port_ << " @" << baud_ << "\n";
+    std::string canonical = port_;
+    {
+        std::error_code ec;
+        const auto path = std::filesystem::path(port_);
+        const auto resolved = std::filesystem::canonical(path, ec);
+        if (!ec) {
+            canonical = resolved.string();
+        }
+    }
+
+    std::cerr << "[IMU] serial opened: " << port_ << " @" << baud_;
+    if (canonical != port_) {
+        std::cerr << " canonical=" << canonical;
+    }
+    std::cerr << "\n";
     port_open_.store(true);
     return true;
 }

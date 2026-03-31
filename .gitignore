@@ -1,1 +1,6 @@
 /nav_core/build/
+
+# python bytecode / caches (must not be versioned)
+__pycache__/
+*.pyc
+*.pyo
