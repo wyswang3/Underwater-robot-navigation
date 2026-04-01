@@ -168,6 +168,16 @@ dvl:
 
 
 # ------------------------------------------------------------
+# 3.5. Volt32 采集（日志用途）
+# ------------------------------------------------------------
+volt:
+  enable: true
+  port: "/dev/ttyUSB0"
+  baud: 115200
+  channels: 16
+
+
+# ------------------------------------------------------------
 # 4. 估计器部分：在线 ESKF + 健康监测
 # ------------------------------------------------------------
 estimator:
@@ -260,6 +270,10 @@ logging:
   # 是否按日期分子目录：data/YYYY-MM-DD/...
   split_by_date: true
 
+  # 传感器 CSV 根目录（与 Python 采集一致）
+  sensor_data_root: "../data"
+  log_sensor_csv: true
+
   # 细粒度日志开关：
   #   - raw: 驱动层刚解码出的 IMU / DVL（硬门控之后）；
   #   - processed: 预处理输出（进入 ESKF 之前）；
@@ -273,6 +287,7 @@ logging:
   log_eskf_state:     true
   log_eskf_update:    true
   log_health_report:  true
+  log_volt_raw:       true
 
   # 兼容旧字段（可选；若完全迁移，可以删掉）
   log_imu:       true

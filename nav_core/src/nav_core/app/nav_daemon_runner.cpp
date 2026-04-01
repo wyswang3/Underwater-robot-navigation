@@ -48,6 +48,7 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                   nav_core::BinLogger*           nav_state_logger,
                   nav_core::BinLogger*           timing_logger,
                   app::NavEventCsvLogger*        event_logger,
+                  app::NavSensorCsvLogger*       sensor_logger,
                   std::atomic<bool>&             stop_flag)
 {
     const double loop_hz = (cfg.loop.nav_loop_hz > 0.0) ? cfg.loop.nav_loop_hz : 20.0;
@@ -82,6 +83,7 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                                     shared_state,
                                     imu_driver,
                                     loop_state.imu_runtime,
+                                    sensor_logger,
                                     timing_logger,
                                     event_logger,
                                     now_mono_ns)) {
@@ -96,6 +98,7 @@ int run_main_loop(const app::NavDaemonConfig&    cfg,
                                     shared_state,
                                     dvl_driver,
                                     loop_state.dvl_runtime,
+                                    sensor_logger,
                                     timing_logger,
                                     event_logger,
                                     now_mono_ns)) {
@@ -240,23 +243,32 @@ int run_nav_daemon(const NavDaemonConfig&       cfg,
                      "(结构化低频事件日志不可用，但不影响导航主链)\n");
     }
 
+    NavSensorCsvLogger  sensor_csv_logger;
+    NavSensorCsvLogger* sensor_csv_logger_ptr = nullptr;
+    if (sensor_csv_logger.init(cfg)) {
+        sensor_csv_logger_ptr = &sensor_csv_logger;
+    }
+
     std::fprintf(stderr,
                  "[nav_daemon] READY: device binders armed, ESKF online, loop=%.2f Hz\n",
                  cfg.loop.nav_loop_hz > 0.0 ? cfg.loop.nav_loop_hz : 20.0);
 
-    return run_main_loop(cfg,
-                         shared_state,
-                         imu_driver,
-                         dvl_driver,
-                         imu_pp,
-                         dvl_pp,
-                         eskf,
-                         nav_pub,
-                         sample_logger_ptr,
-                         nav_state_logger_ptr,
-                         timing_logger_ptr,
-                         nav_event_logger_ptr,
-                         stop_flag);
+    const int rc = run_main_loop(cfg,
+                                 shared_state,
+                                 imu_driver,
+                                 dvl_driver,
+                                 imu_pp,
+                                 dvl_pp,
+                                 eskf,
+                                 nav_pub,
+                                 sample_logger_ptr,
+                                 nav_state_logger_ptr,
+                                 timing_logger_ptr,
+                                 nav_event_logger_ptr,
+                                 sensor_csv_logger_ptr,
+                                 stop_flag);
+    sensor_csv_logger.shutdown();
+    return rc;
 }
 
 } // namespace nav_core::app

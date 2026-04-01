@@ -367,8 +367,8 @@ void ImuDriverWit::threadFunc()
     //   导致 SDK 无法触发 regUpdate 回调，从而上层误判“没有可解析帧”。 
     //
     // 因此这里采用更保守的策略：降低轮询频率，并在每次请求后持续 drain 一段接收窗口。
-    const int poll_hz       = 50;               // 50 Hz 轮询（更稳，足够给 ESKF propagate）
-    const int period_ms     = 1000 / poll_hz;   // ~20 ms
+    const int poll_hz       = 100;               // 100 Hz 轮询（更稳，足够给 ESKF propagate）
+    const int period_ms     = 1000 / poll_hz;   // ~10 ms
     const int recv_win_ms   = 30;               // 每次命令后给更长接收窗口，确保完整回包到达
     const int select_slice_ms = 5;              // 细分 select，便于循环 drain
 

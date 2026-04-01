@@ -400,6 +400,7 @@ void DvlDriver::threadFunc() {
             raw.mono_ns = (raw.sensor_time_ns > 0) ? raw.sensor_time_ns : raw.recv_mono_ns;
             raw.est_ns  = raw.mono_ns;
             raw.parsed  = std::move(parsed);
+            raw.raw_line = std::move(one);
 
             last_rx_mono_ns_.store(raw.recv_mono_ns);
 

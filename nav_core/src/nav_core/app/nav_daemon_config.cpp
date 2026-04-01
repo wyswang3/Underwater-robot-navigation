@@ -270,7 +270,7 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
         }
     }
 
-   // ============================ 3. dvl ============================
+    // ============================ 3. dvl ============================
     {
        YAML::Node dvl_n = get_child(root, "dvl");
     if (dvl_n) {
@@ -339,6 +339,18 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
        }
     }
 
+    // ============================ 3.5 volt ============================
+    {
+        YAML::Node volt_n = get_child(root, "volt");
+        if (volt_n) {
+            auto& vcfg = out_cfg.volt;
+            load_scalar(volt_n, "enable", vcfg.enable);
+            load_scalar(volt_n, "port", vcfg.port);
+            load_scalar(volt_n, "baud", vcfg.baud);
+            load_scalar(volt_n, "channels", vcfg.channels);
+        }
+    }
+
     // ============================ 4. estimator ============================
     {
         YAML::Node est_n = get_child(root, "estimator");
@@ -399,6 +411,8 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
             load_scalar(log_n, "enable",        out_cfg.logging.enable);
             load_scalar(log_n, "base_dir",      out_cfg.logging.base_dir);
             load_scalar(log_n, "split_by_date", out_cfg.logging.split_by_date);
+            load_scalar(log_n, "sensor_data_root", out_cfg.logging.sensor_data_root);
+            load_scalar(log_n, "log_sensor_csv",   out_cfg.logging.log_sensor_csv);
 
             // 新版多路日志开关
             load_scalar(log_n, "log_imu_raw",        out_cfg.logging.log_imu_raw);
@@ -408,6 +422,7 @@ bool load_nav_daemon_config_from_yaml(const std::string& yaml_path,
             load_scalar(log_n, "log_eskf_state",     out_cfg.logging.log_eskf_state);
             load_scalar(log_n, "log_eskf_update",    out_cfg.logging.log_eskf_update);
             load_scalar(log_n, "log_health_report",  out_cfg.logging.log_health_report);
+            load_scalar(log_n, "log_volt_raw",       out_cfg.logging.log_volt_raw);
 
             // 兼容老字段（如果你还在用旧版 yaml，可以临时复用）
             bool old_log_imu = false, old_log_dvl = false, old_log_eskf = false;

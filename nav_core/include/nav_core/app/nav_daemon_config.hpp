@@ -99,6 +99,18 @@ struct DvlSectionConfig {
     nav_core::preprocess::DvlRtPreprocessConfig rt_preproc;
 };
 
+// ============================ 3.5. Volt32 部分配置 ============================
+
+/**
+ * @brief Volt32 电压电流板采集配置（只负责日志落盘，不参与导航融合）。
+ */
+struct VoltSectionConfig {
+    bool        enable{false};
+    std::string port{"/dev/ttyUSB1"};
+    int         baud{115200};
+    int         channels{16};
+};
+
 
 // ============================ 4. 估计器部分配置（在线 ESKF + 健康监测） ============================
 
@@ -119,10 +131,13 @@ struct LoggingSectionConfig {
     bool        enable{true};                   ///< 总开关
     std::string base_dir{"./data/nav"};         ///< 日志根目录
     bool        split_by_date{true};            ///< 是否按日期分子目录
+    std::string sensor_data_root{"../data"};    ///< 传感器 CSV 根目录（默认 data/YYYY-MM-DD/<sensor>/）
+    bool        log_sensor_csv{true};           ///< 是否落盘传感器原始 CSV
 
     // 1) 传感器原始数据（驱动输出）
     bool log_imu_raw{true};                     ///< ImuLogPacket（原始 IMU）
     bool log_dvl_raw{true};                     ///< DvlLogPacket（原始 DVL）
+    bool log_volt_raw{true};                    ///< Volt32 原始采集 CSV
 
     // 2) 预处理后的传感器数据（进入 ESKF 的版本）
     bool log_imu_processed{true};               ///< 预处理 IMU (B=FRD, 已重力补偿)
@@ -150,6 +165,7 @@ struct NavDaemonConfig {
     LoopTimingConfig       loop;       ///< 主循环与时间阈值
     ImuSectionConfig       imu;        ///< IMU 子系统
     DvlSectionConfig       dvl;        ///< DVL 子系统
+    VoltSectionConfig      volt;       ///< Volt32 采集（日志用途）
     EstimatorSectionConfig estimator;  ///< 在线 ESKF + 健康监测
     LoggingSectionConfig   logging;    ///< 二进制日志写入
     PublisherSectionConfig publisher;  ///< 导航状态发布

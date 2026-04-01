@@ -68,9 +68,11 @@ void clear_imu_shared_state(SharedSensorState& shared_state);
 void clear_dvl_shared_state(SharedSensorState& shared_state);
 
 /// 生成 IMU 驱动回调，把驱动线程产出的最新帧写入 SharedSensorState。
-drivers::ImuDriverWit::FrameCallback make_imu_frame_callback(SharedSensorState& shared_state);
+drivers::ImuDriverWit::FrameCallback make_imu_frame_callback(SharedSensorState& shared_state,
+                                                             NavSensorCsvLogger* sensor_logger);
 /// 生成 DVL 驱动回调，把驱动线程产出的最新原始样本写入 SharedSensorState。
-drivers::DvlDriver::RawCallback make_dvl_raw_callback(SharedSensorState& shared_state);
+drivers::DvlDriver::RawCallback make_dvl_raw_callback(SharedSensorState& shared_state,
+                                                      NavSensorCsvLogger* sensor_logger);
 
 /**
  * @brief 维护 IMU 设备生命周期。
@@ -87,6 +89,7 @@ bool service_imu_device(const NavDaemonConfig& cfg,
                         SharedSensorState& shared_state,
                         drivers::ImuDriverWit& imu_driver,
                         ManagedDeviceRuntime& runtime,
+                        NavSensorCsvLogger* sensor_logger,
                         nav_core::BinLogger* timing_logger,
                         NavEventCsvLogger* event_logger,
                         MonoTimeNs now_mono_ns);
@@ -101,6 +104,7 @@ bool service_dvl_device(const NavDaemonConfig& cfg,
                         SharedSensorState& shared_state,
                         drivers::DvlDriver& dvl_driver,
                         ManagedDeviceRuntime& runtime,
+                        NavSensorCsvLogger* sensor_logger,
                         nav_core::BinLogger* timing_logger,
                         NavEventCsvLogger* event_logger,
                         MonoTimeNs now_mono_ns);

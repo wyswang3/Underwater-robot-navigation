@@ -83,13 +83,14 @@ void report_device_transition(const char* label,
 bool start_imu_driver_on_path(const NavDaemonConfig& cfg,
                               SharedSensorState& shared_state,
                               drivers::ImuDriverWit& imu_driver,
+                              NavSensorCsvLogger* sensor_logger,
                               NavEventCsvLogger* event_logger,
                               const std::string& path)
 {
     drivers::ImuConfig dcfg = cfg.imu.driver;
     dcfg.port = path;
 
-    const auto on_frame = make_imu_frame_callback(shared_state);
+    const auto on_frame = make_imu_frame_callback(shared_state, sensor_logger);
     drivers::ImuDriverWit::RawCallback on_raw;
 
     if (!imu_driver.init(dcfg, on_frame, on_raw)) {
@@ -126,13 +127,14 @@ bool start_imu_driver_on_path(const NavDaemonConfig& cfg,
 bool start_dvl_driver_on_path(const NavDaemonConfig& cfg,
                               SharedSensorState& shared_state,
                               drivers::DvlDriver& dvl_driver,
+                              NavSensorCsvLogger* sensor_logger,
                               NavEventCsvLogger* event_logger,
                               const std::string& path)
 {
     drivers::DvlConfig dcfg = cfg.dvl.driver;
     dcfg.port = path;
 
-    const auto on_raw = make_dvl_raw_callback(shared_state);
+    const auto on_raw = make_dvl_raw_callback(shared_state, sensor_logger);
 
     if (!dvl_driver.init(dcfg, on_raw)) {
         std::fprintf(stderr,
@@ -251,12 +253,17 @@ void clear_dvl_shared_state(SharedSensorState& shared_state)
     shared_state.last_dvl_mono_ns = 0;
 }
 
-drivers::ImuDriverWit::FrameCallback make_imu_frame_callback(SharedSensorState& shared_state)
+drivers::ImuDriverWit::FrameCallback make_imu_frame_callback(SharedSensorState& shared_state,
+                                                             NavSensorCsvLogger* sensor_logger)
 {
-    return [&shared_state](const ImuFrame& frame) {
+    return [&shared_state, sensor_logger](const ImuFrame& frame) {
         MonoTimeNs mono_ns = frame.mono_ns;
         if (mono_ns <= 0) {
             mono_ns = monotonic_now_ns();
+        }
+
+        if (sensor_logger != nullptr) {
+            sensor_logger->log_imu_frame(frame);
         }
 
         std::lock_guard<std::mutex> lock(shared_state.m);
@@ -265,13 +272,14 @@ drivers::ImuDriverWit::FrameCallback make_imu_frame_callback(SharedSensorState& 
     };
 }
 
-drivers::DvlDriver::RawCallback make_dvl_raw_callback(SharedSensorState& shared_state)
+drivers::DvlDriver::RawCallback make_dvl_raw_callback(SharedSensorState& shared_state,
+                                                      NavSensorCsvLogger* sensor_logger)
 {
     using drivers::DvlCoordFrame;
     using drivers::DvlRawData;
     using preprocess::DvlRawSample;
 
-    return [&shared_state](const DvlRawData& raw) {
+    return [&shared_state, sensor_logger](const DvlRawData& raw) {
         DvlRawSample sample{};
         sample.sensor_time_ns = raw.sensor_time_ns;
         sample.recv_mono_ns = raw.recv_mono_ns;
@@ -305,6 +313,10 @@ drivers::DvlDriver::RawCallback make_dvl_raw_callback(SharedSensorState& shared_
             sample.vel_inst_mps.z = static_cast<float>(parsed.vu_mps());
         }
 
+        if (sensor_logger != nullptr) {
+            sensor_logger->log_dvl_raw(raw);
+        }
+
         std::lock_guard<std::mutex> lock(shared_state.m);
         shared_state.last_dvl_raw = sample;
         shared_state.last_dvl_mono_ns = sample.mono_ns;
@@ -315,6 +327,7 @@ bool service_imu_device(const NavDaemonConfig& cfg,
                         SharedSensorState& shared_state,
                         drivers::ImuDriverWit& imu_driver,
                         ManagedDeviceRuntime& runtime,
+                        NavSensorCsvLogger* sensor_logger,
                         nav_core::BinLogger* timing_logger,
                         NavEventCsvLogger* event_logger,
                         MonoTimeNs now_mono_ns)
@@ -365,7 +378,12 @@ bool service_imu_device(const NavDaemonConfig& cfg,
             imu_driver.stop();
             clear_imu_shared_state(shared_state);
 
-            if (!start_imu_driver_on_path(cfg, shared_state, imu_driver, event_logger, device->path)) {
+            if (!start_imu_driver_on_path(cfg,
+                                          shared_state,
+                                          imu_driver,
+                                          sensor_logger,
+                                          event_logger,
+                                          device->path)) {
                 runtime.binder.mark_connect_failure(now_mono_ns, "driver start failed");
             } else {
                 runtime.binder.mark_connect_success(now_mono_ns, *device);
@@ -383,6 +401,7 @@ bool service_dvl_device(const NavDaemonConfig& cfg,
                         SharedSensorState& shared_state,
                         drivers::DvlDriver& dvl_driver,
                         ManagedDeviceRuntime& runtime,
+                        NavSensorCsvLogger* sensor_logger,
                         nav_core::BinLogger* timing_logger,
                         NavEventCsvLogger* event_logger,
                         MonoTimeNs now_mono_ns)
@@ -428,7 +447,12 @@ bool service_dvl_device(const NavDaemonConfig& cfg,
             dvl_driver.stop();
             clear_dvl_shared_state(shared_state);
 
-            if (!start_dvl_driver_on_path(cfg, shared_state, dvl_driver, event_logger, device->path)) {
+            if (!start_dvl_driver_on_path(cfg,
+                                          shared_state,
+                                          dvl_driver,
+                                          sensor_logger,
+                                          event_logger,
+                                          device->path)) {
                 runtime.binder.mark_connect_failure(now_mono_ns, "driver start failed");
             } else {
                 runtime.binder.mark_connect_success(now_mono_ns, *device);

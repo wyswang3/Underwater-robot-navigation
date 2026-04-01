@@ -16,6 +16,8 @@
 
 #include <cstdint>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <string>
 
 #include "nav_core/app/device_binding.hpp"
@@ -100,6 +102,37 @@ private:
 
     std::ofstream ofs_{};
     std::string   run_id_{};
+};
+
+class NavSensorCsvLogger {
+public:
+    ~NavSensorCsvLogger();
+    bool init(const NavDaemonConfig& cfg);
+    void shutdown();
+
+    void log_imu_frame(const ImuFrame& frame);
+    void log_dvl_raw(const drivers::DvlRawData& raw);
+
+private:
+    class Volt32CsvLogger;
+    struct Volt32CsvLoggerDeleter {
+        void operator()(Volt32CsvLogger* ptr) const;
+    };
+
+    std::mutex imu_mu_{};
+    std::ofstream imu_raw_{};
+    std::ofstream imu_min_{};
+    double imu_raw_g_to_mps2_{9.78};
+    bool imu_enabled_{false};
+    std::uint64_t imu_flush_counter_{0};
+
+    std::mutex dvl_mu_{};
+    std::ofstream dvl_raw_{};
+    std::ofstream dvl_parsed_{};
+    bool dvl_enabled_{false};
+    std::uint64_t dvl_flush_counter_{0};
+
+    std::unique_ptr<Volt32CsvLogger, Volt32CsvLoggerDeleter> volt_logger_{};
 };
 
 /// 根据配置初始化共享内存 NavState 发布器。

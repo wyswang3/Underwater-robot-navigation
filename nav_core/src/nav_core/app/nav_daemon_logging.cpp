@@ -1,19 +1,29 @@
 #include "nav_core/app/nav_daemon_logging.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <unistd.h>
 
+#include "nav_core/core/timebase.hpp"
+#include "nav_core/drivers/serial_port_utils.hpp"
 namespace nav_core::app {
+namespace drivers = nav_core::drivers;
 namespace {
 
 namespace smsg = shared::msg;
+constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
 
 std::string csv_escape(const std::string& value)
 {
@@ -42,6 +52,36 @@ std::string wall_time_now_string()
 #endif
     std::ostringstream oss;
     oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    return oss.str();
+}
+
+std::string wall_time_stamp_compact()
+{
+    const auto now = std::chrono::system_clock::now();
+    std::time_t tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y%m%d_%H%M%S");
+    return oss.str();
+}
+
+std::string date_stamp()
+{
+    const auto now = std::chrono::system_clock::now();
+    std::time_t tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d");
     return oss.str();
 }
 
@@ -89,6 +129,111 @@ std::filesystem::path resolve_nav_log_dir(const NavDaemonConfig& cfg)
     return base;
 }
 
+std::filesystem::path resolve_sensor_log_dir(const NavDaemonConfig& cfg,
+                                             const char* sensor_label)
+{
+    std::filesystem::path base(cfg.logging.sensor_data_root.empty()
+                                   ? cfg.logging.base_dir
+                                   : cfg.logging.sensor_data_root);
+    if (cfg.logging.split_by_date) {
+        base /= date_stamp();
+    }
+    base /= sensor_label;
+    return base;
+}
+
+double wall_time_unix_seconds()
+{
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    return std::chrono::duration<double>(now).count();
+}
+
+void write_optional(std::ostream& os, const std::optional<double>& value)
+{
+    if (value.has_value()) {
+        os << *value;
+    }
+}
+
+std::optional<double> to_optional(double value, bool enabled = true)
+{
+    if (!enabled || !std::isfinite(value)) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+std::string trim_copy(std::string_view text)
+{
+    std::size_t start = 0;
+    std::size_t end = text.size();
+    while (start < end && std::isspace(static_cast<unsigned char>(text[start])) != 0) {
+        ++start;
+    }
+    while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
+        --end;
+    }
+    return std::string(text.substr(start, end - start));
+}
+
+bool parse_channel_line(const std::string& line, int& index, std::string& raw_value)
+{
+    const std::string trimmed = trim_copy(line);
+    if (trimmed.size() < 4u) {
+        return false;
+    }
+    if ((trimmed[0] != 'C' && trimmed[0] != 'c') || (trimmed[1] != 'H' && trimmed[1] != 'h')) {
+        return false;
+    }
+    std::size_t pos = 2u;
+    while (pos < trimmed.size() && std::isdigit(static_cast<unsigned char>(trimmed[pos])) != 0) {
+        ++pos;
+    }
+    if (pos == 2u || pos >= trimmed.size() || trimmed[pos] != ':') {
+        return false;
+    }
+    const std::string idx_text = trimmed.substr(2u, pos - 2u);
+    try {
+        index = std::stoi(idx_text);
+    } catch (...) {
+        return false;
+    }
+    raw_value = trim_copy(trimmed.substr(pos + 1u));
+    return true;
+}
+
+class ChannelFrameBuffer {
+public:
+    explicit ChannelFrameBuffer(int channels)
+        : channels_(channels > 0 ? channels : 0),
+          values_(static_cast<std::size_t>(channels_), std::nullopt)
+    {}
+
+    std::optional<std::vector<std::string>> update(int index, const std::string& raw_value)
+    {
+        if (index < 0 || index >= channels_) {
+            return std::nullopt;
+        }
+        values_[static_cast<std::size_t>(index)] = raw_value;
+        for (const auto& item : values_) {
+            if (!item.has_value()) {
+                return std::nullopt;
+            }
+        }
+        std::vector<std::string> out;
+        out.reserve(values_.size());
+        for (auto& item : values_) {
+            out.push_back(item.value_or(std::string{}));
+            item.reset();
+        }
+        return out;
+    }
+
+private:
+    int channels_{0};
+    std::vector<std::optional<std::string>> values_;
+};
+
 bool is_imu_label(const std::string& label)
 {
     return label == "imu" || label == "IMU";
@@ -135,6 +280,132 @@ std::string compact_preview(const std::string& value, std::size_t max_len = 160u
 }
 
 } // namespace
+
+class NavSensorCsvLogger::Volt32CsvLogger {
+public:
+    bool start(const NavDaemonConfig& cfg)
+    {
+        if (!cfg.volt.enable || !cfg.logging.enable || !cfg.logging.log_sensor_csv ||
+            !cfg.logging.log_volt_raw) {
+            return false;
+        }
+
+        channels_ = cfg.volt.channels > 0 ? cfg.volt.channels : 16;
+        std::error_code ec;
+        auto dir = resolve_sensor_log_dir(cfg, "volt");
+        if (!std::filesystem::exists(dir, ec) && !std::filesystem::create_directories(dir, ec)) {
+            return false;
+        }
+
+        const auto file_stamp = wall_time_stamp_compact();
+        const auto path = dir / ("motor_data_" + file_stamp + ".csv");
+        ofs_.open(path, std::ios::out | std::ios::app);
+        if (!ofs_.is_open()) {
+            return false;
+        }
+        if (ofs_.tellp() == 0) {
+            ofs_ << "MonoNS,EstNS,MonoS,EstS";
+            for (int i = 0; i < channels_; ++i) {
+                ofs_ << ",CH" << i;
+            }
+            ofs_ << "\n";
+            ofs_.flush();
+        }
+
+        fd_ = drivers::open_serial_port_raw(cfg.volt.port, cfg.volt.baud, 5, &last_error_);
+        if (fd_ < 0) {
+            ofs_.close();
+            return false;
+        }
+
+        running_.store(true);
+        th_ = std::thread(&Volt32CsvLogger::thread_loop, this);
+        return true;
+    }
+
+    void stop()
+    {
+        running_.store(false);
+        if (th_.joinable()) {
+            th_.join();
+        }
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+        if (ofs_.is_open()) {
+            ofs_.flush();
+            ofs_.close();
+        }
+    }
+
+private:
+    void thread_loop()
+    {
+        ChannelFrameBuffer frame_buf(channels_);
+        std::string buffer;
+        buffer.reserve(512);
+
+        while (running_.load()) {
+            char tmp[256];
+            const ssize_t n = ::read(fd_, tmp, sizeof(tmp));
+            if (n <= 0) {
+                continue;
+            }
+            buffer.append(tmp, tmp + n);
+            for (;;) {
+                std::size_t pos = buffer.find_first_of("\r\n");
+                if (pos == std::string::npos) {
+                    break;
+                }
+                std::string line = buffer.substr(0, pos);
+                buffer.erase(0, pos + 1);
+                handle_line(line, frame_buf);
+            }
+        }
+    }
+
+    void handle_line(const std::string& line, ChannelFrameBuffer& frame_buf)
+    {
+        int index = -1;
+        std::string raw_value;
+        if (!parse_channel_line(line, index, raw_value)) {
+            return;
+        }
+        const auto row = frame_buf.update(index, raw_value);
+        if (!row.has_value()) {
+            return;
+        }
+
+        const auto ts = nav_core::core::timebase::stamp("volt0",
+                                                        nav_core::core::timebase::SensorKind::OTHER);
+        const auto mono_ns = ts.host_time_ns;
+        const auto est_ns = ts.corrected_time_ns;
+        ofs_ << mono_ns << "," << est_ns << ","
+             << static_cast<double>(mono_ns) / 1e9 << ","
+             << static_cast<double>(est_ns) / 1e9;
+        for (const auto& val : *row) {
+            ofs_ << "," << csv_escape(val);
+        }
+        ofs_ << "\n";
+        if ((++flush_counter_ % 50) == 0) {
+            ofs_.flush();
+        }
+    }
+
+    int fd_{-1};
+    int channels_{16};
+    std::string last_error_{};
+    std::ofstream ofs_{};
+    std::thread th_{};
+    std::atomic<bool> running_{false};
+    std::uint64_t flush_counter_{0};
+};
+
+void NavSensorCsvLogger::Volt32CsvLoggerDeleter::operator()(Volt32CsvLogger* ptr) const
+{
+    delete ptr;
+}
 
 bool NavPublishSnapshot::operator==(const NavPublishSnapshot& rhs) const noexcept
 {
@@ -395,6 +666,231 @@ void NavEventCsvLogger::log_row(MonoTimeNs mono_ns,
         << "," << sample_age_ms
         << "\n";
     ofs_.flush();
+}
+
+bool NavSensorCsvLogger::init(const NavDaemonConfig& cfg)
+{
+    if (!cfg.logging.enable || !cfg.logging.log_sensor_csv) {
+        return false;
+    }
+
+    const auto file_stamp = wall_time_stamp_compact();
+    std::error_code ec;
+
+    if (cfg.imu.enable && cfg.logging.log_imu_raw) {
+        auto imu_dir = resolve_sensor_log_dir(cfg, "imu");
+        if (!std::filesystem::exists(imu_dir, ec) &&
+            !std::filesystem::create_directories(imu_dir, ec)) {
+            return false;
+        }
+        imu_raw_.open(imu_dir / ("imu_raw_log_" + file_stamp + ".csv"),
+                      std::ios::out | std::ios::app);
+        imu_min_.open(imu_dir / ("min_imu_tb_" + file_stamp + ".csv"),
+                      std::ios::out | std::ios::app);
+        if (!imu_raw_.is_open() || !imu_min_.is_open()) {
+            return false;
+        }
+        if (imu_raw_.tellp() == 0) {
+            imu_raw_
+                << "MonoNS,EstNS,MonoS,EstS,t_unix,"
+                << "AccX,AccY,AccZ,"
+                << "AsX,AsY,AsZ,"
+                << "HX,HY,HZ,"
+                << "AngX,AngY,AngZ,"
+                << "TemperatureC\n";
+        }
+        if (imu_min_.tellp() == 0) {
+            imu_min_
+                << "MonoNS,EstNS,MonoS,EstS,"
+                << "AccX,AccY,AccZ,"
+                << "GyroX,GyroY,GyroZ,"
+                << "YawDeg,"
+                << "AngX,AngY,AngZ\n";
+        }
+        imu_raw_.flush();
+        imu_min_.flush();
+        imu_raw_g_to_mps2_ = cfg.imu.driver.raw_g_to_mps2;
+        imu_enabled_ = true;
+    }
+
+    if (cfg.dvl.enable && cfg.logging.log_dvl_raw) {
+        auto dvl_dir = resolve_sensor_log_dir(cfg, "dvl");
+        if (!std::filesystem::exists(dvl_dir, ec) &&
+            !std::filesystem::create_directories(dvl_dir, ec)) {
+            return false;
+        }
+        dvl_raw_.open(dvl_dir / ("dvl_raw_lines_" + file_stamp + ".csv"),
+                      std::ios::out | std::ios::app);
+        dvl_parsed_.open(dvl_dir / ("dvl_parsed_" + file_stamp + ".csv"),
+                         std::ios::out | std::ios::app);
+        if (!dvl_raw_.is_open() || !dvl_parsed_.is_open()) {
+            return false;
+        }
+        if (dvl_raw_.tellp() == 0) {
+            dvl_raw_ << "Timestamp(s),SensorID,RawLine,CmdOrNote\n";
+        }
+        if (dvl_parsed_.tellp() == 0) {
+            dvl_parsed_
+                << "Timestamp(s),SensorID,Src,"
+                << "Vx_body(mm_s),Vy_body(mm_s),Vz_body(mm_s),"
+                << "Vx_body(m_s),Vy_body(m_s),Vz_body(m_s),"
+                << "Ve_enu(mm_s),Vn_enu(mm_s),Vu_enu(mm_s),"
+                << "Ve_enu(m_s),Vn_enu(m_s),Vu_enu(m_s),"
+                << "De_enu(m),Dn_enu(m),Du_enu(m),"
+                << "Depth(m),E(m),N(m),U(m),"
+                << "Valid,ValidFlag,IsWaterMass\n";
+        }
+        dvl_raw_.flush();
+        dvl_parsed_.flush();
+        dvl_enabled_ = true;
+    }
+
+    if (cfg.volt.enable && cfg.logging.log_volt_raw) {
+        volt_logger_.reset(new Volt32CsvLogger());
+        if (!volt_logger_->start(cfg)) {
+            volt_logger_.reset();
+        }
+    }
+
+    return imu_enabled_ || dvl_enabled_ || (volt_logger_ != nullptr);
+}
+
+NavSensorCsvLogger::~NavSensorCsvLogger()
+{
+    shutdown();
+}
+
+void NavSensorCsvLogger::shutdown()
+{
+    if (volt_logger_) {
+        volt_logger_->stop();
+        volt_logger_.reset();
+    }
+
+    if (imu_raw_.is_open()) {
+        imu_raw_.flush();
+        imu_raw_.close();
+    }
+    if (imu_min_.is_open()) {
+        imu_min_.flush();
+        imu_min_.close();
+    }
+
+    if (dvl_raw_.is_open()) {
+        dvl_raw_.flush();
+        dvl_raw_.close();
+    }
+    if (dvl_parsed_.is_open()) {
+        dvl_parsed_.flush();
+        dvl_parsed_.close();
+    }
+}
+
+void NavSensorCsvLogger::log_imu_frame(const ImuFrame& frame)
+{
+    if (!imu_enabled_) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(imu_mu_);
+    const auto mono_ns = frame.recv_mono_ns > 0 ? frame.recv_mono_ns : frame.mono_ns;
+    const auto est_ns = frame.sensor_time_ns > 0 ? frame.sensor_time_ns : mono_ns;
+    const double mono_s = static_cast<double>(mono_ns) / 1e9;
+    const double est_s = static_cast<double>(est_ns) / 1e9;
+    const double t_unix = wall_time_unix_seconds();
+    const double g_scale = (imu_raw_g_to_mps2_ > 0.0) ? imu_raw_g_to_mps2_ : 9.78;
+
+    const double acc_x = frame.lin_acc[0] / g_scale;
+    const double acc_y = frame.lin_acc[1] / g_scale;
+    const double acc_z = frame.lin_acc[2] / g_scale;
+    const double gyr_x = frame.ang_vel[0] * kRadToDeg;
+    const double gyr_y = frame.ang_vel[1] * kRadToDeg;
+    const double gyr_z = frame.ang_vel[2] * kRadToDeg;
+    const double ang_x = frame.euler[0] * kRadToDeg;
+    const double ang_y = frame.euler[1] * kRadToDeg;
+    const double ang_z = frame.euler[2] * kRadToDeg;
+
+    imu_raw_
+        << mono_ns << "," << est_ns << "," << mono_s << "," << est_s << ","
+        << t_unix << ","
+        << acc_x << "," << acc_y << "," << acc_z << ","
+        << gyr_x << "," << gyr_y << "," << gyr_z << ","
+        << "," << "," << ","
+        << ang_x << "," << ang_y << "," << ang_z << ","
+        << frame.temperature << "\n";
+
+    imu_min_
+        << mono_ns << "," << est_ns << "," << mono_s << "," << est_s << ","
+        << acc_x << "," << acc_y << "," << acc_z << ","
+        << gyr_x << "," << gyr_y << "," << gyr_z << ","
+        << ang_z << ","
+        << ang_x << "," << ang_y << "," << ang_z << "\n";
+
+    if ((++imu_flush_counter_ % 50) == 0) {
+        imu_raw_.flush();
+        imu_min_.flush();
+    }
+}
+
+void NavSensorCsvLogger::log_dvl_raw(const drivers::DvlRawData& raw)
+{
+    if (!dvl_enabled_) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(dvl_mu_);
+    const auto ts_ns = raw.sensor_time_ns > 0 ? raw.sensor_time_ns : raw.recv_mono_ns;
+    const double ts_s = static_cast<double>(ts_ns) / 1e9;
+    const auto& parsed = raw.parsed;
+    const bool is_water = parsed.is_water_track();
+    const bool is_earth = parsed.coord_frame == drivers::DvlCoordFrame::Earth;
+    const bool is_body = parsed.coord_frame == drivers::DvlCoordFrame::Instrument ||
+                         parsed.coord_frame == drivers::DvlCoordFrame::Ship;
+
+    dvl_raw_
+        << ts_s << ",DVL_H1000,"
+        << csv_escape(raw.raw_line) << ",\n";
+
+    const auto vx_body_mm = to_optional(parsed.ve_mm, is_body);
+    const auto vy_body_mm = to_optional(parsed.vn_mm, is_body);
+    const auto vz_body_mm = to_optional(parsed.vu_mm, is_body);
+    const auto ve_enu_mm = to_optional(parsed.ve_mm, is_earth);
+    const auto vn_enu_mm = to_optional(parsed.vn_mm, is_earth);
+    const auto vu_enu_mm = to_optional(parsed.vu_mm, is_earth);
+
+    dvl_parsed_ << ts_s << ",DVL_H1000," << parsed.src << ",";
+    write_optional(dvl_parsed_, vx_body_mm); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, vy_body_mm); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, vz_body_mm); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, vx_body_mm ? std::optional<double>(*vx_body_mm * 1e-3) : std::nullopt); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, vy_body_mm ? std::optional<double>(*vy_body_mm * 1e-3) : std::nullopt); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, vz_body_mm ? std::optional<double>(*vz_body_mm * 1e-3) : std::nullopt); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, ve_enu_mm); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, vn_enu_mm); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, vu_enu_mm); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, ve_enu_mm ? std::optional<double>(*ve_enu_mm * 1e-3) : std::nullopt); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, vn_enu_mm ? std::optional<double>(*vn_enu_mm * 1e-3) : std::nullopt); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, vu_enu_mm ? std::optional<double>(*vu_enu_mm * 1e-3) : std::nullopt); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, to_optional(parsed.e_m, parsed.has_e)); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, to_optional(parsed.n_m, parsed.has_n)); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, to_optional(parsed.u_m, parsed.has_u)); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, to_optional(parsed.depth_m, parsed.has_depth)); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, std::nullopt); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, std::nullopt); dvl_parsed_ << ",";
+    write_optional(dvl_parsed_, std::nullopt); dvl_parsed_ << ",";
+    if (parsed.valid >= 0) {
+        dvl_parsed_ << (parsed.valid == 1);
+    }
+    dvl_parsed_ << ",";
+    if (parsed.valid == 1) {
+        dvl_parsed_ << "A";
+    } else if (parsed.valid == 0) {
+        dvl_parsed_ << "V";
+    }
+    dvl_parsed_ << "," << (is_water ? "1" : "0") << "\n";
+
+    if ((++dvl_flush_counter_ % 50) == 0) {
+        dvl_raw_.flush();
+        dvl_parsed_.flush();
+    }
 }
 
 bool init_nav_state_publisher(const NavDaemonConfig& cfg,

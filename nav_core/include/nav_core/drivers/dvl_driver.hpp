@@ -60,6 +60,7 @@ struct DvlRawData {
     MonoTimeNs    mono_ns{0};          ///< 规范化样本时间（steady ns）
     SysTimeNs     est_ns{0};           ///< 兼容字段：当前与 mono_ns 保持一致
     DvlParsedLine parsed;       ///< 协议字段（来自 dvl_protocol::parse_pd6_line）
+    std::string   raw_line;     ///< 原始文本行（用于原始落盘/排障）
 
     // 便捷访问函数（避免上层频繁写 parsed.xxx）
     DvlTrackType  track_type() const noexcept { return parsed.track_type; }
