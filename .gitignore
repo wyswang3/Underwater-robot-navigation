@@ -1,9 +1,17 @@
 /nav_core/build/
 
+# runtime-generated navigation logs (do not version)
+data/nav/
+
+# local editor settings / temporary files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.tmp
+
 # python bytecode / caches (must not be versioned)
 __pycache__/
 *.pyc
 *.pyo
-
-# runtime-generated navigation logs (do not version)
-data/nav/
