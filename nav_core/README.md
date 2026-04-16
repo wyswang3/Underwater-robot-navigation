@@ -4,6 +4,13 @@
 
 它负责把串口侧的 IMU / DVL 数据，变成控制链可消费的 `NavState`，并同时生成复盘所需的时间与状态日志。
 
+补充入口：
+
+- 仓级文档总览：`../docs/文档总览.md`
+- 导航运行总览：`../docs/导航运行总览.md`
+- 时间/融合/接口约定：`../docs/时间融合与接口约定.md`
+- 调试、回放与排障：`../docs/调试回放与排障.md`
+
 ## 1. 子系统定位
 
 `nav_core` 的核心职责是：
@@ -79,7 +86,7 @@ IMU / DVL serial input
 ## 5. 构建方式
 
 ```bash
-cd /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core
+cd <Underwater-robot-navigation repo root>/nav_core
 cmake -S . -B build
 cmake --build build -j4
 ```
@@ -92,8 +99,8 @@ cmake --build build -j4
 
 ```bash
 ./build/bin/uwnav_navd \
-  --config /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/config/nav_daemon.yaml \
-  --eskf-config /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/config/eskf.yaml
+  --config ./config/nav_daemon.yaml \
+  --eskf-config ./config/eskf.yaml
 ```
 
 最小 replay 注入：

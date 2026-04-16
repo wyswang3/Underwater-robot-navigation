@@ -1,18 +1,17 @@
 # Underwater-robot-navigation
 
-`Underwater-robot-navigation` 是当前项目里的导航与传感器仓。
+`Underwater-robot-navigation` 是当前项目的导航 runtime、传感器协议、时序语义和最小 replay/diagnostics 仓库。
 
-它同时覆盖三类能力：
+对开发者来说，这个仓最重要的是回答四个问题：
 
-- 传感器采集与基础检查
-- `nav_core` 在线导航运行时
-- 日志、incident bundle、replay compare 等最小复盘工具
+1. 传感器数据怎样进入导航 runtime
+2. `NavState` 怎样形成并发布
+3. 时间/有效性/重连语义怎样落地
+4. 事故窗口怎样被导出、复盘和对照
 
-如果你想理解“IMU/DVL 数据怎么进入系统、怎么变成控制可消费的导航状态、事故窗口怎么导出和重放”，应该从这个仓开始。
+## 1. Technical Scope
 
-## 1. 这个仓库现在负责什么
-
-当前仓库的主职责包括：
+This repo currently owns:
 
 - 采集 IMU、DVL、电源等实验数据
 - 在板端运行在线导航守护进程 `uwnav_navd`
@@ -20,9 +19,16 @@
 - 提供事故窗口导出、incident bundle 和最小 replay compare 工具
 - 为控制仓提供导航输入与复盘材料
 
-## 2. 当前已经验证可用的主线
+It does not own:
 
-在线导航主线：
+- final motor control
+- GCS/UI
+- final PWM execution
+- top-level bring-up orchestration
+
+## 2. Main Runtime Pipelines
+
+Online navigation:
 
 ```text
 IMU / DVL
@@ -33,7 +39,7 @@ IMU / DVL
   -> control side consumer
 ```
 
-时间与复盘主线：
+Timing and replay:
 
 ```text
 nav_timing.bin + nav_state.bin + control CSV + telemetry timeline/events
@@ -43,7 +49,7 @@ nav_timing.bin + nav_state.bin + control CSV + telemetry timeline/events
   -> replay_compare.py
 ```
 
-设备与台架主线：
+Device and bench diagnosis:
 
 ```text
 device binding / reconnect state machine
@@ -52,7 +58,34 @@ device binding / reconnect state machine
   -> bench diagnosis and incident export
 ```
 
-## 3. 目录说明
+## 3. Documentation Policy
+
+This repo's docs should primarily explain technical design and low-level implementation boundaries.
+
+Start with:
+
+1. `docs/文档总览.md`
+2. `docs/导航运行总览.md`
+3. `nav_core/README.md`
+4. `docs/时间融合与接口约定.md`
+5. `docs/调试回放与排障.md`
+6. `docs/演进记录与维护约束.md`
+
+Operator startup and multi-repo deployment docs should stay in the system doc repo, not become the primary entry here.
+
+## 4. Recommended Reading Order
+
+如果你要先理解“导航仓为什么是现在这条工程路线”，建议按这个顺序读：
+
+1. `docs/文档总览.md`
+2. `nav_core/README.md`
+3. `docs/导航运行总览.md`
+4. `docs/时间融合与接口约定.md`
+5. `docs/调试回放与排障.md`
+
+然后再进入具体代码和协议。
+
+## 5. Directory Layout
 
 - `apps/acquire/`
   - 早期或辅助的传感器采集脚本
@@ -61,34 +94,36 @@ device binding / reconnect state machine
 - `config/devices/`
   - 采集脚本层面的设备配置
 - `docs/`
-  - 传感器协议、时间语义、工具说明
+  - 导航侧中文基线文档，控制在 6 份以内
 - `nav_core/`
   - C++ 在线导航核心，当前最重要的子目录
 - `uwnav/`
   - Python 包与轻量工具代码
 
-## 4. 建议阅读顺序
+## 6. Recommended Code Reading Order
 
-对开发者：
+For runtime behavior:
 
-1. 本 README
-2. [nav_core/README.md](/home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/README.md)
-3. `docs/timebase_spec.md`
-4. `docs/protocols/` 下的 IMU/DVL 协议文档
-5. `nav_core/tools/` 和 `nav_core/tests/`
+1. `nav_core/src/nav_core/app/nav_daemon.cpp`
+2. `nav_core/src/nav_core/app/nav_daemon_runner.cpp`
+3. `nav_core/drivers/`
+4. `nav_core/preprocess/`
+5. `nav_core/estimator/`
+6. `nav_core/io/`
 
-对代码学习者：
+For replay and diagnosis:
 
-1. 先看 `nav_core` 的运行链路
-2. 再看 `drivers -> preprocess -> estimator -> io` 的代码结构
-3. 最后再看 Python 采集脚本和离线检查工具
+1. `nav_core/tools/merge_robot_timeline.py`
+2. `nav_core/tools/replay_compare.py`
+3. `nav_core/tools/usb_serial_snapshot.py`
+4. `nav_core/tools/parse_nav_timing.py`
 
-## 5. 快速开始
+## 7. Build `nav_core`
 
 编译 `nav_core`：
 
 ```bash
-cd /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core
+cd <Underwater-robot-navigation repo root>/nav_core
 cmake -S . -B build
 cmake --build build -j4
 ```
@@ -99,15 +134,17 @@ cmake --build build -j4
 - `build/bin/uwnav_dvl_selftest`
 - `build/bin/uwnav_nav_replay`
 
-运行 `uwnav_navd`：
+## 8. Run `uwnav_navd`
+
+Run the online daemon:
 
 ```bash
 ./build/bin/uwnav_navd \
-  --config /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/config/nav_daemon.yaml \
-  --eskf-config /home/wys/orangepi/UnderwaterRobotSystem/Underwater-robot-navigation/nav_core/config/eskf.yaml
+  --config ./config/nav_daemon.yaml \
+  --eskf-config ./config/eskf.yaml
 ```
 
-## 6. 当前最重要的产物和工具
+## 9. Most Important Runtime Artifacts
 
 运行时产物：
 
@@ -115,14 +152,14 @@ cmake --build build -j4
 - `nav_state.bin`
 - `NavState` SHM
 
-复盘工具：
+Replay / diagnosis tools:
 
 - `nav_core/tools/merge_robot_timeline.py`
 - `nav_core/tools/replay_compare.py`
 - `nav_core/tools/usb_serial_snapshot.py`
 - `nav_core/tools/parse_nav_timing.py`
 
-## 7. 当前工程边界
+## 10. Engineering Boundaries
 
 这个仓库负责导航，不负责：
 
@@ -133,11 +170,28 @@ cmake --build build -j4
 
 另外，当前 replay 仍然是“最小可验证方案”，不是完整原始帧级 replay 平台。
 
-## 8. 对学习者最有价值的切入点
+## 11. Documentation Cleanup Rule
 
-如果你是第一次学这个仓库，不要先从滤波公式开始。
+这个仓会继续保留一些历史实验和阶段复盘，但它们不再作为开发者主入口。
 
-更推荐的顺序是：
+优先保留的文档类型是：
+
+- runtime architecture
+- sensor protocol
+- timestamp and stale semantics
+- replay / compare / incident tooling
+- reconnect and health audit
+
+优先降级或删除的文档类型是：
+
+- 只记录一次实验命令的草稿
+- 已脱离当前 runtime 的旧采集流程
+- 生成型中间文件
+- 与当前仓职责无关的杂项命令备忘
+
+## 12. Best Learning Path
+
+不要先从滤波公式开始。更好的顺序是：
 
 1. 先理解 `NavState` 是什么、给谁用
 2. 再理解日志和时间语义为什么要分 `sensor/recv/consume/publish`
