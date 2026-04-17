@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/nav_daemon_publish.cpp
+//
+// 作用：
+//   - 构建 nav_daemon 对外发布的最终 NavState；
+//   - 完成共享内存发布、二进制 timing/logger 记录和低频摘要打印。
+//
+// 实现思路：
+//   - 先把 ESKF 数值状态映射为 NavState，再统一补齐 valid/stale/fault 语义；
+//   - 发布、副本落盘和事件日志都围绕同一份 NavState 展开，避免不同出口出现语义漂移。
+
 #include "nav_core/app/nav_daemon_publish.hpp"
 
 #include <cstdio>

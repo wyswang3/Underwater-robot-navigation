@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/nav_daemon_loop_state.cpp
+//
+// 作用：
+//   - 维护 nav_daemon 主循环跨 tick 复用的运行时状态；
+//   - 集中处理设备切换后的 reset、共享快照读取和事件去重辅助逻辑。
+//
+// 实现思路：
+//   - 把“遇到设备重连时哪些缓存要清空、哪些状态要复位”固定在这里；
+//   - 主循环只调用统一 helper，避免 reset 语义散落在多个分支里。
+
 #include "nav_core/app/nav_daemon_loop_state.hpp"
 
 #include <chrono>

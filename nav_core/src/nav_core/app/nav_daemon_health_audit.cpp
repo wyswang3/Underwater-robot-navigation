@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/nav_daemon_health_audit.cpp
+//
+// 作用：
+//   - 把 NavHealthMonitor 的审查结果接回 nav_daemon 运行时状态；
+//   - 统一输出健康等级变化、根因分类和操作员可见建议。
+//
+// 实现思路：
+//   - 审查器只负责纯计算，这里负责把结果折叠进 NavState 语义与事件日志；
+//   - 通过快照比较只在状态变化时记日志，减少运行时噪声。
+
 #include "nav_core/app/nav_daemon_health_audit.hpp"
 
 #include <cstdio>

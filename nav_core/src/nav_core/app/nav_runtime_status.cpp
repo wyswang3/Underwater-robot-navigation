@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/nav_runtime_status.cpp
+//
+// 作用：
+//   - 把 ESKF、设备状态和样本 timing 组合成 NavState 的工程语义字段；
+//   - 明确给出 valid/stale/degraded/nav_state/health/fault/status_flags 的最终取值。
+//
+// 实现思路：
+//   - 数值映射和语义门控分两步处理：先填运动学，再按设备/时间/健康条件补齐状态；
+//   - 所有控制侧关心的导航可信度语义在这里集中收口，避免发布路径各处零散判断。
+
 #include "nav_core/app/nav_runtime_status.hpp"
 
 #include <algorithm>

@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/nav_daemon_imu_pipeline.cpp
+//
+// 作用：
+//   - 处理 nav_daemon 每个循环里的 IMU 样本；
+//   - 负责 freshness / out-of-order / 预处理 / ESKF propagate / 诊断日志这条主链。
+//
+// 实现思路：
+//   - 先根据样本时间判断是否可消费，再交给 ImuRtPreprocessor 和 ESKF；
+//   - 所有 reject 原因、timing trace 和健康审查通知都在这一层统一上报。
+
 #include "nav_core/app/nav_daemon_imu_pipeline.hpp"
 
 #include <cstdio>

@@ -7,6 +7,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <cstdio>
 #include <thread>
 
@@ -35,6 +37,61 @@ namespace drivers = nav_core::drivers;
 namespace estimator = nav_core::estimator;
 namespace io = nav_core::io;
 namespace preprocess = nav_core::preprocess;
+
+constexpr const char* kOperatorPolicyEventEnv = "UWNAV_OPERATOR_POLICY_EVENT";
+constexpr const char* kOperatorPolicySourceEnv = "UWNAV_OPERATOR_POLICY_SOURCE";
+constexpr const char* kOperatorPolicyDvlEnabledEnv = "UWNAV_OPERATOR_POLICY_DVL_ENABLED";
+
+bool parse_bool_env_or_default(const char* name, bool fallback)
+{
+    const char* value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return fallback;
+    }
+    if (std::strcmp(value, "1") == 0 ||
+        std::strcmp(value, "true") == 0 ||
+        std::strcmp(value, "TRUE") == 0 ||
+        std::strcmp(value, "on") == 0 ||
+        std::strcmp(value, "ON") == 0) {
+        return true;
+    }
+    if (std::strcmp(value, "0") == 0 ||
+        std::strcmp(value, "false") == 0 ||
+        std::strcmp(value, "FALSE") == 0 ||
+        std::strcmp(value, "off") == 0 ||
+        std::strcmp(value, "OFF") == 0) {
+        return false;
+    }
+    return fallback;
+}
+
+void maybe_log_operator_policy_event(const app::NavDaemonConfig& cfg,
+                                     app::NavEventCsvLogger* event_logger)
+{
+    const char* event = std::getenv(kOperatorPolicyEventEnv);
+    if (event == nullptr || std::strcmp(event, "dvl_policy_applied") != 0) {
+        return;
+    }
+
+    const bool dvl_enabled =
+        parse_bool_env_or_default(kOperatorPolicyDvlEnabledEnv, cfg.dvl.enable);
+    const char* source = std::getenv(kOperatorPolicySourceEnv);
+    if (source == nullptr || source[0] == '\0') {
+        source = "operator";
+    }
+
+    std::fprintf(stderr,
+                 "[nav_daemon] operator policy applied before restart "
+                 "(source=%s, dvl=%s)\n",
+                 source,
+                 dvl_enabled ? "ENABLED" : "DISABLED");
+
+    if (event_logger != nullptr) {
+        event_logger->log_operator_policy_applied(app::loop_monotonic_now_ns(),
+                                                  dvl_enabled,
+                                                  source);
+    }
+}
 
 int run_main_loop(const app::NavDaemonConfig&    cfg,
                   app::SharedSensorState&        shared_state,
@@ -242,6 +299,7 @@ int run_nav_daemon(const NavDaemonConfig&       cfg,
                      "[nav_daemon] WARNING: nav_events.csv init failed or disabled "
                      "(结构化低频事件日志不可用，但不影响导航主链)\n");
     }
+    maybe_log_operator_policy_event(cfg, nav_event_logger_ptr);
 
     NavSensorCsvLogger  sensor_csv_logger;
     NavSensorCsvLogger* sensor_csv_logger_ptr = nullptr;

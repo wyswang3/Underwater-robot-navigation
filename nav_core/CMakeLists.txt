@@ -299,4 +299,10 @@ if(NAV_CORE_BUILD_TESTS)
     )
     target_link_libraries(test_nav_diagnostic_fixture PRIVATE nav_core)
     add_test(NAME nav_core_test_nav_diagnostic_fixture COMMAND test_nav_diagnostic_fixture)
+
+    add_executable(test_nav_event_logger
+        tests/test_nav_event_logger.cpp
+    )
+    target_link_libraries(test_nav_event_logger PRIVATE nav_core)
+    add_test(NAME nav_core_test_nav_event_logger COMMAND test_nav_event_logger)
 endif()

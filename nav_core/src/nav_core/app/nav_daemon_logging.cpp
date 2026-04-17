@@ -589,6 +589,34 @@ void NavEventCsvLogger::log_health_audit_changed(MonoTimeNs mono_ns,
             msg.str());
 }
 
+void NavEventCsvLogger::log_operator_policy_applied(MonoTimeNs mono_ns,
+                                                    bool dvl_enabled,
+                                                    const char* source)
+{
+    const std::string dvl_state = dvl_enabled ? "enabled" : "disabled";
+    const std::string source_text =
+        (source != nullptr && source[0] != '\0') ? source : "unknown";
+
+    std::ostringstream msg;
+    msg << "operator applied DVL policy and restarted nav_daemon"
+        << " source=" << source_text
+        << " dvl_enabled=" << dvl_state;
+
+    log_row(mono_ns,
+            "operator_policy_applied",
+            "info",
+            static_cast<std::uint16_t>(smsg::NavFaultCode::kNone),
+            {},
+            "dvl",
+            {},
+            dvl_state,
+            source_text,
+            "dvl",
+            "operator_policy",
+            kAgeUnknownMs,
+            msg.str());
+}
+
 void NavEventCsvLogger::log_protocol_diagnostic(MonoTimeNs mono_ns,
                                                 const char* device_label,
                                                 const char* signature,

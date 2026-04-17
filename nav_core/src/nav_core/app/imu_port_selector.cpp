@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/imu_port_selector.cpp
+//
+// 作用：
+//   - 在多个串口候选里识别真正的 IMU 设备；
+//   - 给 nav_daemon 的设备绑定阶段提供“应该绑定哪个口”的判定依据。
+//
+// 实现思路：
+//   - 利用串口行为差异和探测结果做筛选，而不是只依赖硬编码路径；
+//   - 把探测、评分和最终选择收口在这里，避免主循环散落设备识别细节。
+
 #include "nav_core/app/imu_port_selector.hpp"
 
 #include <algorithm>

@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/sample_timing.cpp
+//
+// 作用：
+//   - 提供 nav_daemon 主链统一使用的时间语义辅助函数；
+//   - 支撑 age、freshness 和 out-of-order 判定。
+//
+// 实现思路：
+//   - 所有判断都基于 steady/mono 时间轴，避免 wall clock 引入歧义；
+//   - 让 IMU、DVL 和发布路径复用同一套时间规则，减少不同模块对 stale 的理解偏差。
+
 #include "nav_core/app/sample_timing.hpp"
 
 #include <limits>

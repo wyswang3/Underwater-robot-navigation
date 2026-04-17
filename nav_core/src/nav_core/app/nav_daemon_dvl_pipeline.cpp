@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/nav_daemon_dvl_pipeline.cpp
+//
+// 作用：
+//   - 处理 nav_daemon 每个循环里的 DVL 样本；
+//   - 负责 freshness / out-of-order / 预处理 / ESKF update / 诊断日志这条完整链路。
+//
+// 实现思路：
+//   - 先基于时间语义过滤样本，再把通过预处理和 gating 的结果送给 ESKF；
+//   - 所有 reject 原因、timing trace 和健康审查通知都在这一层统一发出。
+
 #include "nav_core/app/nav_daemon_dvl_pipeline.hpp"
 
 #include <cstdio>

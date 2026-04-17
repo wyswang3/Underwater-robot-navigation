@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/device_binding.cpp
+//
+// 作用：
+//   - 实现串口设备扫描、身份匹配和绑定状态机；
+//   - 为 IMU/DVL 等设备提供统一的 reconnect / mismatch / backoff 行为。
+//
+// 实现思路：
+//   - 先从路径和 sysfs 采集静态身份，再结合 binding 规则做候选匹配；
+//   - 设备状态迁移统一在 binder 内部推进，主循环只消费绑定结果和诊断信息。
+
 #include "nav_core/app/device_binding.hpp"
 
 #include <algorithm>

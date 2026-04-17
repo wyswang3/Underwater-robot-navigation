@@ -1,3 +1,13 @@
+// nav_core/src/nav_core/app/nav_daemon_devices.cpp
+//
+// 作用：
+//   - 管理 nav_daemon 中 IMU/DVL 驱动的启动、停机、掉线重连和状态上报；
+//   - 维护主循环可读取的共享传感器缓存。
+//
+// 实现思路：
+//   - 设备线程只负责采样并写入共享状态，主循环通过快照消费最新样本；
+//   - 设备状态变化、日志和 timing trace 在这里集中处理，避免分散到各驱动入口。
+
 #include "nav_core/app/nav_daemon_devices.hpp"
 
 #include <chrono>

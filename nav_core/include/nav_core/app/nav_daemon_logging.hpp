@@ -78,6 +78,9 @@ public:
                                   const shared::msg::NavState& nav,
                                   const char* root_cause,
                                   const std::string& summary);
+    void log_operator_policy_applied(MonoTimeNs mono_ns,
+                                     bool dvl_enabled,
+                                     const char* source);
     void log_protocol_diagnostic(MonoTimeNs mono_ns,
                                  const char* device_label,
                                  const char* signature,
